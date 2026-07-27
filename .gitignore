@@ -1,0 +1,49 @@
+# ══════════════════════════════════════════════════════════════════
+#  KHÔNG BAO GIỜ ĐẨY LÊN — dữ liệu đăng nhập & dữ liệu chạy
+#  (profile chứa cookie đăng nhập TikTok của tài khoản thật)
+# ══════════════════════════════════════════════════════════════════
+profiles/
+config/
+logs/
+session.state.json
+session.state.json.bak
+session.good.json
+fingerprint.json
+profile.lock
+
+# Kho nén profile — cũng chứa cookie đăng nhập
+*.rar
+*.zip
+*.7z
+
+# Khóa/bí mật
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+service-account*.json
+*credentials*.json
+
+# ══════════════════════════════════════════════════════════════════
+#  Thư mục triển khai (2GB: app đã đóng gói + trình duyệt + profile)
+# ══════════════════════════════════════════════════════════════════
+Crawl_DataTiktok_Release/
+
+# ══════════════════════════════════════════════════════════════════
+#  Nặng / tự sinh lại được
+# ══════════════════════════════════════════════════════════════════
+node_modules/
+lib/ms-playwright/
+dist/
+out/
+electron-builder/
+*.log
+
+# OS / IDE
+Thumbs.db
+.DS_Store
+Desktop.ini
+.vscode/
+.idea/
+*.swp

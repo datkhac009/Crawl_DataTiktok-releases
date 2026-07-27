@@ -1,0 +1,67 @@
+{
+  "name": "crawl-tiktok",
+  "version": "0.1.43",
+  "description": "TikTok Data Crawler — Firefox profile manager + crawler",
+  "main": "main.js",
+  "author": "HUNFI",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "set \"ELECTRON_RUN_AS_NODE=\" && electron .",
+    "dev": "set \"ELECTRON_RUN_AS_NODE=\" && electronmon .",
+    "build": "electron-builder --win portable --x64"
+  },
+  "electronmon": {
+    "patterns": [
+      "!config/**",
+      "!profiles/**",
+      "!logs/**",
+      "!node_modules/**",
+      "!**/*.md"
+    ]
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0",
+    "playwright": "^1.45.0"
+  },
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^24.9.0",
+    "electronmon": "^2.0.4"
+  },
+  "build": {
+    "appId": "com.hunfi.crawl-tiktok",
+    "productName": "Crawl_DataTiktok",
+    "directories": {
+      "output": "../Crawl_DataTiktok_Release"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "renderer/icon.png",
+      "artifactName": "Crawl_DataTiktok.exe"
+    },
+    "portable": {
+      "artifactName": "Crawl_DataTiktok.exe"
+    },
+    "files": [
+      "**/*",
+      "!profiles/**",
+      "!config/**",
+      "!logs/**",
+      "!node_modules/.cache/**",
+      "!*.md",
+      "!.git/**",
+      "!.gitignore",
+      "!version-bump.cjs",
+      "!clean-profiles.cjs",
+      "!build.bat",
+      "!start.bat"
+    ]
+  }
+}

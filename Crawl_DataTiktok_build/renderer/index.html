@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TikTok Crawler</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🎵</span>
+      <span class="title">TikTok Crawler</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn btn-sm" id="sheetsBtn">☁ Google Sheet</button>
+      <button class="btn btn-sm" id="updateBtn" title="Kiểm tra & cài đặt bản cập nhật">⬆ Cập nhật</button>
+      <button class="btn btn-sm" id="reloadBtn" title="Nạp lại giao diện (chỉ bản dev)" hidden>🔄 Reload</button>
+      <span class="version" id="appVersion"></span>
+    </div>
+  </header>
+
+  <main class="layout-col">
+    <!-- Bảng quản lý profile -->
+    <section class="panel grow">
+      <div class="panel-head">
+        <h2>Profile</h2>
+        <div class="row gap wrap">
+          <button class="btn btn-primary" id="runSelectedBtn">▶ Chạy đã chọn</button>
+          <button class="btn" id="stopSelectedBtn" title="Dừng NGAY LẬP TỨC — sound còn trong hàng đợi chưa check số video sẽ bị bỏ">■ Dừng đã chọn</button>
+          <button class="btn" id="softStopSelectedBtn" title="Ngừng quét ngay nhưng CHECK NỐT các sound còn trong hàng đợi rồi mới dừng hẳn — không mất sound đã quét được">🕓 Dừng mềm đã chọn</button>
+          <button class="btn" id="verifyLoginsBtn" title="Mở TikTok kiểm tra phiên đăng nhập THẬT của từng profile (đã tick, hoặc tất cả nếu chưa tick). Profile đang chạy sẽ bỏ qua.">🔑 Kiểm tra đăng nhập</button>
+          <button class="btn" id="settingsSelectedBtn">⚙️ Cài đặt đã chọn</button>
+          <button class="btn" id="manageProfilesBtn">➕ Thêm / Quản lý</button>
+        </div>
+      </div>
+
+      <div class="result-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:34px"><input type="checkbox" id="selectAll" title="Chọn tất cả" /></th>
+              <th>Tên</th>
+              <th style="width:120px">Chế độ</th>
+              <th>Trạng thái</th>
+              <th style="width:60px" title="Số sound tìm thấy khi cuộn feed">Quét</th>
+              <th style="width:70px" title="Số sound đã đi qua bước kiểm tra số video (kể cả '?')">Đã check</th>
+              <th style="width:60px" title="Số sound đạt bộ lọc số video, được đẩy vào bảng kết quả bên dưới">Hợp lệ</th>
+              <th style="width:250px">Hành động</th>
+            </tr>
+          </thead>
+          <tbody id="profileTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Bảng dữ liệu chung -->
+    <section class="panel grow">
+      <div class="panel-head">
+        <h2>Dữ liệu thu thập</h2>
+        <div class="crawl-status-bar">
+          <span id="crawlCount" class="badge">0 sound</span>
+          <span id="crawlStatusMsg" class="status-msg">Chưa chạy</span>
+          <button class="btn btn-sm" id="pushSheetBtn" title="Đẩy dữ liệu trong bảng lên Google Sheet — chỉ đẩy dòng CHƯA có trên Sheet (tự lọc trùng)">☁ Đẩy lên Sheet</button>
+          <button class="btn btn-sm" id="exportExcelBtn" title="Xuất bảng dữ liệu ra file Excel (CSV)">📥 Xuất Excel</button>
+        </div>
+      </div>
+      <div class="result-wrap">
+        <table class="result-table">
+          <thead>
+            <tr><th style="width:40px">#</th><th>Tên sound</th><th>Link</th><th style="width:90px">Số video</th><th style="width:160px">Profile</th></tr>
+          </thead>
+          <tbody id="resultBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal quản lý profile -->
+  <div class="modal" id="profileModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Quản lý Profile</h3>
+        <button class="btn-icon" id="profileModalClose">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="section">
+          <div class="section-title">➕ Tạo profile mới</div>
+          <div class="section-desc">Tạo profile trống — sau đó tự đăng nhập TikTok trong trình duyệt.</div>
+          <div class="add-row">
+            <input type="text" id="newProfileName" class="input" placeholder="Tên profile (vd: Tiktok1)" />
+            <button class="btn btn-primary" id="addProfileBtn">Tạo mới</button>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">📂 Import folder có sẵn trong app</div>
+          <div class="section-desc">Folder bạn đã copy vào thư mục <code>profiles/</code> sẽ hiện ở đây.</div>
+          <div class="add-row">
+            <select id="importFolderSelect" class="select grow"></select>
+            <button class="btn" id="importFolderBtn">Import</button>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">💾 Import từ ổ đĩa</div>
+          <div class="section-desc">Chọn folder profile Firefox ở bất kỳ đâu — app sẽ sao chép vào <code>profiles/</code> (giữ bản gốc).</div>
+          <div class="add-row">
+            <button class="btn" id="importDiskBtn">📁 Chọn thư mục từ ổ đĩa...</button>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Danh sách profile</div>
+          <div class="profile-list" id="profileList"></div>
+        </div>
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn btn-primary" id="profileModalDone">Xong</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal cài đặt Google Sheet -->
+  <div class="modal" id="sheetsModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>☁ Cài đặt Google Sheet</h3>
+        <button class="btn-icon" id="sheetsModalClose">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <label class="switch-row" title="Bật để tự đẩy kết quả crawl lên Google Sheet">
+          <span class="switch">
+            <input type="checkbox" id="sheetsEnabled" />
+            <span class="slider"></span>
+          </span>
+          <span class="switch-label">Bật đẩy lên Google Sheet</span>
+        </label>
+
+        <div class="section">
+          <div class="section-title">Spreadsheet ID hoặc URL</div>
+          <input type="text" id="sheetsId" class="input" placeholder="Dán link Google Sheet hoặc ID..." />
+        </div>
+
+        <div class="section">
+          <div class="section-title">Tên tab (sheet)</div>
+          <input type="text" id="sheetsTab" class="input" placeholder="Data" value="Data" />
+          <div class="section-desc">Cột ghi theo thứ tự: <b>Tên sound</b> | <b>Link</b> | <b>Số video</b> (A:C). Tự thêm dòng mới vào cuối.</div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Service Account JSON</div>
+          <textarea id="sheetsSa" class="input" rows="6" placeholder='Dán toàn bộ file JSON service account (có client_email, private_key)...'></textarea>
+          <div class="section-desc">⚠️ Nhớ <b>chia sẻ Google Sheet</b> cho email <code>client_email</code> của service account với quyền <b>Editor</b>.</div>
+        </div>
+
+        <div class="section">
+          <label class="toggle-row" title="Nhiều máy cùng đẩy vào 1 Sheet: mỗi máy tự đọc lại cột Link định kỳ để biết sound máy khác vừa đẩy → không quét lại, không đẩy trùng. Sheet rất lớn (trên 100 nghìn dòng) nên tăng lên 10-15 phút.">
+            <span>Đồng bộ lọc trùng liên máy mỗi</span>
+            <input type="number" id="sheetsReseedMin" class="input input-sm" min="1" step="1" value="5" style="width:70px" />
+            <span>phút</span>
+          </label>
+        </div>
+
+        <div class="sheets-test-row">
+          <button class="btn" id="sheetsTestBtn">🔌 Test kết nối</button>
+          <span id="sheetsTestResult" class="status-msg"></span>
+        </div>
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn btn-primary" id="sheetsSaveBtn">Lưu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal cài đặt crawl (cho 1 profile HOẶC nhiều profile đã chọn) -->
+  <div class="modal" id="crawlSettingsModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>⚙️ Cài đặt crawl</h3>
+        <button class="btn-icon" id="crawlSettingsClose">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="section-desc">Áp dụng cho: <b id="crawlSettingsTarget">—</b></div>
+
+        <div class="section">
+          <div class="section-title">Chế độ crawl</div>
+          <select id="cfgMode" class="select">
+            <option value="foryou">For You (trang chủ)</option>
+            <option value="search">Tìm kiếm từ khóa</option>
+            <option value="current">Trên tab đang mở</option>
+            <option value="view">Xem video (danh sách link)</option>
+            <option value="cycle">Quét ⇄ Xem (chu kỳ tự động)</option>
+          </select>
+          <div id="cfgKeywordRow" style="display:none;">
+            <input type="text" id="cfgKeyword" class="input" placeholder="Nhập từ khóa tìm kiếm..." />
+          </div>
+          <div id="cfgCurrentHint" class="section-desc" style="display:none;">
+            🦊 Nhấn "Mở" ở hàng profile, tự điều hướng tới trang cần cào, rồi ▶ Chạy. App cào trên tab đang hiển thị. Dừng = giữ trình duyệt.
+          </div>
+        </div>
+
+        <div class="section" id="cfgCycleSection" style="display:none;">
+          <div class="section-title">Thời lượng mỗi pha (chu kỳ Quét ⇄ Xem)</div>
+          <label class="toggle-row" title="Pha Quét: mở For You, cuộn thu thập sound như chế độ For You bình thường, trong đúng số giờ này rồi tự chuyển sang pha Xem.">
+            <span>Quét trong</span>
+            <input type="number" id="cfgCycleScanHours" class="input input-sm" min="0.1" step="0.5" value="5" style="width:80px" />
+            <span>giờ</span>
+          </label>
+          <label class="toggle-row" title="Pha Xem: dùng danh sách link ở mục 'Danh sách link sound cần xem' bên dưới, lặp lại nếu hết mà chưa hết giờ, trong đúng số phút này rồi tự quay lại pha Quét.">
+            <span>Xem trong</span>
+            <input type="number" id="cfgCycleViewMinutes" class="input input-sm" min="1" step="5" value="30" style="width:80px" />
+            <span>phút</span>
+          </label>
+          <label class="toggle-row" title="Nghỉ giải lao mỗi lần chuyển pha (cả 2 chiều Quét→Xem và Xem→Quét): thời gian nghỉ chọn NGẪU NHIÊN trong khoảng này, trình duyệt đứng yên tại chỗ như người rời máy. Đặt cả 2 ô = 0 để không nghỉ.">
+            <span>Nghỉ giữa 2 pha</span>
+            <input type="number" id="cfgCycleBreakMin" class="input input-sm" min="0" step="1" value="5" style="width:70px" />
+            <span>–</span>
+            <input type="number" id="cfgCycleBreakMax" class="input input-sm" min="0" step="1" value="10" style="width:70px" />
+            <span>phút</span>
+          </label>
+          <div class="section-desc">Lặp <b>vô hạn</b>: Quét X giờ → nghỉ → Xem Y phút → nghỉ → Quét X giờ → ... cho tới khi bạn bấm Dừng. Mỗi profile chạy chu kỳ RIÊNG, không đồng bộ với profile khác.</div>
+        </div>
+
+        <div class="section" id="cfgViewRow" style="display:none;">
+          <div class="section-title">Danh sách link sound cần xem</div>
+          <textarea id="cfgViewLinks" class="input" rows="6" placeholder="Dán link sound TikTok, mỗi dòng 1 link...&#10;https://www.tiktok.com/music/original-sound-7384227070694148865&#10;(dán link video /video/ cũng được — sẽ xem thẳng video đó)"></textarea>
+          <div class="section-desc">Mỗi link sound: mở trang sound → click <b>1 video ngẫu nhiên</b> trong lưới → xem. Chế độ "Xem video": xem <b>hết</b> danh sách rồi tự dừng. Chế độ "Quét ⇄ Xem": <b>lặp lại</b> danh sách này suốt thời lượng pha Xem bên dưới.</div>
+          <label class="toggle-row" title="Mỗi video xem một tỉ lệ % ngẫu nhiên trong khoảng này của thời lượng video.">
+            <span>Xem từ</span>
+            <input type="number" id="cfgViewPctMin" class="input input-sm" min="1" max="100" step="5" value="40" style="width:70px" />
+            <span>% đến</span>
+            <input type="number" id="cfgViewPctMax" class="input input-sm" min="1" max="100" step="5" value="70" style="width:70px" />
+            <span>% thời lượng</span>
+          </label>
+          <label class="toggle-row" title="Xác suất like mỗi video sau khi xem xong. Để 0 = không like.">
+            <span>Tỉ lệ like</span>
+            <input type="number" id="cfgViewLikePct" class="input input-sm" min="0" max="100" step="5" value="15" style="width:70px" />
+            <span>% video (0 = không like)</span>
+          </label>
+          <label class="toggle-row" title="Sau khi xem xong video gốc, cuộn xuống các video tiếp theo (như người thật lướt feed) rồi mới chuyển link kế. Mỗi lần cuộn nghỉ theo cài đặt Delay. Để 0 = không cuộn.">
+            <span>Cuộn thêm từ</span>
+            <input type="number" id="cfgViewScrollMin" class="input input-sm" min="0" step="5" value="20" style="width:70px" />
+            <span>đến</span>
+            <input type="number" id="cfgViewScrollMax" class="input input-sm" min="0" step="5" value="30" style="width:70px" />
+            <span>lần / link (0 = không cuộn)</span>
+          </label>
+          <div class="section-desc">Quy trình mỗi link: xem video gốc đủ % → cuộn xuống N lần ngẫu nhiên trong khoảng (mỗi lần cuộn nghỉ theo <b>Delay</b> bên dưới) → chuyển link kế tiếp.</div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Hiển thị trình duyệt</div>
+          <div class="switch-row" title="Bật = chạy ẩn (Headless); Tắt = hiện cửa sổ Firefox (Visible)">
+            <label class="switch">
+              <input type="checkbox" id="cfgHeadless" />
+              <span class="slider"></span>
+            </label>
+            <span id="cfgHeadlessLabel" class="switch-label">Visible (hiện cửa sổ)</span>
+          </div>
+        </div>
+
+        <div class="section" id="cfgSoundSection">
+          <div class="section-title">Loại sound</div>
+          <label class="toggle-row" title="Chỉ lấy Original Sound (tên dạng 'original sound - ...'). Bỏ qua nhạc có bản quyền.">
+            <input type="checkbox" id="cfgOriginalOnly" />
+            <span>Chỉ lấy Original Sound</span>
+          </label>
+        </div>
+
+        <div class="section" id="cfgPerfSection">
+          <div class="section-title">Hiệu năng</div>
+          <label class="toggle-row" title="Chặn tải ảnh/video/font ngay trên tab cuộn để giảm RAM & băng thông. Lưu ý: tab cuộn sẽ không hiển thị ảnh/video (vẫn lấy được link sound).">
+            <input type="checkbox" id="cfgBlockImages" />
+            <span>Không tải ảnh/video (giảm RAM)</span>
+          </label>
+          <label class="toggle-row" title="Feed cuộn mãi tích DOM/RAM không giới hạn (~1.5GB/phút) → tải lại định kỳ để xả. Để 0 = KHÔNG tự tải lại (chạy liên tục không gián đoạn, nhưng dễ tràn RAM nếu chạy lâu).">
+            <span>Tải lại feed sau mỗi</span>
+            <input type="number" id="cfgRecycleEvery" class="input input-sm" min="0" step="10" value="80" style="width:80px" />
+            <span>lần cuộn (0 = tắt)</span>
+          </label>
+        </div>
+
+        <div class="section" id="cfgFilterSection">
+          <div class="section-title">Lọc theo số video</div>
+          <label class="toggle-row" title="Chỉ lấy sound có số video nằm trong khoảng. Để 0 = không giới hạn cận đó.">
+            <span>Số video từ ≥</span>
+            <input type="number" id="cfgMinVideos" class="input input-sm" min="0" step="100" value="1000" style="width:90px" />
+            <span>đến ≤</span>
+            <input type="number" id="cfgMaxVideos" class="input input-sm" min="0" step="1000" value="0" style="width:100px" />
+          </label>
+          <div class="section-desc">Để <b>0</b> = không giới hạn. VD: từ <b>1000</b> đến <b>100000</b> → chỉ lấy sound có 1.000–100.000 video.</div>
+        </div>
+
+        <div class="section" id="cfgDelaySection">
+          <div class="section-title" id="cfgDelayTitle">Delay mỗi lần cuộn</div>
+          <label class="toggle-row" title="Thời gian chờ ngẫu nhiên giữa các lần cuộn (giây).">
+            <span>Từ</span>
+            <input type="number" id="cfgDelayMin" class="input input-sm" min="0" step="0.5" value="2" style="width:70px" />
+            <span>đến</span>
+            <input type="number" id="cfgDelayMax" class="input input-sm" min="0" step="0.5" value="4" style="width:70px" />
+            <span>giây</span>
+          </label>
+        </div>
+
+        <div class="section" id="cfgCountSection">
+          <div class="section-title">Số luồng đếm video đồng thời (toàn app)</div>
+          <label class="toggle-row" title="Số trang /music/ được tải cùng lúc trên TOÀN app, dù chạy bao nhiêu profile.">
+            <span>Tối đa</span>
+            <input type="number" id="cfgCountConcurrency" class="input input-sm" min="1" max="10" step="1" value="2" style="width:70px" />
+            <span>request cùng lúc</span>
+          </label>
+          <div class="section-desc">Đây là cài đặt <b>chung toàn app</b> (không riêng từng profile). Càng nhỏ càng ít bị TikTok chặn trang đếm; khuyến nghị <b>2</b>. Chạy nhiều profile mà để cao dễ bị chặn (nghỉ 300s liên tục).</div>
+        </div>
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn" id="crawlSettingsCancel">Hủy</button>
+        <button class="btn btn-primary" id="crawlSettingsSave">Lưu cài đặt</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal log riêng từng profile -->
+  <div class="modal" id="profileLogModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>📄 Log: <span id="profileLogTitle"></span></h3>
+        <button class="btn-icon" id="profileLogClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <pre class="changelog" id="profileLogBody" style="max-height:50vh"></pre>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="profileLogClear">Xóa log</button>
+        <button class="btn btn-primary" id="profileLogDone">Đóng</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal cập nhật -->
+  <div class="modal" id="updateModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>⬆ Cập nhật phần mềm</h3>
+        <button class="btn-icon" id="updateModalClose">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="section">
+          <div class="row gap" style="align-items:center; justify-content:space-between;">
+            <span>Phiên bản hiện tại: <b id="updateCurrentVer">—</b></span>
+            <button class="btn btn-sm" id="updateCheckBtn">🔍 Kiểm tra</button>
+          </div>
+          <div class="section-desc" id="updateStatus">Nhấn “Kiểm tra” để tìm bản mới.</div>
+        </div>
+
+        <div class="section" id="updateAvailBox" style="display:none;">
+          <div class="section-title">🎉 Có bản mới: <span id="updateNewVer"></span></div>
+          <div class="section-desc">Thay đổi:</div>
+          <pre class="changelog" id="updateChangelog"></pre>
+        </div>
+
+        <div class="section" id="updateProgressBox" style="display:none;">
+          <div class="section-desc">Đang tải bản cập nhật... <span id="updateProgressPct">0%</span></div>
+          <div class="progress"><div class="progress-bar" id="updateProgressBar"></div></div>
+          <div class="section-desc">Tải xong app sẽ tự khởi động lại để cài đặt.</div>
+        </div>
+
+        <details class="section">
+          <summary class="section-title" style="cursor:pointer;">⚙️ Nâng cao: GitHub repo phát hành</summary>
+          <input type="text" id="updateRepoInput" class="input" placeholder="Owner/Repo (vd: Hung13010/Crawl_DataTiktok-releases)" />
+          <div class="section-desc">Để trống = dùng mặc định (<code id="updateRepoDefault">—</code>). Lưu xong nhấn “Kiểm tra” lại.</div>
+          <button class="btn btn-sm" id="updateRepoSaveBtn" style="align-self:flex-start;">Lưu repo</button>
+        </details>
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn" id="updateLaterBtn">Để sau</button>
+        <button class="btn btn-primary" id="updateInstallBtn" disabled>⬇ Cập nhật ngay</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+node_modules/
+profiles/
+config/
+logs/
+*.log
+
+# Build output
+../Crawl_DataTiktok_Release/
+dist/
+
+# Playwright browsers bundled
+lib/ms-playwright/
+
+# OS
+Thumbs.db
+.DS_Store
