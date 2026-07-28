@@ -16,6 +16,37 @@ set "CSC_IDENTITY_AUTO_DISCOVERY=false"
 set "RELEASE=..\Crawl_DataTiktok_Release"
 set "REPO=datkhac009/Crawl_DataTiktok-releases"
 
+REM ====== 0. KIEM TRA TRUOC KHI BUILD (fail nhanh) ======
+REM Vi sao co buoc nay (2026-07-28): build mat 6-8 phut, neu de den buoc 4 moi phat hien
+REM "gh" chua dang nhap / token thieu quyen thi mat toan bo thoi gian do. Da gap thuc te:
+REM token luu trong keyring co "Token scopes: none" -> buoc 4 tra 403/404 sau khi build xong.
+echo.
+echo [0/4] Kiem tra gh CLI va quyen phat hanh...
+where gh >nul 2>&1
+if errorlevel 1 (
+  echo.
+  echo *** KHONG TIM THAY "gh" ^(GitHub CLI^) ***
+  echo Cai bang lenh:  winget install --id GitHub.cli
+  echo Cai xong phai MO LAI cua so cmd nay de PATH co hieu luc.
+  pause
+  exit /b 1
+)
+REM Hoi thang GitHub: token hien tai co quyen GHI tren repo phat hanh khong.
+REM Repo private + token khong du quyen se tra 404 (khong phai 403) -^> khong co chu "true".
+gh api repos/%REPO% -q ".permissions.push" 2>nul | findstr /i /c:"true" >nul
+if errorlevel 1 (
+  echo.
+  echo *** TOKEN HIEN TAI KHONG CO QUYEN GHI TREN %REPO% ***
+  echo Kiem tra:  gh auth status
+  echo Chon 1 trong 2 cach sua:
+  echo   1^) gh auth login       -- token can scope: repo VA read:org ^(luu trong keyring, an toan hon^)
+  echo   2^) set GH_TOKEN=^<token co scope repo^>    roi chay lai build.bat
+  echo      ^(dung setx GH_TOKEN ^<token^> de luu vinh vien cho moi cua so cmd sau nay^)
+  pause
+  exit /b 1
+)
+echo   OK - du quyen phat hanh len %REPO%.
+
 REM ====== 1. Tang version (patch) TRUOC khi build, de .exe mang dung version moi ======
 echo.
 echo [1/4] Tang version (patch)...
@@ -30,6 +61,11 @@ if not defined VERSION (
 echo   Version moi: %VERSION%
 
 REM ====== 2. Build app bang electron-builder (qua pnpm) ======
+REM Dong app dang chay truoc khi build: tien trinh cu (ke ca cac tien trinh con Electron
+REM con treo lai sau mot lan chay loi) GIU KHOA file .exe dau ra, lam electron-builder dung
+REM o "output file is locked for writing (maybe by virus scanner) => waiting for unlock..."
+REM va treo vo han (da gap 2 lan ngay 2026-07-28).
+taskkill /F /IM Crawl_DataTiktok.exe >nul 2>&1
 echo.
 echo [2/4] Dang build app (electron-builder)...
 call pnpm run build
