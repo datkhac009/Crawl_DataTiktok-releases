@@ -27,7 +27,7 @@ const _insecureAgent = new https.Agent({ rejectUnauthorized: false });
 
 // Repo phát hành mặc định, dạng 'Owner/Repo'. Đổi cho khớp repo GitHub của bạn,
 // hoặc cấu hình trong app (modal Cập nhật) — giá trị trong app sẽ ghi đè dòng này.
-const DEFAULT_REPO = 'Hung13010/Crawl_DataTiktok-releases';
+const DEFAULT_REPO = 'datkhac009/Crawl_DataTiktok-releases';
 
 function _resolveRepo(repo) {
   return (repo || process.env.UPDATE_REPO || DEFAULT_REPO || '').trim();

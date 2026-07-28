@@ -14,7 +14,7 @@ set "NODE_TLS_REJECT_UNAUTHORIZED=0"
 set "CSC_IDENTITY_AUTO_DISCOVERY=false"
 
 set "RELEASE=..\Crawl_DataTiktok_Release"
-set "REPO=Hung13010/Crawl_DataTiktok-releases"
+set "REPO=datkhac009/Crawl_DataTiktok-releases"
 
 REM ====== 1. Tang version (patch) TRUOC khi build, de .exe mang dung version moi ======
 echo.

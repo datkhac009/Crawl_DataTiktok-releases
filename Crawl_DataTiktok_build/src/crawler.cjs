@@ -235,18 +235,23 @@ function makeFeedTracker() {
   let seen = new Set(), scrolls = 0, fresh = 0;
   return {
     // Ghi nhận 1 vòng cuộn. Trả true nếu nghi feed đang KẸT (cần can thiệp thoát kẹt).
+    // (2026-07-28) TRƯỚC ĐÂY chỉ đếm khi href KHÁC null (`if (href) {...}`) — nghĩa là
+    // đọc null (KHÔNG tìm thấy sound nào) liên tục KHÔNG BAO GIỜ bị coi là kẹt, vì
+    // sameCount không hề nhích. Sự cố thật: 5 profile "gặp 0 sound khác nhau" suốt ~40
+    // phút liên tục, không 1 dòng cảnh báo/chẩn đoán nào vì nhánh này chưa từng chạy.
+    // Giờ so khớp với lần đọc TRƯỚC kể cả khi cả hai đều là null — null lặp lại cũng
+    // tích lũy thành kẹt như cùng 1 sound lặp lại.
     track(href, isNew) {
       scrolls++;
       if (isNew) fresh++;
-      if (href) {
-        seen.add(href);
-        if (href === lastHref) sameCount++;
-        else {
-          lastHref = href; sameCount = 1;
-          // Chỉ hạ cấp độ khi feed chạy lại ỔN ĐỊNH (nhiều sound khác nhau liên tiếp),
-          // không phải chỉ nhích được 1 video rồi bật lại.
-          if (++progressRun >= STUCK_RECOVERED) stuckLevel = 0;
-        }
+      if (href) seen.add(href);
+      if (href === lastHref) {
+        sameCount++;
+      } else {
+        lastHref = href; sameCount = 1;
+        // Chỉ hạ cấp độ khi đọc được SOUND THẬT khác trước (không phải chỉ đổi từ/sang
+        // null) — feed chạy lại ỔN ĐỊNH nghĩa là có sound mới, không phải chỉ hết null.
+        if (href && ++progressRun >= STUCK_RECOVERED) stuckLevel = 0;
       }
       return sameCount >= STUCK_SAME_SOUND;
     },
@@ -482,7 +487,7 @@ async function recyclePage(page, waitSelector, stop) {
 // Xử lý 1 lần phát hiện kẹt: chẩn đoán → ghi log rõ nguyên nhân → can thiệp theo cấp độ.
 // allowReload=false cho chế độ 'current' (tab của NGƯỜI DÙNG — không bao giờ tự tải lại).
 // Trả true nếu đã TẢI LẠI (nơi gọi cần reset bộ đếm recycle).
-async function handleStuck(page, tracker, { profileId, onStatus, prefix, waitSelector, allowReload, stop }) {
+async function handleStuck(page, tracker, { profileId, onStatus, prefix, waitSelector, allowReload, stop, noHref }) {
   const diag = await diagnoseFeed(page);
   let level = tracker.nextStuckLevel();
   if (!allowReload && level === 3) level = 1;   // 'current': bỏ qua cấp tải lại, quay về cấp 1
@@ -494,8 +499,14 @@ async function handleStuck(page, tracker, { profileId, onStatus, prefix, waitSel
   const how = level === 1 ? 'bấm nút video kế tiếp của TikTok'
     : level === 2 ? 'cuộn mạnh 3 nhịp con lăn'
     : 'tải lại trang';
+  // Nguyên nhân khác nhau cần log khác nhau: "cùng 1 sound" (đọc trúng lặp, feed còn
+  // video nhưng đứng yên) khác hẳn "không đọc được sound nào" (href null liên tục — vd
+  // lớp che/đổi bố cục/chặn trang) — gộp chung dễ hiểu nhầm là feed vẫn còn video.
+  const reason = noHref
+    ? `KHÔNG đọc được sound nào (${STUCK_SAME_SOUND} lần liên tiếp)`
+    : `feed KHÔNG chuyển video (${STUCK_SAME_SOUND} lần liên tiếp cùng 1 sound)`;
   onStatus(profileId, 'running',
-    `⚠ ${prefix}feed KHÔNG chuyển video (${STUCK_SAME_SOUND} lần liên tiếp cùng 1 sound)`
+    `⚠ ${prefix}${reason}`
     + ` — ${info} → thử cách ${level}: ${how}...`);
   let reloaded = false;
   if (level === 3) {
@@ -1036,6 +1047,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
           const reloaded = await handleStuck(page, tracker, {
             profileId: profile.id, onStatus, prefix: 'Chu kỳ [Quét]: ',
             waitSelector: 'a[data-e2e="video-music"]', allowReload: true, stop,
+            noHref: !(data && data.href),
           });
           if (reloaded) scrolls = 0;
           continue;
@@ -1228,6 +1240,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
           await handleStuck(page, tracker, {
             profileId: profile.id, onStatus, prefix: '',
             waitSelector: null, allowReload: false, stop,
+            noHref: !(data && data.href),
           });
         }
         if (stop.requested) break;
@@ -1328,6 +1341,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
           const reloaded = await handleStuck(page, tracker, {
             profileId: profile.id, onStatus, prefix: `Tìm "${keyword}": `,
             waitSelector: SEL, allowReload: true, stop,
+            noHref: !(data && data.href),
           });
           if (reloaded) scrolls = 0;
           continue;
@@ -1420,6 +1434,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
         const reloaded = await handleStuck(page, tracker, {
           profileId: profile.id, onStatus, prefix: '',
           waitSelector: 'a[data-e2e="video-music"]', allowReload: true, stop,
+          noHref: !(data && data.href),
         });
         if (reloaded) scrolls = 0;
         continue;
