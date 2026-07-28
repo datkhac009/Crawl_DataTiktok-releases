@@ -1,6 +1,6 @@
 {
   "name": "crawl-tiktok",
-  "version": "0.1.43",
+  "version": "0.1.44",
   "description": "TikTok Data Crawler — Firefox profile manager + crawler",
   "main": "main.js",
   "author": "HUNFI",
@@ -21,7 +21,8 @@
   },
   "dependencies": {
     "electron-store": "^8.1.0",
-    "playwright": "^1.45.0"
+    "playwright": "^1.45.0",
+    "conf": "^10.2.0"
   },
   "devDependencies": {
     "electron": "^28.3.3",

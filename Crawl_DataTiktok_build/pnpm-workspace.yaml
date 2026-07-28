@@ -1,2 +1,4 @@
 allowBuilds:
   electron: true
+nodeLinker: hoisted
+shamefullyHoist: true
