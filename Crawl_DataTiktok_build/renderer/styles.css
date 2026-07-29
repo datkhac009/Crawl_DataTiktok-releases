@@ -29,9 +29,12 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;          /* cửa sổ rất hẹp: cụm nút phải xuống hàng, không bị đè */
+  gap: 8px 12px;
   padding: 12px 18px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 .brand { display: flex; align-items: center; gap: 10px; }
 .topbar-right { display: flex; align-items: center; gap: 12px; }
@@ -60,7 +63,12 @@ body {
 .row.wrap { flex-wrap: wrap; }
 
 /* Bảng profile */
-.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* min-width: CỐT LÕI của responsive ở đây (2026-07-28). Table HTML với `width:100%` sẽ TỰ
+   BÓP cột khi thiếu chỗ — ở khổ 960px (đúng khổ tối thiểu của app) cột "Trạng thái" bị bóp
+   còn ~55px nên câu log dài xuống 6 dòng rồi BỊ CẮT MẤT, và chỉ hiện được 1/5 profile.
+   Đặt min-width để cột giữ bề rộng đọc được, phần thiếu thì CUỘN NGANG (.result-wrap có
+   overflow:auto) — cuộn thì đọc được, bóp thì không. */
+.data-table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 13px; }
 .data-table thead th {
   position: sticky; top: 0;
   background: var(--panel-2); color: var(--text-muted);
@@ -69,10 +77,15 @@ body {
 }
 .data-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .data-table tbody tr:hover { background: var(--panel-2); }
-.pname { font-weight: 600; }
+/* Tiêu đề cột không được xuống dòng ("Đã check" từng bị tách 2 dòng làm lệch hàng). */
+.data-table thead th { white-space: nowrap; }
+.pname { font-weight: 600; white-space: nowrap; }
 .pmode { color: var(--text-muted); }
 .pscanned, .pchecked, .pvalid { font-weight: 600; color: var(--ok); text-align: center; }
-.prow-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+/* nowrap: 5 nút phải nằm TRÊN MỘT HÀNG. Trước đây flex-wrap:wrap làm chúng tách 2 hàng khi
+   cột hẹp → hàng cao gấp đôi và nút ✕ cuối bị cắt ở mép phải. Cột đã đặt 272px (index.html)
+   đủ chỗ; nếu cửa sổ hẹp hơn thì cuộn ngang chứ không bóp nút. */
+.prow-actions { display: flex; gap: 4px; flex-wrap: nowrap; }
 .prow-actions .btn-sm { padding: 4px 8px; }
 .panel {
   background: var(--panel);
@@ -86,8 +99,14 @@ body {
   min-height: 0;
 }
 .panel.grow { flex: 1; width: auto; }
-.panel-head { display: flex; align-items: center; justify-content: space-between; }
-.panel-head h2 { font-size: 15px; font-weight: 600; }
+/* flex-wrap: khi cửa sổ hẹp, cụm nút xuống hàng riêng thay vì chèn vào tiêu đề (trước đây
+   ở 960px chữ "Profile" bị hàng nút đè lên trông như lỗi hiển thị). */
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 10px;
+}
+.panel-head h2 { font-size: 15px; font-weight: 600; flex: 0 0 auto; }
+.panel-head > .row { flex: 1 1 auto; justify-content: flex-end; }
 
 .field-label { color: var(--text-muted); font-size: 12px; }
 .hint { color: var(--text-dim); font-size: 12px; line-height: 1.5; }
@@ -173,18 +192,28 @@ body {
 .switch input:disabled + .slider { opacity: .5; cursor: not-allowed; }
 .switch-label { font-size: 12px; color: var(--text-muted); }
 
-.crawl-status-bar { display: flex; align-items: center; gap: 12px; }
+.crawl-status-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
 .badge {
   background: var(--primary); color: #fff;
   padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600;
+  white-space: nowrap;   /* "0 sound" từng bị tách thành 2 dòng khi cửa sổ hẹp */
 }
-.status-msg { color: var(--text-muted); font-size: 12px; }
+/* Dòng trạng thái chung có thể rất dài ("Kiểm tra xong 5 profile — ...") → cắt bằng
+   ellipsis thay vì đẩy 2 nút Đẩy Sheet / Xuất Excel xuống hàng. */
+.status-msg {
+  color: var(--text-muted); font-size: 12px;
+  min-width: 0; flex: 1 1 120px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
+/* overflow: auto (CẢ 2 CHIỀU) — trước đây chỉ có overflow-y nên bảng rộng hơn khung bị
+   CẮT MẤT chứ không cuộn được, người dùng không có cách nào xem các cột bên phải. */
 .result-wrap {
-  flex: 1; overflow-y: auto;
+  flex: 1; overflow: auto;
   border: 1px solid var(--border); border-radius: 8px;
 }
-.result-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.result-table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 13px; }
+.result-table thead th { white-space: nowrap; }
 .result-table thead th {
   position: sticky; top: 0;
   background: var(--panel-2); color: var(--text-muted);
@@ -211,6 +240,14 @@ body {
   border-radius: 8px; padding: 4px 10px; font-size: 12px;
 }
 .pstat-name { font-weight: 600; color: var(--text); }
+/* Badge trong BẢNG profile: câu log có thể rất dài ("Chu kỳ [Quét]: tải lại feed để xả
+   RAM (đã quét 693 sound)...") — trước đây nó xuống 6 dòng làm hàng cao vọt, đẩy các
+   profile khác ra khỏi khung. Cắt 1 dòng + ellipsis; hover xem đủ (title đặt trong
+   renderStatusBadge), bản đầy đủ vẫn nằm trong log 📄. */
+.data-table .pstat-badge {
+  display: block; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .pstat-badge { color: var(--text-dim); }
 .pstat-badge.run { color: var(--ok); }
 .pstat-badge.stop { color: var(--text-muted); }
@@ -346,3 +383,53 @@ textarea.input { resize: vertical; font-family: 'Consolas', monospace; font-size
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.ok { border-color: var(--ok); }
 .toast.err { border-color: var(--primary); }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   RESPONSIVE (2026-07-28)
+   Nguyên tắc: KHÔNG ẩn cột/nút nào — mọi chức năng phải luôn với tới được. Khi hẹp
+   thì (1) thu nhỏ khoảng đệm/chữ để dồn thêm chỗ, (2) cho cụm nút xuống hàng,
+   (3) phần bảng còn thiếu chỗ thì CUỘN NGANG (min-width + overflow:auto ở trên).
+   Đo bằng test/ui-responsive.test.js ở các khổ 1280/960/860/760/640.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* Máy 13-14" hoặc cửa sổ chia đôi màn hình */
+@media (max-width: 1100px) {
+  .layout-col { padding: 12px; gap: 12px; }
+  .panel { padding: 14px; gap: 10px; }
+  .btn { padding: 8px 11px; font-size: 12px; }
+  .btn-sm { padding: 5px 9px; font-size: 11px; }
+  .data-table, .result-table { font-size: 12px; }
+  .data-table td, .result-table td { padding: 6px 8px; }
+  .data-table thead th, .result-table thead th { padding: 7px 8px; }
+}
+
+/* Cửa sổ hẹp: dồn tối đa, cụm nút tự xuống nhiều hàng */
+@media (max-width: 860px) {
+  .topbar { padding: 10px 12px; }
+  .title { font-size: 15px; }
+  .layout-col { padding: 10px; gap: 10px; }
+  .panel { padding: 12px; border-radius: 10px; }
+  .panel-head { gap: 8px; }
+  /* Cụm nút chiếm cả hàng và căn trái cho dễ quét mắt khi đã xuống hàng riêng */
+  .panel-head > .row { flex: 1 1 100%; justify-content: flex-start; }
+  .btn { padding: 7px 10px; }
+  .prow-actions { gap: 3px; }
+  .prow-actions .btn-sm { padding: 4px 6px; }
+}
+
+/* Rất hẹp (người dùng kéo sát mức tối thiểu) */
+@media (max-width: 700px) {
+  .layout-col { padding: 8px; }
+  .panel { padding: 10px; }
+  .modal-box { max-width: 96vw; }
+  .modal-head, .modal-foot, .modal-body { padding: 12px 14px; }
+}
+
+/* Cửa sổ THẤP (chiều cao nhỏ): bảng dễ chỉ còn 1-2 hàng nhìn thấy → giảm đệm dọc
+   và bỏ chiều cao tối thiểu của khung log để còn chỗ cho dữ liệu. */
+@media (max-height: 640px) {
+  .layout-col { padding: 10px; gap: 10px; }
+  .panel { padding: 12px; gap: 8px; }
+  .data-table td, .result-table td { padding: 5px 8px; }
+  .log-box { max-height: 40vh; }
+}

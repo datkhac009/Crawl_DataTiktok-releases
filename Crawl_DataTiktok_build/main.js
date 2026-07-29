@@ -113,10 +113,16 @@ function send(channel, payload) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 960,
-    height: 600,
-    minWidth: 960,
-    minHeight: 600,
+    // Khổ MẶC ĐỊNH 1180x720 (2026-07-28): bảng profile có 8 cột + 5 nút hành động nên cần
+    // ~1000px mới hiện trọn không phải cuộn. Khổ cũ 960x600 vừa đúng mức bảng bắt đầu bị
+    // bóp — cột "Trạng thái" co còn ~55px, câu log dài xuống 6 dòng rồi bị cắt, và chỉ
+    // thấy 1/5 profile (người dùng báo "thu nhỏ là giao diện vỡ").
+    width: 1180,
+    height: 720,
+    // Khổ TỐI THIỂU hạ xuống 720x520: giờ thu nhỏ đã AN TOÀN vì bảng cuộn ngang được
+    // (.result-wrap: overflow auto + min-width) thay vì bị cắt mất không cách nào xem.
+    minWidth: 720,
+    minHeight: 520,
     title: 'TikTok Crawler',
     icon: path.join(__dirname, 'renderer', 'icon.png'),
     webPreferences: {

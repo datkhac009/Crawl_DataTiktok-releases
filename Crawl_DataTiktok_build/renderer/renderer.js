@@ -203,7 +203,11 @@ function formatCountdown(ms) {
 function renderStatusBadge(id) {
   const badge = document.querySelector(`.pstat-badge[data-pid="${CSS.escape(id)}"]`);
   if (!badge) return;
-  badge.textContent = profileStatusText[id] || '';
+  const txt = profileStatusText[id] || '';
+  badge.textContent = txt;
+  // Badge bị cắt bằng ellipsis khi cửa sổ hẹp (xem .pstat-badge trong styles.css) → đặt
+  // title để hover vẫn đọc được trọn câu; bản đầy đủ luôn có trong log 📄 của profile.
+  badge.title = txt;
   badge.className = 'pstat-badge ' + (profileStatusKind[id] || '');
 }
 

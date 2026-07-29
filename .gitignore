@@ -47,3 +47,6 @@ Desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# Ảnh chụp layout do test/ui-responsive.test.js sinh ra (chạy lại là có)
+.ui-shots/

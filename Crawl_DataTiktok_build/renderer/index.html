@@ -41,12 +41,15 @@
             <tr>
               <th style="width:34px"><input type="checkbox" id="selectAll" title="Chọn tất cả" /></th>
               <th>Tên</th>
-              <th style="width:120px">Chế độ</th>
+              <!-- 140px: đủ cho "For You" + mũi tên select; 120px làm chữ bị cắt "For Yo⌄" -->
+              <th style="width:140px">Chế độ</th>
               <th>Trạng thái</th>
               <th style="width:60px" title="Số sound tìm thấy khi cuộn feed">Quét</th>
               <th style="width:70px" title="Số sound đã đi qua bước kiểm tra số video (kể cả '?')">Đã check</th>
               <th style="width:60px" title="Số sound đạt bộ lọc số video, được đẩy vào bảng kết quả bên dưới">Hợp lệ</th>
-              <th style="width:250px">Hành động</th>
+              <!-- 272px: đủ cho 5 nút trên MỘT hàng (Chạy + ⚙ + 📄 + 🦊 + ✕); hẹp hơn thì
+                   nút xuống hàng 2 và nút ✕ bị cắt ở mép phải -->
+              <th style="width:272px">Hành động</th>
             </tr>
           </thead>
           <tbody id="profileTableBody"></tbody>

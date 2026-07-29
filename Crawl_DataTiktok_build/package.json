@@ -64,7 +64,8 @@
       "!clean-profiles.cjs",
       "!build.bat",
       "!start.bat",
-      "!test/**"
+      "!test/**",
+      "!.ui-shots/**"
     ]
   }
 }
