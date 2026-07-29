@@ -343,7 +343,11 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
   // Báo counts hiện tại cho UI (cột Sound + Đã check trong bảng profile). status='counts'
   // là kênh RIÊNG, không kèm text — renderer chỉ cập nhật số, không đụng badge/log.
   function emitCounts() {
-    onStatus(profile.id, 'counts', null, { scanned: localCount, checked: localChecked });
+    // skippedDup: DÙNG CHUNG cho cả phiên (không riêng profile này) — để renderer hiện
+    // được 1 số đếm sống "Bỏ qua trùng: N" (2026-07-29, người dùng không thấy lọc trùng
+    // đang hoạt động vì trước đây số này chỉ báo 1 lần lúc "Hoàn tất phiên", mà chế độ
+    // Quét⇄Xem gần như không bao giờ tới lúc đó).
+    onStatus(profile.id, 'counts', null, { scanned: localCount, checked: localChecked, skippedDup: _skippedDup });
   }
 
   // Thêm 1 sound vào hàng đợi (lọc trùng theo key chuẩn hóa — gồm cả link nạp sẵn).
@@ -361,7 +365,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
       _loggedFirstKey = true;
       console.log(`[dedup] key sound đầu tiên = "${key}" | url = ${url} | đã có trong cache? ${_collected.has(key)} (cache đang giữ ${_collected.size} key)`);
     }
-    if (_collected.has(key)) { _skippedDup++; return false; }
+    if (_collected.has(key)) { _skippedDup++; emitCounts(); return false; }
     _collected.add(key);
     _scannedThisRun++;
     localCount++;

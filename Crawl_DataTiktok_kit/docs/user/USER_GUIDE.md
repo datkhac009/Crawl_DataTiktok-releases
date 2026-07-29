@@ -82,16 +82,30 @@ Dữ liệu ghi vào 4 cột **A–D**: Tên sound | Link | Số video | Profile
 ⚠️ Khi dọn trùng trên Sheet, luôn **xóa cả dòng** (Delete rows), đừng xóa nội dung ô — xóa
 nội dung sẽ làm app ghi lệch cột ở lần đẩy sau.
 
+**🧹 Dọn trùng trên Sheet** (trong modal ☁ Google Sheet, mục "Bảo trì"): quét lại **toàn bộ**
+tab, tìm các dòng có Link bị lặp và tự xóa bớt — mỗi link chỉ giữ lại đúng 1 dòng (ưu tiên
+giữ dòng bạn đã tự ghi chú ở cột E trở đi, tránh mất ghi chú tay). Bấm nút sẽ hiện **xem
+trước** số dòng sẽ xóa trước, phải xác nhận mới xóa thật (không thể hoàn tác). Sheet càng
+lớn quét càng lâu (có thể vài phút với Sheet >100 nghìn dòng) — đây là việc dọn dẹp định kỳ,
+không phải cơ chế chống trùng chính (cơ chế chính đã tự chạy ngầm khi đẩy dữ liệu, xem mục
+"Chạy nhiều máy" bên dưới); dùng khi nghi ngờ có sẵn link trùng từ trước.
+
 ## Chạy nhiều máy
 
-- **Không chạy cùng một profile trên 2 máy cùng lúc** — TikTok sẽ hủy phiên đăng nhập của
-  cả hai. ⚠️ **App KHÔNG tự phát hiện được việc này giữa các máy** (file `profile.lock` chỉ
-  đọc trong thư mục profile của chính máy đó). Phải tự quản lý bằng **sổ phân bổ profile →
-  máy**, và khi chuyển profile sang máy mới thì **xoá khỏi máy cũ**.
+- **App giờ TỰ CHẶN chạy cùng một profile trên 2 máy** (từ 2026-07-28) — nếu bạn bấm "▶ Chạy"
+  một profile đang thật sự chạy ở máy khác, app báo lỗi ngay và **không cho chạy**, thay vì
+  để TikTok hủy phiên đăng nhập của cả hai. Cơ chế này cần **đã cấu hình ☁ Google Sheet**
+  (dùng chính Sheet bạn chia sẻ giữa các máy) — nếu chưa cấu hình Sheet, app vẫn cho chạy
+  bình thường (không chặn được, nhưng cũng không đứng im chờ).
 - Chuyển profile sang máy khác: **chép cả thư mục profile** (gồm `session.state.json`,
   `fingerprint.json` và thư mục `Data` nếu có), không chỉ chép file session.
 - Bật VPN đúng quốc gia của profile **trước khi** mở app.
 - Chắc ăn nhất sau khi chuyển máy: bấm 🦊 đăng nhập lại một lần.
+- App tự tạo tab **`_locks`** trên Sheet để ghi nhịp tim, tab này ở dạng **ẨN** nên
+  **không hiện** trên thanh tab (không làm phiền các tab dữ liệu khác của bạn). Đừng xóa nội
+  dung ô trong đó, chỉ xóa cả dòng nếu cần dọn. Xem
+  [TROUBLESHOOTING.md](../technical/TROUBLESHOOTING.md) mục 11-12 nếu gặp "chỉ profile đầu
+  chạy" hoặc thấy tab này hiện công khai.
 
 ### App tự canh IP đúng quốc gia
 

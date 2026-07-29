@@ -13,6 +13,8 @@ const profiles = require('./src/profiles.cjs');
 const browser = require('./src/browser.cjs');
 const crawler = require('./src/crawler.cjs');
 const sheets = require('./src/sheets.cjs');
+const sheetLock = require('./src/sheet-lock.cjs');
+const { withDeadline } = require('./src/google-api.cjs');
 const updater = require('./src/updater.cjs');
 const { getLogsDir } = require('./src/paths.cjs');
 
@@ -109,6 +111,25 @@ let mainWindow = null;
 // mỗi handler tự khai báo `send` cục bộ, handler nào quên là lỗi "send is not defined".
 function send(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+}
+
+// ── KHÓA LIÊN MÁY (chống 1 profile chạy trên 2+ máy) ──
+// Khóa được định danh bằng TÊN THƯ MỤC profile, không phải id: id sinh theo thời điểm tạo
+// (`p_<timestamp>`) nên MỖI MÁY một id khác nhau dù là cùng profile. Tên thư mục thì giống
+// nhau khi chép profile sang máy khác — đó mới là thứ nhận diện được cùng một tài khoản.
+function folderOfProfile(profileId) {
+  const p = profiles.loadProfiles().find(x => x.id === profileId);
+  return p ? (p.folderName || p.id) : null;
+}
+
+// Đọc cấu hình Sheet từ store rồi nạp vào sheet-lock. Khóa liên máy KHÔNG phụ thuộc công tắc
+// "tự đẩy dữ liệu" — chỉ cần có Spreadsheet ID + Service Account là bật, vì đây là biện pháp
+// an toàn cho phiên đăng nhập, không phải tính năng tùy chọn.
+function configureSheetLockFromStore() {
+  const cfg = store.get('sheets_config') || {};
+  let sa = null;
+  try { sa = cfg.saJson ? JSON.parse(cfg.saJson) : null; } catch (_) {}
+  sheetLock.configure({ spreadsheetId: cfg.spreadsheetId, sa });
 }
 
 function createWindow() {
@@ -245,6 +266,40 @@ ipcMain.handle('profile-start', async (_e, params) => {
   // Áp số luồng đếm đồng thời toàn app (cài đặt chung, mặc định 2).
   crawler.setCountConcurrency(store.get('count_concurrency') || 2);
 
+  // ── CHẶN CHẠY TRÙNG PROFILE GIỮA CÁC MÁY (2026-07-28) ──
+  // Đây là nguyên nhân SỐ 1 khiến TikTok hủy phiên đăng nhập (1 phiên phát từ 2 IP). Khác
+  // `profile.lock` (chỉ thấy được trong cùng 1 máy), khóa này ghi lên Google Sheet dùng chung
+  // nên 6 máy thấy nhau. CHẶN thật (không chỉ cảnh báo) vì cảnh báo lúc 3h sáng thì không ai
+  // đọc, mà hậu quả là phải bấm 🦊 đăng nhập lại từng profile qua RDP.
+  configureSheetLockFromStore();
+  {
+    const folder = folderOfProfile(params.profileId);
+    // TRẦN 8 GIÂY (2026-07-28): sự cố thật — Google API bị treo (không lỗi hẳn, cũng không
+    // xong) làm request thứ 2 trong "▶ Chạy đã chọn" không bao giờ resolve; renderer chạy
+    // TUẦN TỰ (for...await) nên các profile sau đó không bao giờ được thử, dù profile đầu
+    // vẫn chạy bình thường. `withDeadline` đảm bảo bấm Chạy không bao giờ chờ quá 8s/profile
+    // cho bước này, dù tầng dưới (httpRequest) có lỗi gì đi nữa.
+    const lock = await withDeadline(
+      sheetLock.check(folder), 8000,
+      { state: 'unknown', msg: 'quá 8s chưa có phản hồi (Google API chậm/treo)' }
+    );
+    if (lock.state === 'busy') {
+      const msg = `⛔ Profile này ĐANG CHẠY ở máy "${lock.host}" (nhịp tim ${lock.ago}s trước). `
+        + 'Chạy cùng lúc 2 nơi sẽ làm TikTok HỦY phiên đăng nhập của CẢ HAI. '
+        + `Hãy dừng ở máy đó trước; nếu máy đó đã tắt thật thì đợi ~${Math.ceil(sheetLock.STALE_MS / 60000)} phút cho khóa tự hết hạn.`;
+      send('crawl-status', { profileId: params.profileId, status: 'error', msg });
+      return { ok: false, msg };
+    }
+    // 'unknown' (mạng/API lỗi/quá giờ) và 'off' (chưa cấu hình Sheet) đều KHÔNG chặn — không
+    // được để cả dàn máy đứng im vì Sheet lỗi/chậm tạm thời. Chỉ ghi log để còn truy được.
+    if (lock.state === 'unknown') {
+      console.warn(`[sheet-lock] Không kiểm được khóa liên máy cho "${folder}" (${lock.msg}) — vẫn cho chạy.`);
+    }
+    // Ghi nhịp tim NGAY để máy khác thấy liền, không phải chờ nhịp định kỳ 60s.
+    // Cùng trần 8s, và KHÔNG chờ nếu lỗi/chậm — nhịp định kỳ 60s sẽ tự bù lại sau.
+    if (folder) withDeadline(sheetLock.heartbeat([folder]), 8000, null).catch(() => {});
+  }
+
   // Cấu hình đẩy Google Sheet từ store (nếu bật).
   const sheetsCfg = store.get('sheets_config') || {};
   let sa = null;
@@ -262,7 +317,16 @@ ipcMain.handle('profile-start', async (_e, params) => {
       sheets.updateKnownLinks(seedUrls);   // chặn trùng cả ở CỬA ĐẨY (không chỉ cửa quét)
       send('crawl-status', { profileId: null, status: 'info', msg: `Đã nạp ${seedUrls.length} link từ Sheet để lọc trùng...` });
     } catch (e) {
-      send('crawl-status', { profileId: null, status: 'sheet-error', msg: 'Không đọc được Sheet để lọc trùng: ' + e.message });
+      // (2026-07-29) Chưa nạp được → sheets.enqueue() tự tạm dừng đẩy realtime cho tới khi
+      // nạp thành công (tránh đẩy mù gây trùng). Nói rõ điều đó ra UI để không tưởng nhầm là
+      // mất dữ liệu — dữ liệu vẫn hiện trong bảng, tự thử lại mỗi phút, hoặc bấm "Đẩy lên
+      // Sheet" để đẩy ngay (nút đó tự đọc lại danh sách mới nhất trước khi đẩy).
+      send('crawl-status', {
+        profileId: null, status: 'sheet-error',
+        msg: 'Không đọc được Sheet để lọc trùng: ' + e.message
+          + ' — TẠM DỪNG đẩy tự động lên Sheet (tránh trùng), dữ liệu vẫn hiện trong bảng.'
+          + ' App tự thử lại mỗi phút; muốn đẩy ngay thì bấm "Đẩy lên Sheet".',
+      });
     }
   }
 
@@ -276,14 +340,37 @@ ipcMain.handle('profile-start', async (_e, params) => {
     (profileId, status, msg, counts) => {
       send('crawl-status', { profileId, status, msg, ...(counts || {}) });
       if (status === 'all-done') sheets.flushAll().catch(() => {});
+      // Nhả khóa liên máy khi profile dừng HẲN.
+      // ⚠ CHỈ nghe 'stopped', TUYỆT ĐỐI KHÔNG nghe 'error': canh IP (QĐ-17) dùng status
+      // 'error' cho thông báo TẠM DỪNG trong khi profile VẪN ĐANG SỐNG (đang chờ VPN về
+      // đúng vùng). Nhả khóa lúc đó là mở đường cho máy khác chạy trùng ngay.
+      // Các trường hợp thoát không phát 'stopped' (vd phát hiện chế độ khách) thì khóa tự
+      // hết hạn sau 3 phút vì nhịp tim chỉ ghi cho profile ĐANG chạy — an toàn, tự lành.
+      if (status === 'stopped' && profileId) {
+        const f = folderOfProfile(profileId);
+        if (f) sheetLock.release([f]).catch(() => {});
+      }
     }
   );
 });
-ipcMain.handle('profile-stop', (_e, profileId) => crawler.stopProfile(profileId));
+// Nhả khóa liên máy khi dừng → máy khác chạy được NGAY, không phải chờ hết 3 phút stale.
+// Không await trong handler dừng: nhả khóa là việc gọi mạng, không được làm nút Dừng chậm đi.
+ipcMain.handle('profile-stop', (_e, profileId) => {
+  const r = crawler.stopProfile(profileId);
+  const folder = folderOfProfile(profileId);
+  if (folder) sheetLock.release([folder]).catch(() => {});
+  return r;
+});
 // Dừng mềm: ngừng quét ngay nhưng check nốt hàng đợi sound rồi mới dừng hẳn.
+// ⚠ KHÔNG nhả khóa ở đây: profile vẫn còn đang check nốt hàng đợi, tức VẪN ĐANG DÙNG phiên
+// đăng nhập. Nhả sớm là mở đường cho máy khác chạy trùng ngay lúc đó. Khóa sẽ được nhả khi
+// profile dừng hẳn (xem xử lý status 'stopped' trong onStatus của profile-start).
 ipcMain.handle('profile-soft-stop', (_e, profileId) => crawler.softStopProfile(profileId));
 ipcMain.handle('profiles-stop-all', async () => {
+  const running = crawler.runningIds();
   const r = crawler.stopAll();
+  const folders = running.map(folderOfProfile).filter(Boolean);
+  if (folders.length) sheetLock.release(folders).catch(() => {});
   await sheets.flushAll().catch(() => {});
   return r;
 });
@@ -310,6 +397,30 @@ ipcMain.handle('sheets-push-manual', async (_e, rows) => {
   } catch (e) {
     return { ok: false, msg: e.message };
   }
+});
+
+// ── Dọn trùng trên Sheet (2026-07-29): quét TOÀN BỘ tab, xoá dòng link bị lặp ──
+// Tách 2 bước: "scan" chỉ đọc + tính toán (an toàn, không đổi gì), renderer hiện xác nhận
+// cho người dùng thấy trước SẼ xoá bao nhiêu dòng; "clean" mới thực sự xoá, và tự đọc lại
+// từ đầu (không tin kết quả scan cũ) để tránh xoá nhầm nếu Sheet vừa đổi.
+function _sheetsCfgOrErr() {
+  const cfg = store.get('sheets_config') || {};
+  let sa = null;
+  try { sa = cfg.saJson ? JSON.parse(cfg.saJson) : null; } catch (_) {}
+  if (!sa || !cfg.spreadsheetId) return { err: { ok: false, msg: 'Chưa cấu hình Spreadsheet ID / Service Account trong "☁ Google Sheet".' } };
+  return { cfg, sa };
+}
+ipcMain.handle('sheets-scan-duplicates', async () => {
+  const r = _sheetsCfgOrErr();
+  if (r.err) return r.err;
+  try { return await sheets.scanDuplicates(r.cfg.spreadsheetId, r.cfg.tab || 'Data', r.sa); }
+  catch (e) { return { ok: false, msg: e.message }; }
+});
+ipcMain.handle('sheets-clean-duplicates', async () => {
+  const r = _sheetsCfgOrErr();
+  if (r.err) return r.err;
+  try { return await sheets.cleanDuplicates(r.cfg.spreadsheetId, r.cfg.tab || 'Data', r.sa); }
+  catch (e) { return { ok: false, msg: e.message }; }
 });
 
 // ── Google Sheets config + test ──
@@ -485,6 +596,26 @@ app.whenReady().then(() => {
       _reseedBusy = false;
     }
   }, 60000);
+
+  // ── NHỊP TIM KHÓA LIÊN MÁY (2026-07-28) ──
+  // Ghi nhịp tim cho các profile ĐANG chạy trên máy này lên tab `_locks` để máy khác biết mà
+  // không chạy trùng. Chỉ ghi cho profile đang chạy: profile đã dừng tự hết hạn sau 3 phút,
+  // nên kể cả app bị giết đột ngột (mất điện, AV kill) khóa cũng tự nhả — không kẹt vĩnh viễn.
+  let _beatBusy = false;
+  setInterval(async () => {
+    if (_beatBusy) return;
+    const ids = crawler.runningIds();
+    if (!ids.length) return;
+    configureSheetLockFromStore();
+    if (!sheetLock.isEnabled()) return;   // chưa cấu hình Sheet → không có gì để ghi
+    _beatBusy = true;
+    try {
+      const folders = ids.map(folderOfProfile).filter(Boolean);
+      if (folders.length) await sheetLock.heartbeat(folders);
+    } finally {
+      _beatBusy = false;
+    }
+  }, sheetLock.BEAT_MS);
 });
 
 app.on('window-all-closed', () => {

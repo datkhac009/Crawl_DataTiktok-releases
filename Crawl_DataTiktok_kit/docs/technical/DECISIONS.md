@@ -319,6 +319,151 @@ khai source. Người dùng chốt: chưa muốn công khai mã nguồn.
 
 ---
 
+## QĐ-19 — Khóa liên máy qua tab `_locks` trên Sheet + timer JS thuần cho MỌI request Google API
+
+**Quyết định:** `src/sheet-lock.cjs` ghi nhịp tim `{profile, host, pid, beat_ms}` lên tab
+`_locks` của chính Google Sheet đã chia sẻ giữa các máy — mỗi máy chỉ ghi dòng của riêng nó
+(cặp `profile+host`) để không bao giờ tranh chấp ghi. `crawler.startProfile` bị **chặn thật**
+nếu phát hiện máy khác đang giữ cùng profile với nhịp tim còn tươi (<3 phút).
+
+**Lý do:** `profile.lock` (QĐ cũ) chỉ đọc file trong thư mục profile **cục bộ** — 2 VPS mỗi
+máy giữ 1 bản copy profile thì không máy nào thấy máy kia. Chạy trùng 1 profile trên 2 máy
+là **nguyên nhân số 1** khiến TikTok hủy phiên. Sheet đã được chia sẻ sẵn giữa các máy nên
+tận dụng làm nơi "thấy nhau", không cần thêm hạ tầng.
+
+**Sự cố thật phát sinh ngay khi triển khai (2026-07-28), và cách sửa:**
+
+1. **"Chạy đã chọn" 5 profile → chỉ profile đầu chạy, 4 profile sau không phản ứng gì.**
+   Nguyên nhân: `httpRequest` (dùng chung cho mọi lời gọi Google API, kể cả `sheets.cjs`)
+   **không có timeout nào**. `sheet-lock.check()` nằm trên đường chặn của IPC
+   `profile-start`; renderer chạy **tuần tự** (`for...await`) khi bấm "Chạy đã chọn" — 1
+   request bị treo (không lỗi hẳn, cũng không xong) làm **cả vòng lặp đứng yên vĩnh viễn**,
+   các profile sau không bao giờ được thử.
+
+   Sửa 2 lớp:
+   - `google-api.cjs`: `httpRequest` giờ có `timeoutMs` (mặc định 10s).
+   - `main.js`: thêm `withDeadline()` — trần thời gian **độc lập** ở đúng điểm gọi quan
+     trọng nhất (8s), để dù tầng dưới có lỗi gì, nơi gọi cũng không bao giờ chờ quá hạn.
+
+   **Bài học kỹ thuật quan trọng**: lần sửa đầu dùng `req.setTimeout()` của Node — kiểm bằng
+   test thật (không mock) mới phát hiện nó **không phủ được giai đoạn đang kết nối**
+   (DNS/TCP handshake treo) — đo được request treo **21 giây** thay vì 500ms đặt ra. Phải
+   đổi sang `setTimeout()` JS thuần (đếm từ lúc gọi hàm, không phụ thuộc trạng thái socket)
+   mới đảm bảo đúng hạn ở **mọi** giai đoạn. Nếu chỉ test bằng mock (như các test khác
+   trong dự án) sẽ **không bao giờ bắt được lỗi này** — mock không mô phỏng đúng hành vi
+   treo ở tầng TCP thật.
+
+2. **Nghi "xung đột" khi ghi lên Sheet.** Nguyên nhân: `configure()` reset trạng thái
+   (`_tabReady=false`) **vô điều kiện** mỗi lần gọi — mà nó được gọi lại ở MỖI lần bấm Chạy.
+   Kết hợp `_ensureTab()` không có khóa chống gọi đồng thời: 2 profile khởi động gần nhau
+   (hoặc trùng với nhịp tim định kỳ 60s) đều thấy tab **chưa tồn tại** → **cả hai cùng gửi
+   lệnh tạo tab** → Google chấp nhận lệnh đầu, từ chối lệnh sau vì trùng tên.
+
+   Sửa 2 lớp: `configure()` chỉ reset khi cấu hình **thực sự đổi** (so `spreadsheetId`+`sa`);
+   `_ensureTab()` cache lời gọi đang dở dang (in-flight promise) — gọi đồng thời nhận cùng
+   một promise thay vì tạo lệnh mới.
+
+**Triết lý xử lý lỗi (giống `ip-guard.cjs`) — chỉ CHẶN khi chắc chắn:**
+
+| Tình huống | Xử lý |
+|---|---|
+| Máy khác đang giữ, nhịp tim tươi | **CHẶN** — nói rõ tên máy kia |
+| Mạng/API lỗi, hoặc quá 8s chưa có phản hồi | **KHÔNG chặn** — không được để cả dàn máy đứng im vì Sheet chậm/lỗi tạm thời |
+| Chưa cấu hình Sheet | **KHÔNG chặn** — bỏ qua hoàn toàn |
+
+**Nhả khóa:** khi profile dừng **hẳn** (`status === 'stopped'`) — KHÔNG nhả khi canh IP tạm
+dừng (`status === 'error'` của QĐ-17, profile vẫn đang sống chờ VPN). Nếu app bị giết đột
+ngột (mất điện, AV kill) thì khóa **tự hết hạn sau 3 phút** vì nhịp tim chỉ ghi cho profile
+đang chạy — không kẹt vĩnh viễn.
+
+**Tách `google-api.cjs`:** phần xác thực Service Account (ký JWT, cache token) tách khỏi
+`sheets.cjs` để `sheet-lock.cjs` dùng chung — tránh lặp lại đúng bẫy QĐ-10 (2 bản sao token
+cache nghĩa là gấp đôi số lần xin token).
+
+**Kiểm chứng:** `test/sheet-lock.test.js` (30 assertion, mock HTTP) + `test/google-api-timeout.test.js`
+(9 assertion — bài test #4 gọi **thật** tới `192.0.2.1` — địa chỉ dành riêng cho tài liệu/kiểm
+thử, RFC 5737, đảm bảo không bao giờ có máy thật ở đó — để xác nhận timeout hoạt động trên
+mạng thật, không chỉ qua mock).
+
+**Bổ sung (2026-07-28, cùng ngày) — ẨN tab `_locks`:** người dùng phản đối việc tab `_locks`
+hiện ra trên thanh tab của Sheet chính (nhìn thấy ngay khi mở Sheet, giữa các tab dữ liệu
+thật). Yêu cầu: không muốn thấy tab lạ, nhưng vẫn cần thông báo rõ khi phát hiện profile
+chạy trùng ở máy khác. Vì không có hạ tầng dùng chung nào khác ngoài chính Sheet đó (6 VPS
+không có kết nối trực tiếp với nhau), giải pháp dung hòa: tạo tab `_locks` với thuộc tính
+`hidden: true` của Google Sheets API — dữ liệu vẫn nằm trong đúng spreadsheet đó (không cần
+Sheet thứ hai), nhưng **không hiện trên thanh tab** khi mở bình thường (vẫn xem được qua
+"Hiện tất cả trang tính" nếu cần soi dữ liệu).
+
+Tab đã được tạo trước khi có `hidden:true` (như trường hợp thật của người dùng) → app **tự
+ẩn lại** ở lần `_ensureTab()` kế tiếp mà không cần vào Sheet sửa tay: đọc metadata kèm
+`hidden`, thấy tab tồn tại nhưng chưa ẩn thì gửi `updateSheetProperties` để ẩn nó.
+
+---
+
+## QĐ-20 — Sheet >130.000 dòng: trần thời gian riêng cho đọc lớn + tạm dừng đẩy tự động khi chưa nạp được + công cụ dọn trùng thủ công
+
+**Bối cảnh:** sau QĐ-19, người dùng thực tế có tab dùng để lọc trùng (`Total_Link_Voice`)
+đã tích lũy **>137.000 dòng** (nhiều VPS cùng đẩy vào 1 Sheet lâu ngày). Phát sinh 2 sự cố
+mới, và người dùng phát hiện thêm 1 cặp dòng bị trùng thật trên Sheet.
+
+**Sự cố 1 — đọc cột B để lọc trùng bị timeout thật (không phải bug treo cũ).** Trần 25s
+(mặc định của `httpRequest` sau QĐ-19) không đủ để Google trả hết dữ liệu cho 1 lần đọc
+nguyên cột B cỡ 137k dòng — đây là **chậm chính đáng do khối lượng dữ liệu**, không phải
+kết nối bị treo. Sửa: `readLinks()` trong `sheets.cjs` dùng trần thời gian **riêng, dài hơn
+hẳn** (`READ_LINKS_TIMEOUT_MS = 120000`, 2 phút/lần thử, thử tối đa 2 lần) thay vì trần
+chung — an toàn vì hàm này không nằm trên đường chặn "chạy tất cả" (chỉ profile đầu phiên
+gọi) và nút "Đẩy lên Sheet" đã tự hiện "⏳ Đang đẩy..." nên chờ lâu hơn vẫn chấp nhận được.
+
+**Sự cố 2 — đẩy tự động vẫn chạy dù chưa nạp được danh sách link cũ (nguyên nhân gây
+trùng thật).** Nếu lần đọc Sheet đầu phiên thất bại (đúng như Sự cố 1 khi còn trần 25s),
+`_knownLinks` rỗng — nhưng code cũ vẫn cho `enqueue()` đẩy tự động, coi **mọi link là mới**
+vì "không biết" link nào đã có → đẩy trùng. Sửa: thêm cờ `isSeeded()` trong `sheets.cjs` —
+`enqueue()` **tạm dừng đẩy tự động** cho tới khi có ít nhất 1 lần `updateKnownLinks()` thành
+công (nạp lúc đầu phiên, hoặc lần đồng bộ định kỳ kế tiếp — vòng lặp 60s trong `main.js` tự
+thử lại liên tục cho tới khi thành công vì `_lastReseedAt` chỉ cập nhật khi đọc OK). Dữ liệu
+thu thập trong lúc chờ **không mất** — vẫn hiện đủ trong bảng ở app, có thể đẩy tay qua nút
+"Đẩy lên Sheet" (tự đọc lại mới nhất trước khi đẩy, không phụ thuộc cờ `isSeeded`).
+
+**Phát hiện thêm — 1 cặp dòng trùng thật đã tồn tại sẵn trên Sheet** (link giống hệt ở dòng
+468 và dòng 139616, 2 profile khác nhau). Rất có thể là di sản của đúng Sự cố 2 từ trước khi
+vá (đẩy mù lúc `_knownLinks` rỗng). Nhưng về nguyên tắc, **không thể loại bỏ 100%** khả năng
+trùng chỉ bằng cách đọc kỹ hơn: nếu 2 máy cùng phát hiện 1 sound đang trend trong khoảng
+thời gian giữa 2 lần đồng bộ định kỳ (mặc định 5 phút) — trước khi máy này kịp thấy máy kia
+vừa đẩy — cả hai vẫn hợp lý coi đó là link mới và cùng đẩy. Đọc lại Sheet trước MỌI lần đẩy
+(như "Đẩy lên Sheet" làm) sẽ đóng hoàn toàn khoảng hở này nhưng không khả thi cho đẩy tự
+động realtime (phải đọc 137k dòng trước mỗi sound — quá chậm). Đây là giới hạn thật của
+kiến trúc "dùng Sheet chung làm kho dữ liệu" (không có ràng buộc duy nhất/khóa nguyên tử
+như database thật), không phải lỗi có thể vá triệt để.
+
+**Quyết định — công cụ "🧹 Dọn trùng trên Sheet"** (bổ sung, không thay thế cơ chế phòng
+ngừa ở trên): thêm `scanDuplicates()` / `deleteRows()` / `cleanDuplicates()` vào
+`sheets.cjs`, expose qua modal ☁ Google Sheet.
+
+- `scanDuplicates()`: đọc **toàn bộ** tab (`A:Z`, không chỉ cột B) — đọc rộng để biết dòng
+  nào có dữ liệu **người dùng tự ghi** ở cột E trở đi (theo USER_GUIDE.md, các cột này để
+  trống cho người dùng tự dùng). Gom theo `normalizeKey(Link)`, với mỗi nhóm trùng: giữ lại
+  dòng có **nhiều dữ liệu tự ghi nhất** (tránh xóa nhầm mất ghi chú tay), ngang nhau thì giữ
+  dòng **cũ hơn** (số dòng nhỏ hơn). Chỉ tính toán, KHÔNG xóa gì — dùng để hiện xem trước.
+- `deleteRows()`: xóa thật qua `batchUpdate` + `deleteDimension`. Bắt buộc xóa theo thứ tự
+  **giảm dần theo số dòng** — nhiều request `deleteDimension` trong cùng 1 `batchUpdate`
+  được Google áp dụng **tuần tự** lên trạng thái hiện có, xóa dòng nhỏ trước sẽ làm lệch
+  index của mọi dòng lớn hơn còn lại trong cùng lần gọi.
+- `cleanDuplicates()`: gọi lại `scanDuplicates()` từ đầu rồi mới xóa (KHÔNG dùng kết quả
+  scan cũ do renderer truyền vào) — tránh xóa nhầm nếu Sheet đã đổi giữa lúc người dùng xem
+  trước và lúc bấm xác nhận (máy khác vừa đẩy/xóa thêm dòng).
+- **Luồng 2 bước ở renderer** (`cleanSheetDuplicates()` trong `renderer.js`): bấm nút →
+  gọi `sheets-scan-duplicates` (chỉ đọc) → hiện `confirm()` với số liệu cụ thể (bao nhiêu
+  nhóm trùng, sẽ xóa bao nhiêu dòng) → chỉ khi người dùng xác nhận mới gọi
+  `sheets-clean-duplicates` (xóa thật). Đây là hành động **xóa dữ liệu thật, không thể hoàn
+  tác** trên Sheet sản xuất của người dùng nên bắt buộc phải có bước xác nhận rõ ràng, không
+  tự động chạy ngầm.
+
+**Kiểm chứng:** `test/sheets-readlinks.test.js` (10 assertion — trần thời gian riêng +
+retry + `isSeeded` gating) và `test/sheets-clean-duplicates.test.js` (20 assertion — ưu
+tiên giữ dòng có ghi chú tay, thứ tự xóa giảm dần, `cleanDuplicates()` tự đọc lại từ đầu).
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |
@@ -336,3 +481,9 @@ khai source. Người dùng chốt: chưa muốn công khai mã nguồn.
 | Chỉ đặt `overflow-y` cho khung bảng | Bảng rộng hơn khung bị **cắt mất**, không cách nào cuộn tới — phải `overflow: auto` |
 | Tin nhãn quốc gia profile là đủ khi chạy VPS | VPN tụt là khai giờ nước A trên IP nước B — xem QĐ-17 |
 | Để repo phát hành public "chỉ chứa .exe" cho tiện tự cập nhật | `.exe` chứa `app.asar` → extract ra trọn source, coi như công khai mã nguồn — xem QĐ-18 |
+| Gọi Google API mà không đặt `timeoutMs` | Kết nối treo (không lỗi hẳn) làm cả vòng lặp tuần tự đứng yên vĩnh viễn — xem QĐ-19 |
+| Dùng `req.setTimeout()` của Node để bắt request bị treo | KHÔNG phủ được giai đoạn đang kết nối (DNS/TCP) — đo được treo 21s dù đặt 500ms; phải dùng `setTimeout()` JS thuần — xem QĐ-19 |
+| Reset trạng thái cache vô điều kiện mỗi lần gọi `configure()` | 2 lệnh gọi gần nhau cùng thấy "chưa khởi tạo" → cùng thực hiện việc tạo 1 lần (vd tạo tab) → xung đột — xem QĐ-19 |
+| Chỉ test cơ chế timeout bằng mock | Mock không mô phỏng đúng hành vi treo ở tầng TCP thật — phải có ít nhất 1 test gọi tới địa chỉ mạng thật (RFC 5737: `192.0.2.1`) mới bắt được lỗi `req.setTimeout()` ở trên |
+| Cho `enqueue()` đẩy tự động dù chưa đọc được danh sách link cũ | `_knownLinks` rỗng → coi mọi link là mới → đẩy trùng thật trên Sheet sản xuất — xem QĐ-20 |
+| Xóa dòng trên Sheet theo thứ tự tăng dần (dòng nhỏ trước) trong 1 `batchUpdate` | `deleteDimension` áp dụng tuần tự lên trạng thái hiện có — xóa dòng nhỏ trước làm lệch index mọi dòng lớn hơn còn lại trong cùng lần gọi — xem QĐ-20 |

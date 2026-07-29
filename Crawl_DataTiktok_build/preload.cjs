@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('api', {
   sheetsGetConfig: () => ipcRenderer.invoke('sheets-get-config'),
   sheetsSetConfig: (cfg) => ipcRenderer.invoke('sheets-set-config', cfg),
   sheetsTest: (cfg) => ipcRenderer.invoke('sheets-test', cfg),
+  sheetsScanDuplicates: () => ipcRenderer.invoke('sheets-scan-duplicates'),
+  sheetsCleanDuplicates: () => ipcRenderer.invoke('sheets-clean-duplicates'),
 
   // Storage
   storeGet: (keys) => ipcRenderer.invoke('store-get', keys),

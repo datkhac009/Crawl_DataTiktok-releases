@@ -38,7 +38,9 @@ sound TikTok. Mỗi profile = một tài khoản TikTok, chạy độc lập, c�
 | `browser.cjs` | Vòng đời Chromium, phiên đăng nhập, context theo profile |
 | `fingerprint.cjs` | Dấu vân tay cố định theo profile (chuyển máy vẫn giữ đăng nhập) |
 | `linkkey.cjs` | Chuẩn hóa link sound — **dùng chung** cho lọc trùng khi quét và khi đẩy Sheet |
+| `google-api.cjs` | Xác thực Service Account + `httpRequest` (có timeout) — **dùng chung** cho `sheets.cjs` và `sheet-lock.cjs` |
 | `sheets.cjs` | Đẩy dữ liệu lên Google Sheets, chống trùng liên máy |
+| `sheet-lock.cjs` | **Khóa liên máy**: chặn 1 profile chạy trên 2+ máy, qua tab `_locks` **ẩn** trên Sheet |
 | `profiles.cjs` | Thêm/sửa/xóa/import profile, ánh xạ id → thư mục |
 | `paths.cjs` | Đường dẫn dữ liệu (cạnh file .exe khi đóng gói) |
 | `updater.cjs` | Tải Firefox khi thiếu. **Tự cập nhật đang TẮT** — xem [QĐ-18](DECISIONS.md) |
@@ -182,7 +184,12 @@ sound với 2 kiểu slug khác nhau không còn bị tính là 2 sound.
 | Vân tay thiết bị | Theo profile | Tất định từ tên thư mục → chép sang máy khác vẫn cùng "thiết bị" (QĐ-05) |
 | Canh IP đúng quốc gia | Theo máy | Tạm dừng khi VPN tụt, tự chạy tiếp khi về vùng (QĐ-17) |
 | Số luồng đếm video | **Theo từng máy** | N máy = N × số luồng tới cùng IP nếu các máy chia sẻ exit IP |
-| `profile.lock` | **CHỈ trong 1 máy** | Đọc file trong thư mục profile cục bộ → 2 máy có 2 bản copy thì **không thấy nhau** |
+| `profile.lock` | **CHỈ trong 1 máy** | Đọc file trong thư mục profile cục bộ → 2 máy có 2 bản copy thì không thấy nhau |
+| `sheet-lock.cjs` (tab `_locks`, **ẩn**) | **Liên máy — chặn thật** | Nhịp tim lên Sheet dùng chung; máy khác giữ profile với nhịp tim <3 phút → chặn "▶ Chạy" (QĐ-19) |
+
+`profile.lock` cục bộ và `sheet-lock.cjs` liên máy là **2 lớp khác nhau, bổ sung cho nhau**:
+lớp đầu bắt được trường hợp mở 2 lần trên **cùng 1 máy**, lớp sau bắt được trường hợp chạy
+trên **2 máy khác nhau** — chỉ có lớp sau mới cần Google Sheet đã cấu hình.
 
 ⚠️ Hệ quả của dòng cuối: chạy trùng cùng một profile trên 2 máy — **nguyên nhân số 1 khiến
 TikTok hủy phiên** — hiện **app không phát hiện được**. Phải quản lý bằng kỷ luật vận hành

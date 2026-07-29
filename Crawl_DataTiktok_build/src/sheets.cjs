@@ -1,116 +1,19 @@
 // src/sheets.cjs — Đẩy dữ liệu lên Google Sheets (API v4) bằng Service Account.
 //
 // Cơ chế (học từ CrawlView_App):
-//   1. Ký JWT RS256 từ service account (client_email + private_key) → đổi lấy
-//      access_token OAuth2 (scope spreadsheets), cache 55 phút.
+//   1. Xác thực: xem src/google-api.cjs (ký JWT RS256 → access_token, cache 55 phút).
+//      Phần đó ĐÃ TÁCH RA để sheet-lock.cjs dùng chung — không giữ 2 bản sao (QĐ-10).
 //   2. Ghi dữ liệu bằng values:append trên phạm vi A:Z (thêm dòng mới vào cuối tab,
 //      dò dòng cuối xét MỌI cột — an toàn khi nhiều máy/tiến trình cùng ghi 1 Sheet).
 //   3. Gộp lô: buffer nhiều dòng, flush khi đủ 10 dòng hoặc sau 5 giây.
-// Không cần thư viện ngoài — dùng crypto + https của Node.
 'use strict';
 
-const crypto = require('crypto');
-const https = require('https');
-
-const TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
-const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
-const CACHE_TTL_MS = 55 * 60 * 1000;
+const {
+  httpRequest, getToken, extractSpreadsheetId, SHEETS_BASE,
+} = require('./google-api.cjs');
 
 const BATCH_SIZE = 10;
 const FLUSH_MS = 5000;
-
-// Một số máy có phần mềm diệt virus/proxy can thiệp HTTPS (SSL interception) khiến
-// Node không xác minh được chứng chỉ Google ("unable to verify the first certificate").
-// Agent này bỏ qua xác minh chứng chỉ để vẫn gọi được API trong môi trường đó.
-const _insecureAgent = new https.Agent({ rejectUnauthorized: false });
-
-// ── Tiện ích HTTP (Promise) ──
-function httpRequest(method, url, { headers = {}, body = null } = {}) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const data = body == null ? null : (typeof body === 'string' ? body : JSON.stringify(body));
-    const opts = {
-      method,
-      hostname: u.hostname,
-      path: u.pathname + u.search,
-      headers: { ...headers },
-      agent: _insecureAgent,
-    };
-    if (data) {
-      opts.headers['Content-Length'] = Buffer.byteLength(data);
-    }
-    const req = https.request(opts, (res) => {
-      let buf = '';
-      res.on('data', c => buf += c);
-      res.on('end', () => resolve({ status: res.statusCode, body: buf }));
-    });
-    req.on('error', reject);
-    if (data) req.write(data);
-    req.end();
-  });
-}
-
-function base64url(input) {
-  return Buffer.from(input).toString('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-// Chấp nhận cả JSON tải từ Google (client_email/private_key) lẫn {email,private_key}.
-function normalizeServiceAccount(sa) {
-  if (!sa) return null;
-  const email = sa.client_email || sa.email;
-  const privateKey = sa.private_key;
-  if (!email || !privateKey) return null;
-  return { email, privateKey: privateKey.replace(/\\n/g, '\n') };
-}
-
-// ── Token cache theo email ──
-const _tokenCache = new Map(); // email -> { token, expiresAt }
-
-async function getToken(sa) {
-  const norm = normalizeServiceAccount(sa);
-  if (!norm) throw new Error('Service Account không hợp lệ (thiếu client_email/private_key).');
-
-  const cached = _tokenCache.get(norm.email);
-  if (cached && Date.now() < cached.expiresAt) return cached.token;
-
-  const now = Math.floor(Date.now() / 1000);
-  const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claim = base64url(JSON.stringify({
-    iss: norm.email,
-    scope: SCOPE,
-    aud: TOKEN_URL,
-    exp: now + 3600,
-    iat: now,
-  }));
-  const signingInput = `${header}.${claim}`;
-  const signature = crypto.createSign('RSA-SHA256')
-    .update(signingInput)
-    .sign(norm.privateKey);
-  const jwt = `${signingInput}.${base64url(signature)}`;
-
-  const resp = await httpRequest('POST', TOKEN_URL, {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${encodeURIComponent(jwt)}`,
-  });
-
-  let data;
-  try { data = JSON.parse(resp.body); } catch (_) { data = {}; }
-  if (!data.access_token) {
-    throw new Error(`Lấy token thất bại: ${resp.body.slice(0, 200)}`);
-  }
-
-  _tokenCache.set(norm.email, { token: data.access_token, expiresAt: Date.now() + CACHE_TTL_MS });
-  return data.access_token;
-}
-
-// Tách spreadsheet ID từ URL hoặc trả lại nguyên nếu đã là ID.
-function extractSpreadsheetId(idOrUrl) {
-  if (!idOrUrl) return '';
-  const m = String(idOrUrl).match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-  return m ? m[1] : String(idOrUrl).trim();
-}
 
 // ── Append nhiều dòng vào cuối tab (atomic phía Google — AN TOÀN khi nhiều máy/tiến
 // trình cùng ghi vào một Sheet, vì mỗi request được Google xử lý tuần tự, không có
@@ -139,21 +42,42 @@ async function appendRows(spreadsheetId, tab, rows, sa) {
 }
 
 // ── Đọc cột Link (cột B) đã có sẵn trên tab → mảng link, để lọc trùng ──
+// Trần thời gian RIÊNG, dài hơn mặc định (2026-07-29): người dùng thực tế có tab
+// >137.000 dòng (nhiều máy cùng đẩy vào 1 Sheet lâu ngày) — 25s (trần chung của
+// httpRequest) vẫn không đủ để Google trả hết dữ liệu cho một lần đọc nguyên cột B cỡ đó.
+// Cho hàm này một trần dài hơn hẳn (2 phút/lần thử) vì lệnh này KHÔNG nằm trên đường chặn
+// "chạy tất cả" (chỉ profile đầu phiên mới gọi, không làm treo các profile sau) và người
+// dùng bấm "Đẩy lên Sheet" đã thấy nút chuyển "⏳ Đang đẩy..." nên chờ lâu hơn vẫn ổn.
+// Retry 1 lần khi lỗi/timeout: đây là GET thuần đọc, gọi lại không gây trùng dữ liệu.
+const READ_LINKS_TIMEOUT_MS = 120000;
+
 async function readLinks(spreadsheetId, tab, sa) {
   const id = extractSpreadsheetId(spreadsheetId);
   if (!id) return [];
-  const token = await getToken(sa);
   const range = encodeURIComponent(`${tab || 'Data'}!B:B`);
-  const resp = await httpRequest('GET',
-    `${SHEETS_BASE}/${id}/values/${range}?majorDimension=ROWS`,
-    { headers: { 'Authorization': `Bearer ${token}` } });
-  if (resp.status < 200 || resp.status >= 300) {
-    throw new Error(`đọc Sheet HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
+  const url = `${SHEETS_BASE}/${id}/values/${range}?majorDimension=ROWS`;
+
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const token = await getToken(sa);
+      const resp = await httpRequest('GET', url, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        timeoutMs: READ_LINKS_TIMEOUT_MS,
+      });
+      if (resp.status < 200 || resp.status >= 300) {
+        throw new Error(`đọc Sheet HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
+      }
+      let data;
+      try { data = JSON.parse(resp.body); } catch (_) { data = {}; }
+      const rows = data.values || [];
+      return rows.map(r => (r && r[0] ? String(r[0]).trim() : '')).filter(Boolean);
+    } catch (e) {
+      lastErr = e;
+      if (attempt === 0) await new Promise(r => setTimeout(r, 1000));
+    }
   }
-  let data;
-  try { data = JSON.parse(resp.body); } catch (_) { data = {}; }
-  const rows = data.values || [];
-  return rows.map(r => (r && r[0] ? String(r[0]).trim() : '')).filter(Boolean);
+  throw lastErr;
 }
 
 // Khóa so trùng dùng CHUNG với crawler.cjs (src/linkkey.cjs) — trước đây là bản copy
@@ -165,12 +89,21 @@ const { normalizeKey } = require('./linkkey.cjs');
 // Nạp lúc bắt đầu phiên + cập nhật định kỳ (main.js đọc lại cột B). Mọi đường đẩy tự
 // động (enqueue/flush) đều bỏ qua link có trong đây.
 const _knownLinks = new Set();
+// (2026-07-29) Cờ "đã nạp được ít nhất 1 lần" — Sheet giờ >130.000 dòng, lần đọc đầu phiên
+// có thể chậm/lỗi (xem readLinks). NẾU chưa nạp được mà vẫn cho enqueue() đẩy tự động thì
+// coi như "không biết link nào đã có" → mọi thứ bị coi là mới → CHÍNH LÀ NGUỒN GÂY TRÙNG
+// người dùng gặp phải. Trước khi có lần nạp thành công đầu tiên, enqueue() tạm dừng đẩy tự
+// động (dữ liệu vẫn hiện trong bảng ở app, không mất — chỉ chưa lên Sheet), main.js tự thử
+// lại đọc mỗi phút cho tới khi thành công.
+let _seeded = false;
+function isSeeded() { return _seeded; }
 function updateKnownLinks(links) {
   let added = 0;
   for (const u of (links || [])) {
     const k = normalizeKey(u);
     if (k && !_knownLinks.has(k)) { _knownLinks.add(k); added++; }
   }
+  _seeded = true;
   // Gỡ luôn khỏi buffer đang chờ những link đã lên Sheet bằng đường khác (máy khác đẩy).
   dropFromBuffer(links);
   return added;
@@ -205,6 +138,137 @@ async function pushDedup(cfgRaw, rows) {
     await appendRows(spreadsheetId, tab, fresh.slice(i, i + 200), sa);
   }
   return { ok: true, pushed: fresh.length, skipped: rows.length - fresh.length, total: rows.length };
+}
+
+// ── DỌN TRÙNG TRÊN SHEET (2026-07-29) ──
+// Cơ chế lọc trùng ở enqueue()/pushDedup() chỉ NGĂN trùng phát sinh từ giờ trở đi — không
+// dọn được trùng đã LỠ có sẵn trên Sheet (từ trước khi vá isSeeded, hoặc 2 máy cùng phát
+// hiện 1 sound đang trend trong lúc cả hai chưa kịp thấy nhau, xem giải thích ở
+// DECISIONS.md QĐ-19). Bộ 3 hàm dưới đây quét TOÀN BỘ tab, gom theo Link trùng, xoá dòng
+// thừa — bổ sung (không thay thế) cơ chế phòng ngừa ở trên.
+//
+// Đọc rộng tới cột Z (không chỉ B) để biết dòng nào có dữ liệu người dùng TỰ GHI ở cột E
+// trở đi (xem USER_GUIDE.md — "các cột từ E trở đi để trống cho bạn tự dùng") — ưu tiên
+// GIỮ LẠI dòng đó khi xoá trùng, tránh xoá nhầm mất ghi chú tay của người dùng.
+const SCAN_TIMEOUT_MS = 150000;
+
+async function _fetchAllRows(spreadsheetId, tab, sa) {
+  const token = await getToken(sa);
+  const range = encodeURIComponent(`${tab || 'Data'}!A:Z`);
+  const resp = await httpRequest('GET',
+    `${SHEETS_BASE}/${spreadsheetId}/values/${range}?majorDimension=ROWS`,
+    { headers: { 'Authorization': `Bearer ${token}` }, timeoutMs: SCAN_TIMEOUT_MS });
+  if (resp.status < 200 || resp.status >= 300) {
+    throw new Error(`đọc Sheet HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
+  }
+  let data;
+  try { data = JSON.parse(resp.body); } catch (_) { data = {}; }
+  return data.values || [];
+}
+
+async function _getSheetId(spreadsheetId, tab, sa) {
+  const token = await getToken(sa);
+  const resp = await httpRequest('GET',
+    `${SHEETS_BASE}/${spreadsheetId}?fields=sheets.properties(sheetId,title)`,
+    { headers: { 'Authorization': `Bearer ${token}` } });
+  if (resp.status !== 200) throw new Error(`đọc metadata HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
+  let data;
+  try { data = JSON.parse(resp.body); } catch (_) { data = {}; }
+  const found = (data.sheets || []).find(s => s.properties && s.properties.title === (tab || 'Data'));
+  if (!found) throw new Error(`Không tìm thấy tab "${tab || 'Data'}" trên Sheet.`);
+  return found.properties.sheetId;
+}
+
+// Điểm "đầy đủ dữ liệu tự ghi" = số ô không rỗng từ cột E (index 4) trở đi.
+function _completeness(row) {
+  let n = 0;
+  for (let i = 4; i < row.length; i++) if (row[i] !== undefined && String(row[i]).trim() !== '') n++;
+  return n;
+}
+
+// Quét TOÀN BỘ tab, xác định dòng THỪA cần xoá cho mỗi nhóm link trùng — KHÔNG xoá gì ở
+// bước này (dùng để hiện xem trước/xác nhận trước khi xoá thật).
+async function scanDuplicates(spreadsheetId, tab, sa) {
+  const id = extractSpreadsheetId(spreadsheetId);
+  if (!id) return { ok: false, msg: 'Thiếu Spreadsheet ID.' };
+  const rows = await _fetchAllRows(id, tab, sa);
+
+  const groups = new Map(); // normalizeKey(link) -> [{ rowIndex (1-based, dòng 1 = header), row }]
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const key = normalizeKey(row[1]);
+    if (!key) continue;
+    const rowIndex = i + 1;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ rowIndex, row });
+  }
+
+  const toDelete = [];
+  const sample = [];
+  let dupGroupCount = 0;
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    dupGroupCount++;
+    // Giữ dòng nhiều dữ liệu tự ghi nhất; ngang nhau thì giữ dòng nhỏ hơn (cũ hơn/xuất hiện trước).
+    let keep = list[0];
+    for (const item of list.slice(1)) {
+      const a = _completeness(item.row), b = _completeness(keep.row);
+      if (a > b || (a === b && item.rowIndex < keep.rowIndex)) keep = item;
+    }
+    const deleteRows = list.filter(x => x.rowIndex !== keep.rowIndex).map(x => x.rowIndex);
+    toDelete.push(...deleteRows);
+    if (sample.length < 20) sample.push({ link: keep.row[1] || '', total: list.length, keepRow: keep.rowIndex, deleteRows });
+  }
+  toDelete.sort((a, b) => b - a); // GIẢM DẦN — xoá từ dưới lên để không lệch dòng khác
+
+  return {
+    ok: true,
+    totalRows: rows.length - 1,
+    dupGroupCount,
+    toDeleteCount: toDelete.length,
+    toDeleteRowIndexes: toDelete,
+    sample,
+  };
+}
+
+// Xoá thật các dòng (rowIndexes: mảng số dòng 1-based, header = dòng 1). PHẢI xoá theo thứ
+// tự GIẢM DẦN — batchUpdate áp dụng các request tuần tự lên trạng thái hiện có, xoá dòng
+// nhỏ trước sẽ làm lệch index của mọi dòng lớn hơn còn lại trong CÙNG 1 lần gọi.
+async function deleteRows(spreadsheetId, tab, sa, rowIndexes) {
+  const id = extractSpreadsheetId(spreadsheetId);
+  if (!id || !Array.isArray(rowIndexes) || !rowIndexes.length) return { ok: true, deleted: 0 };
+  const sheetId = await _getSheetId(id, tab, sa);
+  const sorted = [...rowIndexes].sort((a, b) => b - a);
+  const token = await getToken(sa);
+
+  const CHUNK = 300; // chia nhỏ cho an toàn, tránh 1 request quá lớn
+  let deleted = 0;
+  for (let i = 0; i < sorted.length; i += CHUNK) {
+    const slice = sorted.slice(i, i + CHUNK);
+    const requests = slice.map(rowIndex => ({
+      deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: rowIndex - 1, endIndex: rowIndex } },
+    }));
+    const resp = await httpRequest('POST', `${SHEETS_BASE}/${id}:batchUpdate`, {
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: { requests },
+      timeoutMs: SCAN_TIMEOUT_MS,
+    });
+    if (resp.status < 200 || resp.status >= 300) {
+      throw new Error(`xoá dòng HTTP ${resp.status}: ${resp.body.slice(0, 200)} (đã xoá ${deleted}/${sorted.length} dòng trước khi lỗi)`);
+    }
+    deleted += slice.length;
+  }
+  return { ok: true, deleted };
+}
+
+// Bước THỰC THI — gọi SAU khi người dùng đã xem trước (scanDuplicates) và xác nhận. Tự
+// QUÉT LẠI TỪ ĐẦU (không dùng lại kết quả scan cũ) để tránh xoá nhầm nếu Sheet đã đổi giữa
+// lúc xem trước và lúc bấm xác nhận (máy khác vừa đẩy/xoá thêm dòng trong lúc đó).
+async function cleanDuplicates(spreadsheetId, tab, sa) {
+  const scan = await scanDuplicates(spreadsheetId, tab, sa);
+  if (!scan.ok || !scan.toDeleteCount) return { ...scan, deleted: 0 };
+  const del = await deleteRows(spreadsheetId, tab, sa, scan.toDeleteRowIndexes);
+  return { ...scan, deleted: del.deleted };
 }
 
 // ── Kiểm tra kết nối: đọc metadata spreadsheet ──
@@ -259,6 +323,11 @@ function isEnabled() { return !!_cfg; }
 
 function enqueue(row) {
   if (!_cfg) return;
+  // CHƯA nạp được danh sách link cũ lần nào (xem ghi chú ở _seeded phía trên) → không biết
+  // link nào đã có trên Sheet, đẩy lúc này chỉ để tạo trùng. Tạm giữ lại (vẫn hiện trong
+  // bảng ở app), main.js tự thử đọc lại mỗi phút, nạp xong sẽ tự đẩy bình thường; muốn đẩy
+  // ngay trong lúc chờ thì dùng nút "Đẩy lên Sheet" (tự đọc mới nhất trước khi đẩy).
+  if (!_seeded) return;
   const key = normalizeKey(row && row[1]);
   // Chống trùng LIÊN MÁY: link đã có trên Sheet (máy khác đẩy, biết qua lần đọc lại
   // định kỳ) → bỏ ngay từ cửa, kể cả khi máy mình đã tốn công check số video cho nó.
@@ -326,10 +395,14 @@ module.exports = {
   extractSpreadsheetId,
   configure,
   isEnabled,
+  isSeeded,
   enqueue,
   flush,
   flushAll,
   pushDedup,
   dropFromBuffer,
   updateKnownLinks,
+  scanDuplicates,
+  deleteRows,
+  cleanDuplicates,
 };

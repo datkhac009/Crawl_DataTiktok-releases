@@ -245,6 +245,15 @@ function updateProfileCounts(id, scanned, checked) {
   }
 }
 
+// Số đếm SỐNG "Bỏ qua trùng" — dùng CHUNG cho cả phiên (không riêng 1 profile), để người
+// dùng thấy ngay lọc trùng đang hoạt động thay vì chỉ biết được lúc "Hoàn tất phiên" (chế
+// độ Quét⇄Xem gần như không bao giờ tới lúc đó).
+function updateSkippedDup(n) {
+  if (typeof n !== 'number') return;
+  const el = $('dupSkippedBadge');
+  if (el) el.textContent = `Bỏ qua trùng: ${n}`;
+}
+
 // Tăng số "Hợp lệ" (sound đạt bộ lọc video, vừa đẩy vào bảng kết quả) — gọi khi nhận
 // 1 dòng crawl-data cho profile đó.
 function bumpValidCount(id) {
@@ -559,6 +568,7 @@ function clearResults() {
   crawlResults = [];
   $('resultBody').innerHTML = '';
   $('crawlCount').textContent = '0 sound';
+  updateSkippedDup(0);
 }
 
 function addResultRow(d) {
@@ -746,15 +756,61 @@ async function testSheets() {
   result.style.color = res.ok ? 'var(--ok)' : 'var(--primary-hover)';
 }
 
+// Dọn trùng: bước 1 chỉ QUÉT (không đổi gì) để hiện xem trước; xác nhận rồi mới xoá thật
+// (bước 2 tự đọc lại từ đầu, không tin kết quả quét cũ — xem sheets.cjs cleanDuplicates()).
+async function cleanSheetDuplicates() {
+  const btn = $('sheetsCleanDupBtn');
+  const result = $('sheetsCleanDupResult');
+  btn.disabled = true;
+  result.style.color = '';
+  result.textContent = '⏳ Đang quét toàn bộ Sheet (có thể mất vài phút với Sheet lớn)...';
+  try {
+    const scan = await api.sheetsScanDuplicates();
+    if (!scan.ok) {
+      result.textContent = scan.msg || 'Quét thất bại.';
+      result.style.color = 'var(--primary-hover)';
+      return;
+    }
+    if (!scan.toDeleteCount) {
+      result.textContent = `Không có trùng — đã kiểm tra ${scan.totalRows} dòng.`;
+      result.style.color = 'var(--ok)';
+      return;
+    }
+    const ok = confirm(
+      `Tìm thấy ${scan.dupGroupCount} link bị trùng trên tổng ${scan.totalRows} dòng.\n`
+      + `Sẽ XOÁ ${scan.toDeleteCount} dòng thừa (mỗi link giữ lại đúng 1 dòng — ưu tiên dòng có ghi chú tay ở cột E trở đi).\n\n`
+      + `Xác nhận xoá? (không thể hoàn tác)`
+    );
+    if (!ok) { result.textContent = 'Đã huỷ — chưa xoá gì.'; return; }
+
+    result.textContent = '⏳ Đang xoá dòng trùng...';
+    const clean = await api.sheetsCleanDuplicates();
+    if (!clean.ok) {
+      result.textContent = clean.msg || 'Xoá thất bại.';
+      result.style.color = 'var(--primary-hover)';
+      return;
+    }
+    result.textContent = `Đã xoá ${clean.deleted} dòng trùng (${clean.dupGroupCount} nhóm link).`;
+    result.style.color = 'var(--ok)';
+  } catch (e) {
+    result.textContent = 'Lỗi: ' + e.message;
+    result.style.color = 'var(--primary-hover)';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function initSheets() {
   $('sheetsBtn').addEventListener('click', async () => {
     await loadSheetsConfig();
     $('sheetsTestResult').textContent = '';
+    $('sheetsCleanDupResult').textContent = '';
     $('sheetsModal').classList.add('open');
   });
   $('sheetsModalClose').addEventListener('click', () => $('sheetsModal').classList.remove('open'));
   $('sheetsSaveBtn').addEventListener('click', saveSheetsConfig);
   $('sheetsTestBtn').addEventListener('click', testSheets);
+  $('sheetsCleanDupBtn').addEventListener('click', cleanSheetDuplicates);
 }
 
 // ══════════════════════════════════════════
@@ -857,6 +913,7 @@ function initCrawlEvents() {
     if (s.profileId && s.status === 'counts') {
       // Kênh RIÊNG chỉ cập nhật số Quét/Đã check — không đụng badge trạng thái hay log.
       updateProfileCounts(s.profileId, s.scanned, s.checked);
+      updateSkippedDup(s.skippedDup);
     } else if (s.profileId && s.status === 'phase') {
       // Kênh RIÊNG báo mốc kết thúc pha hiện tại (mode 'cycle') để renderer tự đếm ngược.
       profilePhase[s.profileId] = { label: s.phaseLabel, nextLabel: s.nextLabel, deadlineAt: s.deadlineAt };

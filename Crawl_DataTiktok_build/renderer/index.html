@@ -63,6 +63,7 @@
         <h2>Dữ liệu thu thập</h2>
         <div class="crawl-status-bar">
           <span id="crawlCount" class="badge">0 sound</span>
+          <span id="dupSkippedBadge" class="badge" title="Số sound bị bỏ qua vì trùng — đã có sẵn trên Google Sheet (nạp lúc bắt đầu phiên) hoặc đã gặp trong chính phiên này">Bỏ qua trùng: 0</span>
           <span id="crawlStatusMsg" class="status-msg">Chưa chạy</span>
           <button class="btn btn-sm" id="pushSheetBtn" title="Đẩy dữ liệu trong bảng lên Google Sheet — chỉ đẩy dòng CHƯA có trên Sheet (tự lọc trùng)">☁ Đẩy lên Sheet</button>
           <button class="btn btn-sm" id="exportExcelBtn" title="Xuất bảng dữ liệu ra file Excel (CSV)">📥 Xuất Excel</button>
@@ -171,6 +172,15 @@
         <div class="sheets-test-row">
           <button class="btn" id="sheetsTestBtn">🔌 Test kết nối</button>
           <span id="sheetsTestResult" class="status-msg"></span>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Bảo trì</div>
+          <div class="sheets-test-row">
+            <button class="btn" id="sheetsCleanDupBtn" title="Quét TOÀN BỘ tab, tìm các dòng có Link bị lặp và xoá bớt (giữ lại 1 dòng/link — ưu tiên dòng có ghi chú tay ở cột E trở đi)">🧹 Dọn trùng trên Sheet</button>
+            <span id="sheetsCleanDupResult" class="status-msg"></span>
+          </div>
+          <div class="section-desc">Quét lại cột Link, xoá bớt dòng thừa nếu bị trùng. Tab càng lớn càng lâu (có thể tới vài phút) — sẽ hiện xem trước số dòng sẽ xoá trước khi xoá thật.</div>
         </div>
       </div>
 

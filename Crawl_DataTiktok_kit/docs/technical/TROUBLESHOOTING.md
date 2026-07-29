@@ -273,6 +273,38 @@ liệu trên Sheet (xem mục 5).
 
 ---
 
+## 11. Bấm "▶ Chạy đã chọn" nhiều profile — chỉ profile đầu tiên chạy, các profile sau im lặng
+
+Đã vá 2026-07-28 (xem [DECISIONS.md](DECISIONS.md) QĐ-19) — nguyên nhân là request tới Google
+API bị treo trong lúc kiểm khóa liên máy, làm cả vòng lặp tuần tự đứng yên. Nếu bạn đang chạy
+bản cũ hơn ngày đó và vẫn gặp:
+
+- **Kiểm tra**: profile không chạy có hiện dòng lỗi màu đỏ nào không, hay chỉ đứng im ở "Chờ".
+  Đứng im (không có lỗi) đúng là dấu hiệu của sự cố này.
+- **Xử lý tạm**: đóng app, mở lại (dừng vòng lặp đang treo), chạy **từng profile một** thay vì
+  tick tất cả rồi bấm 1 lần.
+- **Cập nhật lên bản mới nhất** — bản vá thêm trần thời gian 8 giây, không bao giờ để 1
+  profile bị treo làm nghẽn các profile khác nữa.
+
+## 12. Google Sheet báo "xung đột" / tự nhiên có thêm tab lạ
+
+Tab **`_locks`** là tab app **tự tạo** cho tính năng khóa liên máy (QĐ-19) — không phải lỗi.
+Từ bản vá 2026-07-28, tab này được tạo ở dạng **ẨN** nên sẽ **không hiện** trên thanh tab khi
+mở Sheet bình thường (muốn xem thì vào menu chọn "Hiện tất cả trang tính"). Đừng xóa nội
+dung ô bên trong, chỉ được **xóa cả dòng** nếu cần dọn (giống nguyên tắc ở mục 5). Xóa cả
+tab `_locks` cũng an toàn — app tự tạo lại khi cần.
+
+**Nếu bạn thấy tab `_locks` vẫn HIỆN công khai** (tạo từ trước ngày vá, hoặc ai đó lỡ bấm hiện
+lại): không cần tự vào Sheet ẩn tay — app **tự ẩn lại** ở lần chạy tiếp theo. Nếu vẫn thấy hiện
+sau khi đã cập nhật bản mới, kiểm tra Service Account có quyền Editor trên Sheet không (thiếu
+quyền thì không ẩn được, nhưng vẫn đọc/ghi nhịp tim bình thường).
+
+Nếu thấy **2 tab** kiểu `_locks` và `_locks 2`: đây là dấu vết của sự cố tranh chấp tạo tab đã
+vá cùng ngày (2 máy/2 profile khởi động cùng lúc, cả hai đều tưởng tab chưa có nên cùng tạo).
+Xóa tab thừa (`_locks 2`), giữ lại đúng 1 tab `_locks`. Cập nhật bản mới sẽ không còn tái diễn.
+
+---
+
 ## Nguyên tắc chẩn đoán chung
 
 1. **Log 📄 của từng profile trước** — hầu hết sự cố đã có dòng chẩn đoán sẵn.
