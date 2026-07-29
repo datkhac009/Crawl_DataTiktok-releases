@@ -1,7 +1,7 @@
 # Quy trình chẩn đoán sự cố
 
 > Tra theo triệu chứng. Mọi lệnh chạy trong `Crawl_DataTiktok_build`.
-> Cập nhật: 2026-07-27
+> Cập nhật: 2026-07-28
 
 ---
 
@@ -222,6 +222,54 @@ thay vì bỏ oan. Nếu xảy ra liên tục:
 
 Đã vá (2026-07-08). Nếu tái diễn: chạy tay file `%TEMP%\ttcrawler_updater.bat` để xem lỗi,
 hoặc tải `.exe` mới từ GitHub Releases và thay thủ công.
+
+---
+
+## 9. Profile báo "TẠM DỪNG: IP hiện tại ở XX nhưng profile khai (YY)"
+
+```
+⚠ TẠM DỪNG: IP hiện tại ở DE nhưng profile khai (US). Chạy tiếp sẽ để lộ mâu thuẫn
+  "IP nước này, giờ nước khác" — thường do VPN tụt. App tự kiểm lại mỗi 60s và chạy
+  tiếp ngay khi VPN về đúng vùng.
+```
+
+Đây là **hành vi đúng**, không phải lỗi (xem [DECISIONS.md](DECISIONS.md) QĐ-17). App phát hiện
+IP thật không còn khớp nhãn quốc gia trong tên profile nên tự tạm dừng để không phơi mâu thuẫn
+vân tay ra TikTok.
+
+**Xử lý:** kiểm VPN trên máy đó (bật lại / đổi location đúng quốc gia của nhóm profile). Không
+cần bấm gì trong app — thấy dòng `✅ IP đã về đúng vùng (XX) — chạy tiếp.` là nó tự chạy lại.
+
+| Tình huống | App làm gì |
+|---|---|
+| VPN tụt, IP sang nước khác | Tạm dừng, kiểm lại mỗi 60s, tự chạy tiếp khi về vùng |
+| Mất mạng, không tra được IP | **Không chặn** — vẫn chạy bình thường (tránh treo cả dàn máy vì mạng chớp) |
+| Profile không có nhãn quốc gia trong tên | Bỏ qua kiểm tra hoàn toàn |
+
+⚠️ Chỉ so **quốc gia**, không so thành phố/ASN — VPN tụt sang IP khác nhưng cùng quốc gia thì
+app không phát hiện.
+
+**Tự kiểm IP của máy bằng tay:**
+
+```bash
+node -e "require('./src/ip-guard.cjs').getPublicIp().then(r=>console.log(r))"
+```
+
+---
+
+## 10. Bấm "⬆ Cập nhật" báo không đọc được release
+
+```
+Không đọc được release của "datkhac009/Crawl_DataTiktok-releases". Repo phát hành đang
+ở chế độ PRIVATE nên app không đọc được bản mới (GitHub trả 404 cho truy cập ẩn danh).
+```
+
+**Đây là trạng thái có chủ đích**, xem [DECISIONS.md](DECISIONS.md) QĐ-18. Repo để private nên
+tự cập nhật không hoạt động — đang **cập nhật thủ công**: build xong thì copy `.exe` mới sang
+từng máy.
+
+⚠️ **Phải cập nhật HẾT các máy trong cùng một lần.** Máy chạy bản cũ lẫn vào vẫn gây trùng dữ
+liệu trên Sheet (xem mục 5).
 
 ---
 

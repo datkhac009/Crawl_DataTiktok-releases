@@ -1,6 +1,6 @@
 # Hướng dẫn sử dụng — TikTok Crawler
 
-> Cập nhật: 2026-07-27
+> Cập nhật: 2026-07-28
 
 ## Thêm profile
 
@@ -85,11 +85,31 @@ nội dung sẽ làm app ghi lệch cột ở lần đẩy sau.
 ## Chạy nhiều máy
 
 - **Không chạy cùng một profile trên 2 máy cùng lúc** — TikTok sẽ hủy phiên đăng nhập của
-  cả hai.
+  cả hai. ⚠️ **App KHÔNG tự phát hiện được việc này giữa các máy** (file `profile.lock` chỉ
+  đọc trong thư mục profile của chính máy đó). Phải tự quản lý bằng **sổ phân bổ profile →
+  máy**, và khi chuyển profile sang máy mới thì **xoá khỏi máy cũ**.
 - Chuyển profile sang máy khác: **chép cả thư mục profile** (gồm `session.state.json`,
   `fingerprint.json` và thư mục `Data` nếu có), không chỉ chép file session.
 - Bật VPN đúng quốc gia của profile **trước khi** mở app.
 - Chắc ăn nhất sau khi chuyển máy: bấm 🦊 đăng nhập lại một lần.
+
+### App tự canh IP đúng quốc gia
+
+Profile có nhãn quốc gia trong tên (`(US)`, `(UK)`…) sẽ được app kiểm IP thật — nếu VPN tụt
+sang nước khác, app **tự tạm dừng** profile đó và ghi log:
+
+```
+⚠ TẠM DỪNG: IP hiện tại ở DE nhưng profile khai (US)...
+```
+
+Không cần bấm gì: bật lại VPN đúng vùng là app tự chạy tiếp (`✅ IP đã về đúng vùng`). Mất
+mạng tạm thời thì app **không** tạm dừng. Chi tiết: [TROUBLESHOOTING.md](../technical/TROUBLESHOOTING.md) mục 9.
+
+### Cập nhật phiên bản (đang làm thủ công)
+
+Tự cập nhật hiện **tắt** (repo phát hành để private). Sau mỗi lần build, copy `.exe` mới sang
+từng máy — và **phải copy cho HẾT các máy trong cùng một lần**: máy chạy bản cũ lẫn vào vẫn
+gây trùng dữ liệu trên Sheet.
 
 ## Khuyến nghị vận hành
 

@@ -29,6 +29,22 @@ const _insecureAgent = new https.Agent({ rejectUnauthorized: false });
 // hoặc cấu hình trong app (modal Cập nhật) — giá trị trong app sẽ ghi đè dòng này.
 const DEFAULT_REPO = 'datkhac009/Crawl_DataTiktok-releases';
 
+// ⚠ TRẠNG THÁI HIỆN TẠI (2026-07-28): repo phát hành đang PRIVATE nên TỰ CẬP NHẬT KHÔNG
+// HOẠT ĐỘNG — updater gọi GitHub API ẨN DANH (không token) và private repo trả 404.
+// Đây là quyết định có chủ đích, KHÔNG phải bug đang chờ sửa:
+//   • Không thể để repo public vì file .exe CHỨA NGUYÊN app.asar — ai tải về cũng extract
+//     ra được trọn mã nguồn (`npx asar extract`), tức public repo = công khai source.
+//   • Không nhúng token vào .exe: .exe phát tán tới nhiều máy, token trong đó coi như lộ.
+// => Cách đang dùng: CẬP NHẬT THỦ CÔNG (copy .exe mới sang từng máy).
+// Muốn bật lại tự cập nhật thì có 2 đường, xem DECISIONS.md QĐ-18.
+//
+// ⚠ Khi cập nhật tay nhiều máy, phải cập nhật HẾT: TROUBLESHOOTING.md mục 5 ghi rõ máy
+// chạy bản cũ lẫn với bản mới vẫn gây TRÙNG DỮ LIỆU trên Sheet.
+const PRIVATE_REPO_HINT =
+  'Repo phát hành đang ở chế độ PRIVATE nên app không đọc được bản mới (GitHub trả 404 cho '
+  + 'truy cập ẩn danh). Hiện đang CẬP NHẬT THỦ CÔNG: tải .exe mới rồi thay trên từng máy. '
+  + 'Nhớ cập nhật TẤT CẢ các máy — máy chạy bản cũ lẫn vào sẽ gây trùng dữ liệu trên Sheet.';
+
 function _resolveRepo(repo) {
   return (repo || process.env.UPDATE_REPO || DEFAULT_REPO || '').trim();
 }
@@ -80,7 +96,10 @@ function checkForUpdates(mainWindow, { repo, manual = false } = {}) {
     res.on('data', c => body += c);
     res.on('end', () => {
       if (res.statusCode === 404) {
-        if (manual) send('update-error', { msg: `Không tìm thấy release nào ở repo "${REPO}".` });
+        // 404 có 2 nguyên nhân mà người dùng cần phân biệt được: repo PRIVATE (trường hợp
+        // hiện tại — release VẪN CÓ, chỉ là không đọc được khi gọi ẩn danh) hay tên repo sai
+        // thật. Thông báo cũ "Không tìm thấy release nào" khiến hiểu sai là chưa phát hành gì.
+        if (manual) send('update-error', { msg: `Không đọc được release của "${REPO}". ${PRIVATE_REPO_HINT}` });
         return;
       }
       if (res.statusCode !== 200) {

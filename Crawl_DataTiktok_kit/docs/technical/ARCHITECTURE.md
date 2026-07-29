@@ -1,8 +1,8 @@
 # Kiến trúc — TikTok Crawler
 
-> Mã nguồn thật: `G:\1.Program\2.Tool\3.Crawl_DataTiktok\Crawl_DataTiktok_build`
-> (thư mục `_kit` này chỉ chứa tài liệu & kế hoạch)
-> Cập nhật: 2026-07-27
+> Mã nguồn thật: `Crawl_DataTiktok_build/` (cùng repo, thư mục ngang cấp với `_kit`)
+> — thư mục `_kit` này chỉ chứa tài liệu & kế hoạch.
+> Cập nhật: 2026-07-28
 
 ## Tổng quan
 
@@ -27,14 +27,44 @@ sound TikTok. Mỗi profile = một tài khoản TikTok, chạy độc lập, c�
 
 | File | Vai trò |
 |---|---|
-| `crawler.cjs` | Engine chính: 5 chế độ crawl, đếm số video, lọc, chống kẹt feed |
+| `crawler.cjs` | **Điều phối**: trạng thái phiên, vòng đời profile, luồng 5 chế độ, `runScanLoop` dùng chung |
+| `crawler/util.cjs` | `sleep`/`rand`/`interruptibleSleep`, `parseCount`, `isOriginalSound` |
+| `crawler/count-throttle.cjs` | Semaphore đếm video **toàn app** — chống dội `/music/` từ cùng 1 IP |
+| `crawler/page-read.cjs` | `readActiveSound`/`readVideoCount`/`scrollFeed`/`recyclePage` |
+| `crawler/stuck.cjs` | `makeFeedTracker` + chẩn đoán & thoát kẹt feed 3 cấp |
+| `crawler/session-watch.cjs` | `checkLoginState` + theo dõi phiên đăng nhập giữa lúc chạy |
+| `resource-blocker.cjs` | Chặn ảnh/media/font — **dùng chung** cho tab đếm và cửa sổ 🦊 |
+| `ip-guard.cjs` | Canh IP công khai khớp nhãn quốc gia profile (VPN tụt trên VPS) |
 | `browser.cjs` | Vòng đời Chromium, phiên đăng nhập, context theo profile |
 | `fingerprint.cjs` | Dấu vân tay cố định theo profile (chuyển máy vẫn giữ đăng nhập) |
 | `linkkey.cjs` | Chuẩn hóa link sound — **dùng chung** cho lọc trùng khi quét và khi đẩy Sheet |
 | `sheets.cjs` | Đẩy dữ liệu lên Google Sheets, chống trùng liên máy |
 | `profiles.cjs` | Thêm/sửa/xóa/import profile, ánh xạ id → thư mục |
 | `paths.cjs` | Đường dẫn dữ liệu (cạnh file .exe khi đóng gói) |
-| `updater.cjs` | Tự cập nhật qua GitHub Releases + tự tải Firefox khi thiếu |
+| `updater.cjs` | Tải Firefox khi thiếu. **Tự cập nhật đang TẮT** — xem [QĐ-18](DECISIONS.md) |
+
+### Một vòng quét dùng chung cho mọi chế độ
+
+`crawler.cjs` chỉ có **một** `runScanLoop()`; 4 chế độ quét (For You / Tìm kiếm / Tab đang mở /
+pha QUÉT của chu kỳ) gọi nó với tham số khác nhau:
+
+| Chế độ | `prefix` | `allowReload` | `recycle` | `watchLogin` | `deadlineAt` |
+|---|---|---|---|---|---|
+| For You | *(không)* | ✅ | ✅ | ✅ | ∞ |
+| Tìm kiếm | `Tìm "kw": ` | ✅ | ✅ | ❌ | ∞ |
+| Tab đang mở | *(không)* | ❌ | ❌ | ❌ | ∞ |
+| Chu kỳ — pha Quét | `Chu kỳ [Quét]: ` | ✅ | ✅ | ✅ | hết pha |
+
+Trước 2026-07-28 mỗi chế độ giữ một bản sao riêng và **đã lệch nhau thật** — xem QĐ-16.
+
+## Test tự động (`test/`)
+
+Không nằm trong bản đóng gói. Chạy: `pnpm test`.
+
+| File | Kiểm gì |
+|---|---|
+| `crawl-modes.test.js` | 13 kịch bản — mock Playwright + `browser.cjs` để chạy engine thật không cần TikTok: tiền tố log từng chế độ, thoát kẹt (trùng sound / không đọc được sound), chế độ khách, `recycle` bật/tắt đúng chế độ, canh IP (lệch → tạm dừng, về đúng vùng → tự chạy tiếp) |
+| `ui-responsive.test.js` | Đo layout ở 5 khổ cửa sổ bằng Chromium, phát hiện nội dung bị cắt, chụp ảnh vào `.ui-shots/` |
 
 ## 5 chế độ crawl
 
@@ -132,10 +162,31 @@ sound với 2 kiểu slug khác nhau không còn bị tính là 2 sound.
 
 ## Đóng gói & cập nhật
 
-- `build.bat`: tăng version → build electron-builder → copy Chromium **và Firefox** vào
-  `lib/ms-playwright` → tạo GitHub Release chỉ kèm `.exe`.
-- Tự cập nhật: so version với release mới nhất, tải `.exe`, thay file rồi khởi động lại.
-- Thiếu Firefox trong `lib/` → app tự tải `firefox-<rev>.zip` từ release tag `browsers`.
+- `build.bat`: kiểm quyền phát hành (fail nhanh) → dừng app đang chạy → tăng version → build
+  electron-builder → copy Chromium **và Firefox** vào `lib/ms-playwright` → tạo GitHub Release
+  chỉ kèm `.exe`.
+- **Tự cập nhật đang TẮT** vì repo phát hành để private (app gọi GitHub API ẩn danh → 404).
+  Đang **cập nhật thủ công**: copy `.exe` mới sang từng máy. Lý do và các cách bật lại:
+  [QĐ-18](DECISIONS.md).
+  ⚠️ Phải cập nhật **hết** các máy — máy chạy bản cũ lẫn vào vẫn gây trùng dữ liệu trên Sheet
+  (xem [TROUBLESHOOTING.md](TROUBLESHOOTING.md) mục 5).
+- Thiếu Firefox trong `lib/` → app tự tải `firefox-<rev>.zip` từ release tag `browsers`
+  (cũng cần repo đọc được, nên hiện phải copy tay `firefox-<rev>` vào `lib\ms-playwright`).
+
+## Chạy nhiều máy (VPS)
+
+| Cơ chế | Phạm vi | Ghi chú |
+|---|---|---|
+| Ghi Google Sheet | Liên máy — an toàn | `values:append` được Google xử lý tuần tự (QĐ-08) |
+| Chống trùng dữ liệu | Liên máy — gần đúng | Đọc lại cột Link mỗi N phút; vẫn trùng trong cùng cửa sổ (QĐ-09) |
+| Vân tay thiết bị | Theo profile | Tất định từ tên thư mục → chép sang máy khác vẫn cùng "thiết bị" (QĐ-05) |
+| Canh IP đúng quốc gia | Theo máy | Tạm dừng khi VPN tụt, tự chạy tiếp khi về vùng (QĐ-17) |
+| Số luồng đếm video | **Theo từng máy** | N máy = N × số luồng tới cùng IP nếu các máy chia sẻ exit IP |
+| `profile.lock` | **CHỈ trong 1 máy** | Đọc file trong thư mục profile cục bộ → 2 máy có 2 bản copy thì **không thấy nhau** |
+
+⚠️ Hệ quả của dòng cuối: chạy trùng cùng một profile trên 2 máy — **nguyên nhân số 1 khiến
+TikTok hủy phiên** — hiện **app không phát hiện được**. Phải quản lý bằng kỷ luật vận hành
+(sổ phân bổ profile → máy). Chưa có cơ chế khóa liên máy.
 
 ## Xem thêm
 

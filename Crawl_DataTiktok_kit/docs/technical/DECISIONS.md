@@ -1,7 +1,7 @@
 # Quyết định kiến trúc
 
 > Ghi lại các quyết định quan trọng **và lý do** — đọc file này trước khi đề xuất thay đổi
-> có thể xung đột. Cập nhật: 2026-07-27
+> có thể xung đột. Cập nhật: 2026-07-28
 
 ---
 
@@ -234,6 +234,91 @@ khoản có xác minh 2 bước.
 
 ---
 
+## QĐ-16 — Một vòng quét feed dùng chung, tách helper ra `src/crawler/`
+
+**Quyết định:** `crawler.cjs` chỉ giữ phần điều phối; helper tách sang `src/crawler/` (util,
+count-throttle, page-read, stuck, session-watch). 4 chế độ quét gọi **một** `runScanLoop()`
+thay vì mỗi chế độ một bản `feedLoop` riêng.
+
+**Lý do:** File dài 1639 dòng, trong đó 4 bản `feedLoop` gần như y hệt nhau. Đây đúng là cái
+bẫy QĐ-10 đã ghi — và khi gộp thì **phát hiện 3 điểm đã lệch nhau thật**:
+
+1. Bản chu kỳ từng **rơi mất dòng log** "feed chưa hiện, tải lại trang rồi thử lại" khi chép
+   từ For You (comment trong `scanPhase` còn ghi lại sự cố này).
+2. Bản `current` **thiếu `if (stop.requested) break;`** trước khối thoát kẹt → bấm Dừng vẫn
+   phải chờ `handleStuck` chạy xong (tới ~10s) mới thoát.
+3. Bản `current` sau khi thoát kẹt còn **cuộn thêm 1 nhịp**, 3 bản kia thì `continue`.
+
+Gộp cùng lúc sửa cả 3. Cũng gộp `attachCountBlocker` (crawler) và `attachResourceBlocker`
+(browser) — 2 bản sao y hệt — vào `resource-blocker.cjs`.
+
+**Kết quả:** 1639 → 1167 dòng. Thêm `test/crawl-modes.test.js` (13 kịch bản, mock Playwright)
+làm lưới an toàn — trước đó dự án **không có test nào**.
+
+**Đã cân nhắc và HOÃN:** tách `browser.cjs` (770 dòng). Nó chứa toàn bộ 5 lớp bảo vệ phiên
+đăng nhập; sửa sai là mất đăng nhập trên cả 6 máy, mà khôi phục phải bấm 🦊 từng profile qua
+RDP. Không đáng đánh đổi khi đang có production chạy.
+
+---
+
+## QĐ-17 — Tạm dừng crawl khi IP không khớp nhãn quốc gia của profile
+
+**Quyết định:** `src/ip-guard.cjs` tra quốc gia của IP công khai; nếu lệch nhãn quốc gia trong
+tên profile thì **TẠM DỪNG** (kiểm lại mỗi 60s), tự chạy tiếp khi IP về đúng vùng. Kiểm 1 lần
+trước khi mở trình duyệt + định kỳ 5 phút trong vòng quét.
+
+**Lý do:** QĐ-05 đặt múi giờ/ngôn ngữ theo nhãn quốc gia — profile `(US)` luôn khai
+`America/New_York`. Cách này chỉ an toàn khi IP thật cũng ở Mỹ. Trên VPS, IP đúng vùng là nhờ
+VPN — **mà VPN có lúc tụt**. Khi tụt lúc 3h sáng, 5 profile vẫn khai giờ New York nhưng request
+đi từ IP Đức: đúng mâu thuẫn "IP nước này, giờ nước khác" mà QĐ-05 nói *"rất dễ bị nhận diện
+là dùng proxy"*. Trước đây app **không hề biết** và cào tiếp hàng giờ.
+
+**Vì sao tạm dừng chứ không dừng hẳn:** VPN thường tự kết nối lại sau vài phút. Dừng hẳn là
+mất cả đêm sản lượng trên 6 máy.
+
+**Triết lý xử lý (giống `checkLoginState`) — không kết luận khi không chắc:**
+
+| Tình huống | Xử lý |
+|---|---|
+| Lệch quốc gia rõ ràng | Tạm dừng |
+| Không tra được IP (mất mạng) | **KHÔNG chặn** — mạng lỗi vài giây không được làm treo 6 máy |
+| Profile không có nhãn quốc gia | Bỏ qua hoàn toàn (tương thích profile cũ chưa tag) |
+
+**Chi tiết:** 2 nhà cung cấp dự phòng (`ifconfig.co` ~850ms, `api.country.is` ~1.5s — đo thật),
+cache 1 phút nên nhiều profile kiểm cùng lúc chỉ tốn 1 request. **Quy đổi `UK` → `GB`** vì nhãn
+profile dùng "UK" còn ISO 3166-1 trả "GB" — không quy đổi thì báo lệch oan.
+
+**Giới hạn thành thật:** chỉ so **quốc gia**, không so thành phố/ASN. VPN tụt sang một IP khác
+nhưng vẫn cùng quốc gia thì không phát hiện được.
+
+---
+
+## QĐ-18 — Cập nhật thủ công, giữ repo phát hành private
+
+**Quyết định:** Tự cập nhật **TẮT**. Repo phát hành để private, cập nhật bằng cách copy `.exe`
+mới sang từng máy.
+
+**Lý do:** `updater.cjs` gọi GitHub API **ẩn danh, không token** (chủ đích: `.exe` phát tán tới
+nhiều máy nên không được nhúng token vào đó). Private repo trả 404 cho truy cập ẩn danh →
+không đọc được release.
+
+Không chuyển repo sang public vì **file `.exe` chứa nguyên `app.asar`** — ai tải về cũng
+`npx asar extract` ra được **trọn mã nguồn**. Tức "repo public chỉ chứa `.exe`" vẫn là công
+khai source. Người dùng chốt: chưa muốn công khai mã nguồn.
+
+**Đánh đổi đã biết:** với nhiều máy, cập nhật tay dễ để lệch version — mà
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md) mục 5 ghi rõ *"Máy bản cũ chạy lẫn sẽ vẫn đẩy trùng"*.
+**Phải cập nhật hết các máy trong cùng một lần.**
+
+**Hai đường bật lại tự cập nhật (nếu sau này cần):**
+1. Chuyển repo sang public — chấp nhận công khai mã nguồn.
+2. Giữ private + mỗi máy tự lưu **token chỉ có quyền đọc** trong cấu hình cục bộ (không nhúng
+   vào `.exe`). Lưu ý kỹ thuật: tải asset của release private phải gọi qua API endpoint kèm
+   `Accept: application/octet-stream`, GitHub trả 302 sang S3 và **phải bỏ header
+   `Authorization` khi đi theo redirect**, không bỏ là S3 từ chối.
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |
@@ -246,3 +331,8 @@ khoản có xác minh 2 bước.
 | Cuộn feed bằng phím mũi tên xuống | **Đã ngừng tác dụng hoàn toàn** — xem QĐ-13, dùng con lăn chuột |
 | Click vào trang để "lấy con trỏ" rồi gửi phím | Làm hỏng trạng thái trang, sau đó không đọc được sound nào |
 | Để `viewport: null` cho context crawl | Cửa sổ ẩn ra 800×600 → TikTok đổi bố cục, mất nút điều hướng — xem QĐ-14 |
+| Chép bản sao vòng quét feed cho từng chế độ | 4 bản đã lệch nhau ở 3 điểm (mất log, Dừng chậm 10s, cuộn thừa) — xem QĐ-16 |
+| Để bảng `width:100%` mà không có `min-width` | Table tự bóp cột: ở 960px cột Trạng thái còn 55px, chữ bị cắt, chỉ thấy 1/5 profile |
+| Chỉ đặt `overflow-y` cho khung bảng | Bảng rộng hơn khung bị **cắt mất**, không cách nào cuộn tới — phải `overflow: auto` |
+| Tin nhãn quốc gia profile là đủ khi chạy VPS | VPN tụt là khai giờ nước A trên IP nước B — xem QĐ-17 |
+| Để repo phát hành public "chỉ chứa .exe" cho tiện tự cập nhật | `.exe` chứa `app.asar` → extract ra trọn source, coi như công khai mã nguồn — xem QĐ-18 |
