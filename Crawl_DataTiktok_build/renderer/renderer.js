@@ -323,8 +323,19 @@ async function startProfileById(id) {
 async function stopProfileById(id) {
   if (!runningSet.has(id)) return;
   appendLog(id, 'Đang dừng...');
-  await api.profileStop(id);
+  // Đặt badge TRƯỚC await: backend phát 'stopped' gần như tức thì, nếu đặt sau await thì
+  // dòng này GHI ĐÈ mất thông báo "Đã dừng." vừa nhận được → badge kẹt ở "Đang dừng..."
+  // dù profile đã dừng xong (bug 2026-07-28).
   updateRowStatus(id, 'running', 'Đang dừng...');
+  const res = await api.profileStop(id);
+  // Backend báo profile KHÔNG chạy = UI đang lệch trạng thái với backend. Phải tự chữa
+  // NGAY, vì sẽ không còn sự kiện 'stopped' nào tới nữa → hàng kẹt vĩnh viễn ở
+  // "Đang dừng..." kèm nút "■ Dừng", không cách nào bấm Chạy lại được.
+  if (res && res.ok === false) {
+    setRowRunning(id, false);
+    updateRowStatus(id, 'stopped', 'Chờ');
+    appendLog(id, 'Profile không chạy — đã đồng bộ lại trạng thái giao diện.');
+  }
 }
 
 async function toggleProfile(id) {
@@ -846,6 +857,13 @@ function initCrawlEvents() {
       // Kênh RIÊNG báo mốc kết thúc pha hiện tại (mode 'cycle') để renderer tự đếm ngược.
       profilePhase[s.profileId] = { label: s.phaseLabel, nextLabel: s.nextLabel, deadlineAt: s.deadlineAt };
       renderPhaseChip(s.profileId);
+    } else if (s.profileId && s.status === 'verify') {
+      // Kết quả "🔑 Kiểm tra đăng nhập" — KHÔNG phải trạng thái của luồng crawl.
+      // TUYỆT ĐỐI không gọi setRowRunning ở đây: kiểm tra phiên không làm profile chạy.
+      // (Xem lý do đầy đủ trong main.js, handler 'verify-logins'.)
+      updateRowStatus(s.profileId, s.state === 'guest' ? 'error' : 'verify', s.msg);
+      appendLog(s.profileId, s.msg);
+      if (s.state === 'guest') toast(`[${nameOf(s.profileId)}] ${s.msg}`, 'err');
     } else if (s.profileId) {
       if (s.status === 'running') setRowRunning(s.profileId, true);
       if (s.status === 'stopped' || s.status === 'error') { setRowRunning(s.profileId, false); delete profilePhase[s.profileId]; renderPhaseChip(s.profileId); }
@@ -884,6 +902,19 @@ async function init() {
   await loadSettingsStore();
   await loadProfiles();
   renderProfileTable();
+
+  // ĐỒNG BỘ TRẠNG THÁI CHẠY VỚI BACKEND (2026-07-28): backend là nguồn sự thật duy nhất
+  // về profile nào đang crawl. Trước đây renderer chỉ dựa vào sự kiện nhận được, nên hễ
+  // lệch một lần là kẹt luôn (nút "■ Dừng" bấm không có tác dụng, "Chạy đã chọn" bị vô
+  // hiệu) và cách duy nhất để thoát là khởi động lại app. Reload giao diện (F5 ở bản dev)
+  // cũng từng làm mất hết trạng thái đang chạy.
+  try {
+    const ids = await api.crawlRunningIds();
+    for (const id of (ids || [])) {
+      setRowRunning(id, true);
+      updateRowStatus(id, 'running', 'Đang chạy...');
+    }
+  } catch {}
 
   // ── Bảng profile: event delegation ──
   $('profileTableBody').addEventListener('click', (e) => {

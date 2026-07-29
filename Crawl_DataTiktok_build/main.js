@@ -191,11 +191,20 @@ ipcMain.handle('verify-logins', async (_e, profileIds) => {
     }
     send('crawl-status', { profileId: null, status: 'info',
       msg: `Đang kiểm tra phiên ${i + 1}/${ids.length}: ${p.name}...` });
+    // Báo cho ĐÚNG HÀNG của profile đang kiểm tra: mỗi profile mất 5–25s, trước đây hàng
+    // không hiện gì trong lúc chờ nên trông như app đứng máy.
+    send('crawl-status', { profileId: p.id, status: 'verify', state: 'checking',
+      msg: `⏳ Đang kiểm tra đăng nhập (${i + 1}/${ids.length})...` });
     const pp = profiles.getProfilePath(p.id);
     const r = pp ? await browser.verifyProfileLogin(pp)
       : { state: 'unknown', msg: 'Không tìm thấy thư mục profile' };
     out.push({ id: p.id, name: p.name, state: r.state, msg: r.msg });
-    send('crawl-status', { profileId: p.id, status: r.state === 'guest' ? 'error' : 'running',
+    // Kênh RIÊNG 'verify' — KHÔNG dùng 'running'/'error' của luồng crawl (bug 2026-07-28):
+    // trước đây profile đăng nhập OK được gửi status 'running', renderer hiểu là "đang crawl"
+    // → đánh dấu hàng đang chạy → nút đổi thành "■ Dừng", ô Chế độ bị khóa, "Chạy đã chọn"
+    // bị vô hiệu. Bấm Dừng thì backend trả "Profile không chạy" nên không có sự kiện
+    // 'stopped' nào tới nữa → hàng kẹt vĩnh viễn ở "Đang dừng...", trông như app treo.
+    send('crawl-status', { profileId: p.id, status: 'verify', state: r.state,
       msg: `Kiểm tra phiên: ${r.msg}` });
   }
   const guest = out.filter(r => r.state === 'guest').length;
