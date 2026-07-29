@@ -8,7 +8,8 @@
   "scripts": {
     "start": "set \"ELECTRON_RUN_AS_NODE=\" && electron .",
     "dev": "set \"ELECTRON_RUN_AS_NODE=\" && electronmon .",
-    "build": "electron-builder --win portable --x64"
+    "build": "electron-builder --win portable --x64",
+    "test": "node test/crawl-modes.test.js"
   },
   "electronmon": {
     "patterns": [
@@ -62,7 +63,8 @@
       "!version-bump.cjs",
       "!clean-profiles.cjs",
       "!build.bat",
-      "!start.bat"
+      "!start.bat",
+      "!test/**"
     ]
   }
 }

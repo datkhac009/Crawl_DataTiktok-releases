@@ -321,6 +321,100 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
     return true;
   }
 
+  // ════════ VÒNG QUÉT FEED DÙNG CHUNG cho mọi chế độ quét ════════
+  // GỘP 4 BẢN SAO (2026-07-28): foryou / search / current / pha QUÉT của cycle trước đây
+  // mỗi chế độ giữ MỘT bản `feedLoop` gần như y hệt (đọc sound → track kẹt → cuộn →
+  // recycle), chỉ khác vài tham số. DECISIONS.md QĐ-10 đã ghi bài học: "khi có ≥2 bản sao
+  // của cùng một logic, chúng SẼ lệch nhau" — và nó ĐÃ xảy ra thật với chính 4 bản này:
+  //   • bản chu kỳ từng RƠI MẤT dòng log "feed chưa hiện, tải lại trang rồi thử lại" khi
+  //     chép từ For You (comment trong scanPhase còn ghi lại sự cố đó);
+  //   • bản 'current' THIẾU `if (stop.requested) break;` trước khối thoát kẹt → bấm Dừng
+  //     vẫn phải chờ handleStuck chạy xong (tới ~10s) mới thoát được;
+  //   • bản 'current' sau khi thoát kẹt còn cuộn thêm 1 nhịp, còn 3 bản kia thì `continue`.
+  // Gộp về MỘT nguồn nên 3 điểm lệch trên tự hết, và lần sau sửa vòng quét chỉ sửa 1 chỗ.
+  //
+  // Chỉ tham số hoá những gì THỰC SỰ khác nhau giữa các chế độ:
+  //   prefix        tiền tố log ('' | 'Tìm "kw": ' | 'Chu kỳ [Quét]: ')
+  //   waitSelector  selector chờ sau khi tải lại trang (null với 'current' — không tải lại)
+  //   allowReload   cho phép thoát kẹt cấp 3 = tải lại trang (false cho TAB CỦA NGƯỜI DÙNG)
+  //   recycle       có tự tải lại định kỳ để xả RAM hay không ('current': KHÔNG)
+  //   watchLogin    có theo dõi phiên đăng nhập giữa lúc chạy hay không
+  //   deadlineAt    mốc phải dừng (chỉ pha QUÉT của chu kỳ dùng; Infinity = chạy tới khi Dừng)
+  //   onGuestMidRun xử lý riêng khi phát hiện tụt xuống chế độ khách giữa lúc chạy
+  //   startMsg      dòng log mở đầu (null = nơi gọi đã tự báo trước khi vào vòng)
+  async function runScanLoop({
+    prefix = '',
+    waitSelector = null,
+    allowReload = true,
+    recycle = true,
+    watchLogin: enableWatchLogin = false,
+    deadlineAt = Infinity,
+    onGuestMidRun = null,
+    startMsg = null,
+  }) {
+    // Dừng mềm: vòng quét coi `draining` như lệnh dừng, nhưng countLoop vẫn check nốt hàng
+    // đợi. Shadow biến `stop` một dòng — CÓ CHỦ ĐÍCH, xem QĐ-11 (tránh phải sửa hàng chục
+    // điều kiện rải rác, rủi ro sót).
+    const stop = scanStop;
+    if (startMsg) onStatus(profile.id, 'running', startMsg);
+    let scrolls = 0;
+    const tracker = makeFeedTracker();
+    const watchLogin = enableWatchLogin ? makeLoginWatcher(page, profilePath) : null;
+
+    while (!stop.requested && Date.now() < deadlineAt) {
+      // Queue đầy → tạm dừng cuộn, chờ tab đếm tiêu bớt (chống backlog vô hạn).
+      while (soundQueue.length >= QUEUE_MAX && !stop.requested && Date.now() < deadlineAt) {
+        await interruptibleSleep(1000, stop);
+      }
+      if (stop.requested || Date.now() >= deadlineAt) break;
+
+      // Phiên có thể chết GIỮA CHỪNG → kiểm tra định kỳ (15 phút/lần), tụt xuống khách thì
+      // dừng ngay thay vì cào vô ích hàng giờ.
+      if (watchLogin && await watchLogin() === 'guest') {
+        if (onGuestMidRun) onGuestMidRun();
+        return;
+      }
+
+      let data = null;
+      try { data = await readActiveSound(page); } catch (_) {}
+      const isNew = !!(data && data.href && addSound(data.href, data.name));
+      if (isNew) {
+        onStatus(profile.id, 'running', prefix
+          ? `${prefix}đã quét ${localCount} sound...`
+          : `Đã quét ${localCount} sound...`);
+      }
+      const stuck = tracker.track(data && data.href, isNew);
+      const st = tracker.dueStats();
+      if (st) {
+        onStatus(profile.id, 'running', prefix
+          ? `${prefix}${st}.`
+          : st.charAt(0).toUpperCase() + st.slice(1) + '.');
+      }
+      if (stop.requested) break;
+
+      if (stuck) {
+        const reloaded = await handleStuck(page, tracker, {
+          profileId: profile.id, onStatus, prefix,
+          waitSelector, allowReload, stop,
+          noHref: !(data && data.href),
+        });
+        if (reloaded) scrolls = 0;
+        continue;   // vừa can thiệp để nhảy video → không cuộn thêm nhịp nữa
+      }
+
+      await scrollFeed(page);
+      await interruptibleSleep(rand(minDelay, maxDelay), stop);
+
+      if (recycle && recycleEvery > 0 && ++scrolls >= recycleEvery
+          && !stop.requested && Date.now() < deadlineAt) {
+        scrolls = 0;
+        onStatus(profile.id, 'running',
+          `${prefix}Tải lại feed để xả RAM (đã quét ${localCount} sound)...`);
+        await recyclePage(page, waitSelector, stop);
+      }
+    }
+  }
+
   // ── Consumer chung: mở trang sound lấy số video → lọc → đẩy ra ──
   // MỌI chế độ: đếm số video bằng trình duyệt HEADLESS dùng chung (ẩn) — copy cookie từ
   // context của profile để trang /music/ tải đúng. Tránh mở tab đếm trong cửa sổ HIỆN
@@ -574,41 +668,14 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
       }
       await page.bringToFront().catch(() => {});
 
-      let scrolls = 0;
-      const tracker = makeFeedTracker();
-      const watchLogin = makeLoginWatcher(page, profilePath);
-      while (!stop.requested && Date.now() < deadlineAt) {
-        while (soundQueue.length >= QUEUE_MAX && !stop.requested && Date.now() < deadlineAt) {
-          await interruptibleSleep(1000, stop);
-        }
-        if (stop.requested || Date.now() >= deadlineAt) break;
-        // Phiên chết giữa chừng → cắt cả chu kỳ (báo lỗi ở cuối khối cycle).
-        if (await watchLogin() === 'guest') { guestDetected = true; return; }
-        let data = null;
-        try { data = await readActiveSound(page); } catch (_) {}
-        const isNew = !!(data && data.href && addSound(data.href, data.name));
-        if (isNew) onStatus(profile.id, 'running', `Chu kỳ [Quét]: đã quét ${localCount} sound...`);
-        const stuck = tracker.track(data && data.href, isNew);
-        const st = tracker.dueStats();
-        if (st) onStatus(profile.id, 'running', `Chu kỳ [Quét]: ${st}.`);
-        if (stop.requested) break;
-        if (stuck) {
-          const reloaded = await handleStuck(page, tracker, {
-            profileId: profile.id, onStatus, prefix: 'Chu kỳ [Quét]: ',
-            waitSelector: 'a[data-e2e="video-music"]', allowReload: true, stop,
-            noHref: !(data && data.href),
-          });
-          if (reloaded) scrolls = 0;
-          continue;
-        }
-        await scrollFeed(page);
-        await interruptibleSleep(rand(minDelay, maxDelay), stop);
-        if (recycleEvery > 0 && ++scrolls >= recycleEvery && !stop.requested && Date.now() < deadlineAt) {
-          scrolls = 0;
-          onStatus(profile.id, 'running', `Chu kỳ [Quét]: tải lại để xả RAM (đã quét ${localCount} sound)...`);
-          await recyclePage(page, 'a[data-e2e="video-music"]', stop);
-        }
-      }
+      // Phiên chết giữa chừng → cắt cả chu kỳ (báo lỗi ở cuối khối cycle, không báo ở đây).
+      await runScanLoop({
+        prefix: 'Chu kỳ [Quét]: ',
+        waitSelector: 'a[data-e2e="video-music"]',
+        watchLogin: true,
+        deadlineAt,
+        onGuestMidRun: () => { guestDetected = true; },
+      });
     }
 
     // ── Pha XEM: lặp qua danh sách viewLinks (lặp lại từ đầu nếu hết mà chưa hết giờ) ──
@@ -769,37 +836,13 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
     await page.bringToFront().catch(() => {});
     onStatus(profile.id, 'running', 'Đang cào trên tab đang mở...');
 
-    async function feedLoop() {
-      const stop = scanStop; // Dừng mềm: ngừng cuộn ngay, countLoop check nốt (shadow có chủ đích)
-      const tracker = makeFeedTracker();
-      while (!stop.requested) {
-        // Queue đầy → tạm dừng cuộn, chờ tab đếm tiêu bớt (chống backlog vô hạn).
-        while (soundQueue.length >= QUEUE_MAX && !stop.requested) {
-          await interruptibleSleep(1000, stop);
-        }
-        let data = null;
-        try { data = await readActiveSound(page); } catch (_) {}
-        const isNew = !!(data && data.href && addSound(data.href, data.name));
-        if (isNew) onStatus(profile.id, 'running', `Đã quét ${localCount} sound...`);
-        const stuck = tracker.track(data && data.href, isNew);
-        const st = tracker.dueStats();
-        if (st) onStatus(profile.id, 'running', st.charAt(0).toUpperCase() + st.slice(1) + '.');
-        if (stuck) {
-          // Chế độ 'current' = TAB CỦA NGƯỜI DÙNG → chỉ cấp 1/2, tuyệt đối KHÔNG tự tải lại.
-          await handleStuck(page, tracker, {
-            profileId: profile.id, onStatus, prefix: '',
-            waitSelector: null, allowReload: false, stop,
-            noHref: !(data && data.href),
-          });
-        }
-        if (stop.requested) break;
-        await scrollFeed(page);
-        await interruptibleSleep(rand(minDelay, maxDelay), stop);
-      }
-    }
-
+    // Chế độ 'current' = TAB CỦA NGƯỜI DÙNG → thoát kẹt chỉ cấp 1/2 (allowReload:false),
+    // và TUYỆT ĐỐI không tự tải lại định kỳ để xả RAM (recycle:false) vì đó là tab họ đang xem.
     // Đua loop với tín hiệu Dừng: stop → resolve ngay, không chờ loop tháo gỡ (loop nền tự thoát).
-    await Promise.race([Promise.all([feedLoop(), countLoop()]), stop.promise]);
+    await Promise.race([Promise.all([
+      runScanLoop({ waitSelector: null, allowReload: false, recycle: false }),
+      countLoop(),
+    ]), stop.promise]);
     stop.stoppedEmitted = true;
     onStatus(profile.id, 'stopped', `Đã dừng (giữ trình duyệt mở). Quét ${localCount} sound.`);
     return;
@@ -867,46 +910,17 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
       return;
     }
 
-    async function feedLoop() {
-      const stop = scanStop; // Dừng mềm: ngừng cuộn ngay, countLoop check nốt (shadow có chủ đích)
-      onStatus(profile.id, 'running', 'Bắt đầu thu thập...');
-      let scrolls = 0;
-      const tracker = makeFeedTracker();
-      const SEL = 'a[data-e2e="video-music"], a[aria-label][href*="/music/"]';
-      while (!stop.requested) {
-        // Queue đầy → tạm dừng cuộn, chờ tab đếm tiêu bớt (chống backlog vô hạn).
-        while (soundQueue.length >= QUEUE_MAX && !stop.requested) {
-          await interruptibleSleep(1000, stop);
-        }
-        let data = null;
-        try { data = await readActiveSound(page); } catch (_) {}
-        const isNew = !!(data && data.href && addSound(data.href, data.name));
-        if (isNew) onStatus(profile.id, 'running', `Tìm "${keyword}": đã quét ${localCount} sound...`);
-        const stuck = tracker.track(data && data.href, isNew);
-        const st = tracker.dueStats();
-        if (st) onStatus(profile.id, 'running', `Tìm "${keyword}": ${st}.`);
-        if (stop.requested) break;
-        if (stuck) {
-          const reloaded = await handleStuck(page, tracker, {
-            profileId: profile.id, onStatus, prefix: `Tìm "${keyword}": `,
-            waitSelector: SEL, allowReload: true, stop,
-            noHref: !(data && data.href),
-          });
-          if (reloaded) scrolls = 0;
-          continue;
-        }
-        await scrollFeed(page);
-        await interruptibleSleep(rand(minDelay, maxDelay), stop);
-        if (recycleEvery > 0 && ++scrolls >= recycleEvery && !stop.requested) {
-          scrolls = 0;
-          onStatus(profile.id, 'running', `Tải lại để xả RAM (đã quét ${localCount} sound)...`);
-          await recyclePage(page, SEL, stop);
-        }
-      }
-    }
-
+    // Trang search có trình phát riêng: link sound ở đây KHÔNG có data-e2e="video-music"
+    // nên selector phải nhận cả 2 dạng (xem readActiveSound).
     // Đua loop với tín hiệu Dừng: stop → resolve ngay, không chờ loop tháo gỡ (loop nền tự thoát).
-    await Promise.race([Promise.all([feedLoop(), countLoop()]), stop.promise]);
+    await Promise.race([Promise.all([
+      runScanLoop({
+        prefix: `Tìm "${keyword}": `,
+        waitSelector: 'a[data-e2e="video-music"], a[aria-label][href*="/music/"]',
+        startMsg: 'Bắt đầu thu thập...',
+      }),
+      countLoop(),
+    ]), stop.promise]);
     stop.stoppedEmitted = true;
     onStatus(profile.id, 'stopped', `Đã dừng. Quét ${localCount} sound.`);
     return;
@@ -953,52 +967,17 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
   }
   await page.bringToFront().catch(() => {});
 
-  async function feedLoop() {
-    const stop = scanStop; // Dừng mềm: ngừng cuộn ngay, countLoop check nốt (shadow có chủ đích)
-    onStatus(profile.id, 'running', 'Bắt đầu thu thập...');
-    let scrolls = 0;
-    const tracker = makeFeedTracker();
-    const watchLogin = makeLoginWatcher(page, profilePath);
-    while (!stop.requested) {
-      // Queue đầy → tạm dừng cuộn, chờ tab đếm tiêu bớt (chống backlog vô hạn).
-      while (soundQueue.length >= QUEUE_MAX && !stop.requested) {
-        await interruptibleSleep(1000, stop);
-      }
-      // Phiên có thể chết GIỮA CHỪNG → kiểm tra định kỳ, tụt xuống khách thì dừng ngay.
-      if (await watchLogin() === 'guest') {
-        onStatus(profile.id, 'error',
-          'Phiên đăng nhập BỊ HỦY giữa chừng (TikTok chuyển sang chế độ khách) — thường do profile '
-          + 'đang chạy trùng ở máy khác hoặc đổi vùng VPN. Hãy bấm 🦊 đăng nhập lại.');
-        return;
-      }
-      let data = null;
-      try { data = await readActiveSound(page); } catch (_) {}
-      const isNew = !!(data && data.href && addSound(data.href, data.name));
-      if (isNew) onStatus(profile.id, 'running', `Đã quét ${localCount} sound...`);
-      const stuck = tracker.track(data && data.href, isNew);
-      const st = tracker.dueStats();
-      if (st) onStatus(profile.id, 'running', st.charAt(0).toUpperCase() + st.slice(1) + '.');
-      if (stop.requested) break;
-      if (stuck) {
-        const reloaded = await handleStuck(page, tracker, {
-          profileId: profile.id, onStatus, prefix: '',
-          waitSelector: 'a[data-e2e="video-music"]', allowReload: true, stop,
-          noHref: !(data && data.href),
-        });
-        if (reloaded) scrolls = 0;
-        continue;
-      }
-      await scrollFeed(page);
-      await interruptibleSleep(rand(minDelay, maxDelay), stop);
-      if (recycleEvery > 0 && ++scrolls >= recycleEvery && !stop.requested) {
-        scrolls = 0;
-        onStatus(profile.id, 'running', `Tải lại feed để xả RAM (đã quét ${localCount} sound)...`);
-        await recyclePage(page, 'a[data-e2e="video-music"]', stop);
-      }
-    }
-  }
-
-  await Promise.race([Promise.all([feedLoop(), countLoop()]), stop.promise]);
+  await Promise.race([Promise.all([
+    runScanLoop({
+      waitSelector: 'a[data-e2e="video-music"]',
+      watchLogin: true,
+      startMsg: 'Bắt đầu thu thập...',
+      onGuestMidRun: () => onStatus(profile.id, 'error',
+        'Phiên đăng nhập BỊ HỦY giữa chừng (TikTok chuyển sang chế độ khách) — thường do profile '
+        + 'đang chạy trùng ở máy khác hoặc đổi vùng VPN. Hãy bấm 🦊 đăng nhập lại.'),
+    }),
+    countLoop(),
+  ]), stop.promise]);
   stop.stoppedEmitted = true;
   onStatus(profile.id, 'stopped', `Đã dừng. Quét ${localCount} sound.`);
 }
