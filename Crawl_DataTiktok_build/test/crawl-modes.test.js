@@ -7,9 +7,13 @@
 const path = require('path');
 const Module = require('module');
 
+// Rut ngan nhip cho khi tam dung vi IP lech vung (that la 60s) de test duong tu phuc hoi.
+process.env.TTC_IP_RETRY_MS = '250';
+
 const SRC = path.join(__dirname, '..', 'src');
 const browserPath = require.resolve(path.join(SRC, 'browser.cjs'));
 const profilesPath = require.resolve(path.join(SRC, 'profiles.cjs'));
+const ipGuardPath = require.resolve(path.join(SRC, 'ip-guard.cjs'));
 
 // ── Fake page: tra ve chuoi sound do kich ban quy dinh ──
 function makeFakePage(script) {
@@ -68,7 +72,30 @@ function makeFakePage(script) {
   return page;
 }
 
-function installMocks(page) {
+// Mock ip-guard: `ipScript` la mang cac state tra ve theo tung lan goi (lan cuoi lap mai).
+// Vd ['mismatch','mismatch','ok'] = lech 2 lan roi VPN ve dung vung -> phai TU CHAY TIEP.
+function installIpGuardMock(ipScript) {
+  let i = 0;
+  const fake = {
+    async check(want) {
+      const state = ipScript[Math.min(i, ipScript.length - 1)];
+      i++;
+      if (state === 'skip') return { state: 'skip', ip: null, country: null, want: null };
+      if (state === 'unknown') return { state: 'unknown', ip: '1.2.3.4', country: null, want };
+      if (state === 'mismatch') return { state: 'mismatch', ip: '1.2.3.4', country: 'DE', want };
+      return { state: 'ok', ip: '1.2.3.4', country: want, want };
+    },
+    async getPublicIp() { return { ip: '1.2.3.4', country: 'US' }; },
+    _calls: () => i,
+  };
+  require.cache[ipGuardPath] = new Module(ipGuardPath, null);
+  require.cache[ipGuardPath].filename = ipGuardPath;
+  require.cache[ipGuardPath].loaded = true;
+  require.cache[ipGuardPath].exports = fake;
+  return fake;
+}
+
+function installMocks(page, profileName) {
   const ctx = {
     pages: () => [page],
     async newPage() { return page; },
@@ -95,9 +122,12 @@ function installMocks(page) {
   require.cache[browserPath].exports = fakeBrowser;
 
   // Mock profiles.cjs
+  // Ten profile QUAN TRONG: fingerprint.countryOf() suy nhan quoc gia tu ten THU MUC, nen
+  // 'TEST(UK)' -> co canh IP, 'TEST_KHONG_NHAN' -> bo qua canh IP hoan toan.
+  const pname = profileName || 'TEST(UK)';
   const fakeProfiles = {
-    loadProfiles: () => [{ id: 'p_test', name: 'TEST(UK)', folderName: 'TEST(UK)' }],
-    getProfilePath: () => path.join(__dirname, '..', 'profiles', 'TEST(UK)'),
+    loadProfiles: () => [{ id: 'p_test', name: pname, folderName: pname }],
+    getProfilePath: () => path.join(__dirname, '..', 'profiles', pname),
   };
   require.cache[profilesPath] = new Module(profilesPath, null);
   require.cache[profilesPath].filename = profilesPath;
@@ -106,13 +136,15 @@ function installMocks(page) {
 }
 
 // ── Chay 1 kich ban ──
-async function run({ name, mode, sounds, loginState, runMs, extra = {} }) {
+async function run({ name, mode, sounds, loginState, runMs, ipScript = ['ok'], profileName, extra = {} }) {
   // Xoa cache crawler de moi kich ban co trang thai phien sach
   for (const k of Object.keys(require.cache)) {
-    if (k.includes('crawler') || k.includes('browser.cjs') || k.includes('profiles.cjs')) delete require.cache[k];
+    if (k.includes('crawler') || k.includes('browser.cjs') || k.includes('profiles.cjs')
+        || k.includes('ip-guard.cjs')) delete require.cache[k];
   }
   const page = makeFakePage({ sounds, loginState });
-  installMocks(page);
+  installMocks(page, profileName);
+  installIpGuardMock(ipScript);
   const crawler = require(path.join(SRC, 'crawler.cjs'));
 
   const msgs = [];
@@ -193,6 +225,29 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
     name: 'RECYCLE current (recycleEvery=5) -> PHAI reload = 0 (tab cua NGUOI DUNG, khong duoc tai lai)',
     mode: 'current', sounds: [SOUND_A, SOUND_B, SOUND_C], runMs: 900,
     extra: { recycleEvery: 5 },
+  }));
+
+  // ── CANH IP KHOP NHAN QUOC GIA (VPN tut tren VPS) ──
+  results.push(await run({
+    name: 'IP-GUARD: IP lech vung -> PHAI TAM DUNG, KHONG quet duoc sound nao',
+    mode: 'foryou', sounds: [SOUND_A, SOUND_B], runMs: 900, ipScript: ['mismatch'],
+  }));
+
+  results.push(await run({
+    name: 'IP-GUARD: lech 2 lan roi VPN ve dung vung -> PHAI TU CHAY TIEP va quet duoc',
+    mode: 'foryou', sounds: [SOUND_A, SOUND_B, SOUND_C], runMs: 1600,
+    ipScript: ['mismatch', 'mismatch', 'ok'],
+  }));
+
+  results.push(await run({
+    name: 'IP-GUARD: khong tra duoc IP (mat mang) -> KHONG duoc chan, van phai quet',
+    mode: 'foryou', sounds: [SOUND_A, SOUND_B, SOUND_C], runMs: 900, ipScript: ['unknown'],
+  }));
+
+  results.push(await run({
+    name: 'IP-GUARD: profile KHONG co nhan quoc gia -> bo qua canh IP, van quet',
+    mode: 'foryou', sounds: [SOUND_A, SOUND_B, SOUND_C], runMs: 900,
+    profileName: 'TEST_KHONG_NHAN', ipScript: ['mismatch'],   // du mismatch cung phai chay
   }));
 
   for (const r of results) {

@@ -33,7 +33,10 @@
 //   ../resource-blocker.cjs    — chặn ảnh/media/font (DÙNG CHUNG với browser.cjs)
 'use strict';
 
+const path = require('path');
 const browser = require('./browser.cjs');
+const fingerprint = require('./fingerprint.cjs');
+const ipGuard = require('./ip-guard.cjs');
 const { getProfilePath, loadProfiles } = require('./profiles.cjs');
 const { canonicalSoundUrl, normalizeKey } = require('./linkkey.cjs');
 const { attachResourceBlocker } = require('./resource-blocker.cjs');
@@ -71,6 +74,16 @@ function runningIds() { return [..._active.keys()]; }
 // khi chưa cấu hình. 0 = tắt hẳn tự tải lại (chấp nhận rủi ro RAM để đổi lấy không gián đoạn).
 const RECYCLE_EVERY_DEFAULT = 80;
 
+// Chu kỳ kiểm lại IP có còn khớp nhãn quốc gia của profile (xem ip-guard.cjs). 5 phút là cân
+// bằng: VPN tụt thì phát hiện đủ nhanh, mà không bắn request tra IP quá dày (ip-guard còn
+// cache 1 phút nên nhiều profile kiểm cùng lúc cũng chỉ tốn 1 request).
+const IP_RECHECK_MS = 5 * 60 * 1000;
+
+// Nhịp kiểm lại TRONG LÚC đang tạm dừng vì IP lệch vùng. Cho ghi đè bằng biến môi trường
+// TTC_IP_RETRY_MS để test tự động kiểm được đường "lệch → tự phục hồi" mà không phải chờ
+// thật 60 giây. Bản chạy thật KHÔNG set biến này nên luôn dùng 60s.
+const IP_PAUSE_RETRY_MS = Number(process.env.TTC_IP_RETRY_MS) || 60000;
+
 // ── Vòng lặp crawl cho 1 profile (nhận cờ `stop` riêng) ──
 async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
   const { minDelay, maxDelay, headless, minVideos, maxVideos, mode, keyword, originalOnly, blockImages } = opts;
@@ -92,6 +105,42 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
         + 'Chạy trùng ở 2 nơi sẽ làm TikTok HỦY phiên đăng nhập — hãy tắt bên kia trước.');
     }
   }
+
+  // ════════ CANH IP KHỚP NHÃN QUỐC GIA CỦA PROFILE (2026-07-28) ════════
+  // Profile "...(US)" luôn khai múi giờ America/New_York + en-US (fingerprint.cjs). Nếu VPN
+  // trên VPS tụt thì request đi từ IP nước khác nhưng vẫn khai giờ Mỹ — mâu thuẫn mà QĐ-05
+  // ghi là "rất dễ bị nhận diện là dùng proxy". Trước đây app không hề biết, cào tiếp hàng giờ.
+  //
+  // TẠM DỪNG chứ không dừng hẳn: VPN thường tự kết nối lại sau vài phút, dừng hẳn là mất cả
+  // đêm sản lượng trên 6 máy. Không tra được IP (mạng lỗi tạm) thì KHÔNG chặn.
+  const wantCountry = fingerprint.countryOf(path.basename(profilePath));
+
+  // Trả false nếu bị Dừng trong lúc chờ IP về đúng vùng.
+  async function waitForCorrectCountry(prefix = '') {
+    if (!wantCountry) return true;   // profile không có nhãn quốc gia → không áp dụng
+    let paused = false;
+    while (!stop.requested) {
+      const r = await ipGuard.check(wantCountry);
+      if (r.state !== 'mismatch') {
+        if (paused) {
+          onStatus(profile.id, 'running',
+            `✅ ${prefix}IP đã về đúng vùng (${r.country || '?'}) — chạy tiếp.`);
+        }
+        return true;
+      }
+      if (!paused) {
+        paused = true;
+        onStatus(profile.id, 'error',
+          `⚠ ${prefix}TẠM DỪNG: IP hiện tại ở ${r.country} nhưng profile khai (${r.want}). `
+          + `Chạy tiếp sẽ để lộ mâu thuẫn "IP nước này, giờ nước khác" — thường do VPN tụt. `
+          + `App tự kiểm lại mỗi 60s và chạy tiếp ngay khi VPN về đúng vùng.`);
+      }
+      await interruptibleSleep(IP_PAUSE_RETRY_MS, stop);
+    }
+    return false;
+  }
+
+  if (!await waitForCorrectCountry()) return;
 
   let ctx, page;
   if (mode === 'current') {
@@ -360,8 +409,16 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
     let scrolls = 0;
     const tracker = makeFeedTracker();
     const watchLogin = enableWatchLogin ? makeLoginWatcher(page, profilePath) : null;
+    let lastIpCheck = Date.now();   // vừa kiểm ở đầu crawlOneProfile nên chưa cần kiểm lại ngay
 
     while (!stop.requested && Date.now() < deadlineAt) {
+      // VPN có thể tụt GIỮA LÚC ĐANG CHẠY → kiểm lại định kỳ, lệch vùng thì tạm dừng tại chỗ
+      // (không thoát vòng) và tự chạy tiếp khi VPN về đúng vùng.
+      if (wantCountry && Date.now() - lastIpCheck >= IP_RECHECK_MS) {
+        lastIpCheck = Date.now();
+        if (!await waitForCorrectCountry(prefix)) break;
+        lastIpCheck = Date.now();   // đặt lại sau khi chờ, tránh kiểm dồn ngay vòng sau
+      }
       // Queue đầy → tạm dừng cuộn, chờ tab đếm tiêu bớt (chống backlog vô hạn).
       while (soundQueue.length >= QUEUE_MAX && !stop.requested && Date.now() < deadlineAt) {
         await interruptibleSleep(1000, stop);
