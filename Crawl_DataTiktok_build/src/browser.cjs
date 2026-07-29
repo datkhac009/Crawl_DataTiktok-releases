@@ -16,6 +16,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const fingerprint = require('./fingerprint.cjs');
+const { attachResourceBlocker } = require('./resource-blocker.cjs');
 
 // Tạo context CHO 1 PROFILE với vân tay cố định của profile đó (2026-07-27) — để chép
 // profile sang máy khác vẫn giữ nguyên đăng nhập. Xem src/fingerprint.cjs.
@@ -618,25 +619,10 @@ function _notifyClosed(profilePath) {
   } catch (_) {}
 }
 
-// Resource blocker: chặn ảnh/video/font + domain quảng cáo (giảm RAM/băng thông).
-const _AD_DENYLIST = [
-  'googlesyndication.com', 'doubleclick.net', 'googleadservices.com',
-  'google-analytics.com', 'googletagmanager.com', 'amazon-adsystem.com', 'adnxs.com',
-];
-const _BLOCKED_TYPES = new Set(['image', 'media', 'font']);
-
-async function attachResourceBlocker(target) {
-  try {
-    await target.route('**/*', (route) => {
-      const req = route.request();
-      if (_BLOCKED_TYPES.has(req.resourceType()) || _AD_DENYLIST.some(d => req.url().includes(d))) {
-        route.abort().catch(() => {});
-      } else {
-        route.continue().catch(() => {});
-      }
-    });
-  } catch (_) {}
-}
+// Resource blocker (chặn ảnh/video/font + domain quảng cáo) đã chuyển sang
+// src/resource-blocker.cjs (2026-07-28) — trước đây file này và crawler.cjs mỗi bên giữ
+// MỘT BẢN SAO y hệt, đúng cái bẫy DECISIONS.md QĐ-10 đã ghi: 2 bản sao thì sẽ lệch nhau.
+// Vẫn re-export ở cuối file để nơi gọi cũ không phải sửa.
 
 // ── Trình duyệt HEADLESS DÙNG CHUNG để đếm số video (chế độ 'current') ──
 let _sharedHeadless = null;          // { browser, refs }

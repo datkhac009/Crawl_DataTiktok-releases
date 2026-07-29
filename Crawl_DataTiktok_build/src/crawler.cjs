@@ -1,6 +1,6 @@
-// src/crawler.cjs — Engine thu thập link sound TikTok.
+// src/crawler.cjs — Engine thu thập link sound TikTok (điều phối 5 chế độ crawl).
 //
-// 4 chế độ (mỗi profile chọn riêng):
+// 5 chế độ (mỗi profile chọn riêng):
 //   - 'foryou':  mở For You feed, cuộn, đọc sound của video hiện tại.
 //   - 'search':  gõ từ khóa → tab Videos → mở video đầu → cuộn như For You.
 //   - 'current': KHÔNG mở/điều hướng gì — cào ngay trên tab đang hiển thị của
@@ -15,21 +15,42 @@
 //                dùng danh sách viewLinks đã cấu hình sẵn, lặp lại danh sách nếu hết mà
 //                chưa hết giờ) → quay lại QUÉT... lặp VÔ HẠN tới khi Dừng. Mỗi profile
 //                chạy chu kỳ RIÊNG (không đồng bộ với profile khác).
-// Cả 3 dùng chung pipeline: sound → mở trang /music/ lấy số video → lọc ngưỡng
+// Mọi chế độ quét dùng chung pipeline: sound → mở trang /music/ lấy số video → lọc ngưỡng
 // → đẩy ra (bảng + Google Sheet). Lọc trùng theo link sound.
 //
-// VÒNG ĐỜI TỪNG PROFILE (như CrawlView): mỗi profile chạy độc lập, có cờ stop riêng,
-// start/stop bất kỳ lúc nào. _collected (dedup) + bộ đếm dùng CHUNG cho cả phiên
-// (reset khi profile đầu tiên của phiên bắt đầu; phiên = khoảng có ≥1 profile chạy).
+// VÒNG ĐỜI TỪNG PROFILE: mỗi profile chạy độc lập, có cờ stop riêng, start/stop bất kỳ lúc
+// nào. _collected (dedup) + bộ đếm dùng CHUNG cho cả phiên (reset khi profile đầu tiên của
+// phiên bắt đầu; phiên = khoảng có ≥1 profile chạy).
+//
+// ── CẤU TRÚC (tách module 2026-07-28) ──
+// File này giữ ĐÚNG phần điều phối: trạng thái phiên, vòng đời profile, và luồng của từng
+// chế độ. Các phần dùng chung đã tách ra src/crawler/ để file này không phình vô hạn:
+//   crawler/util.cjs           — sleep/rand/interruptibleSleep, parseCount, isOriginalSound
+//   crawler/count-throttle.cjs — semaphore đếm video TOÀN APP (chống dội 1 IP)
+//   crawler/page-read.cjs      — readActiveSound/readVideoCount/scrollFeed/recyclePage
+//   crawler/stuck.cjs          — makeFeedTracker + chẩn đoán & thoát kẹt feed 3 cấp
+//   crawler/session-watch.cjs  — checkLoginState + theo dõi phiên giữa lúc chạy
+//   ../resource-blocker.cjs    — chặn ảnh/media/font (DÙNG CHUNG với browser.cjs)
 'use strict';
 
 const browser = require('./browser.cjs');
 const { getProfilePath, loadProfiles } = require('./profiles.cjs');
 const { canonicalSoundUrl, normalizeKey } = require('./linkkey.cjs');
+const { attachResourceBlocker } = require('./resource-blocker.cjs');
+
+const { sleep, rand, interruptibleSleep, parseCount, isOriginalSound } = require('./crawler/util.cjs');
+const {
+  setCountConcurrency, acquireCountSlot, releaseCountSlot,
+  countPenaltyUp, countPenaltyDown,
+} = require('./crawler/count-throttle.cjs');
+const { readActiveSound, readVideoCount, scrollFeed, recyclePage } = require('./crawler/page-read.cjs');
+const { makeFeedTracker, handleStuck } = require('./crawler/stuck.cjs');
+const { checkLoginState, makeLoginWatcher } = require('./crawler/session-watch.cjs');
 
 const TIKTOK_HOME = 'https://www.tiktok.com/';
 
-// Map<profileId, { stop:{requested}, mode, name }> — các profile đang chạy.
+// ── TRẠNG THÁI PHIÊN (dùng chung cho mọi profile đang chạy) ──
+// Map<profileId, { stop:{requested}, mode, name, onStatus }> — các profile đang chạy.
 const _active = new Map();
 
 let _scannedThisRun = 0;      // số sound MỚI quét được trong phiên (không tính seed)
@@ -38,173 +59,9 @@ let _seedCount = 0;           // số link nạp sẵn từ Sheet
 let _loggedFirstKey = false;  // log 1 lần key đầu tiên để đối chiếu định dạng
 const _collected = new Set(); // dedup theo key sound (gồm cả link nạp sẵn từ Sheet)
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const rand = (min, max) => Math.floor(min + Math.random() * (max - min));
-
-// ════════ ĐIỀU TIẾT ĐẾM VIDEO TOÀN CỤC (mọi profile dùng chung) ════════
-// Vì sao: khi chạy nhiều profile, mỗi profile có countLoop riêng bắn /music/ ĐỒNG THỜI
-// từ cùng 1 IP → TikTok rate-limit → chặn trang đếm (log: cả 5 profile kẹt "nghỉ 300s").
-// Giải pháp: 1 semaphore CHUNG giới hạn số request đếm cùng lúc + giãn nhịp (min-gap +
-// jitter) để rải đều thay vì dội cùng lúc + phạt thích ứng khi bị chặn.
-let _countMax = 2;            // số request /music/ đồng thời tối đa TOÀN app (user chỉnh)
-let _countActive = 0;         // đang chạy
-const _countWaiters = [];     // hàng chờ slot
-let _lastCountStart = 0;      // mốc thời gian request đếm gần nhất (để giãn nhịp)
-let _countPenalty = 0;        // phạt thích ứng (ms) cộng vào min-gap khi bị chặn
-const COUNT_BASE_GAP = 700;   // khoảng cách tối thiểu giữa 2 request đếm (ms)
-const COUNT_PENALTY_MAX = 15000;
-
-function setCountConcurrency(n) {
-  _countMax = Math.max(1, Math.min(10, parseInt(n, 10) || 2));
-  // Có slot mới → đánh thức bớt hàng chờ.
-  while (_countActive < _countMax && _countWaiters.length) {
-    const w = _countWaiters.shift(); if (w) w();
-  }
-}
-
-// Xin 1 slot đếm: chờ tới lượt (dưới trần đồng thời) + đảm bảo giãn nhịp toàn cục.
-// Trả false nếu bị yêu cầu dừng giữa chừng.
-async function acquireCountSlot(stop) {
-  while (_countActive >= _countMax && !stop.requested) {
-    await new Promise(res => {
-      _countWaiters.push(res);
-      setTimeout(res, 500); // đánh thức định kỳ để kiểm tra cờ stop
-    });
-  }
-  if (stop.requested) return false;
-  _countActive++;
-  // Giãn nhịp: cách request trước ít nhất BASE_GAP + phạt + jitter ngẫu nhiên.
-  const gap = COUNT_BASE_GAP + _countPenalty + rand(0, 400);
-  const wait = _lastCountStart + gap - Date.now();
-  if (wait > 0) await interruptibleSleep(wait, stop);
-  _lastCountStart = Date.now();
-  return true;
-}
-
-function releaseCountSlot() {
-  _countActive = Math.max(0, _countActive - 1);
-  const w = _countWaiters.shift(); if (w) w();
-}
-
-// Bị chặn → tăng phạt (chậm lại dần); đọc được → giảm phạt (nhanh lại dần).
-function countPenaltyUp() { _countPenalty = Math.min(_countPenalty + 1500, COUNT_PENALTY_MAX); }
-function countPenaltyDown() { _countPenalty = Math.max(0, _countPenalty - 500); }
-
-// canonicalSoundUrl + normalizeKey chuyển sang src/linkkey.cjs (2026-07-16) — dùng CHUNG
-// với sheets.cjs để 2 nơi không bao giờ lệch định dạng key so trùng nữa.
-
-// Nhận diện "Original Sound" — hỗ trợ CẢ tiếng Anh ("original sound - ...") LẪN
-// tiếng Việt ("nhạc nền - ..." — đây là bản địa hóa của original sound trên TikTok VN).
-// Dùng 2 dấu hiệu: slug trong link (/music/original-sound- hoặc /music/nhạc-nền-),
-// HOẶC tên bắt đầu bằng "original sound" / "nhạc nền".
-function isOriginalSound(url, name) {
-  let u = String(url || '');
-  try { u = decodeURIComponent(u); } catch (_) {}   // giải mã %-encode để bắt slug tiếng Việt
-  u = u.toLowerCase();
-  if (u.includes('/music/original-sound-') || u.includes('/music/nhạc-nền-')) return true;
-  const n = String(name || '').trim().toLowerCase();
-  return n.startsWith('original sound') || n.startsWith('nhạc nền');
-}
-
 function isProfileRunning(id) { return _active.has(id); }
 function isAnyRunning() { return _active.size > 0; }
 function runningIds() { return [..._active.keys()]; }
-
-// Resource blocker cho TAB ĐẾM (lấy số video): chặn ảnh/media/font + domain quảng cáo
-// → trang /music/ tải nhanh hơn, nhẹ RAM. (Học từ CrawlView.) CHỈ dùng cho tab đếm,
-// KHÔNG dùng cho tab cuộn feed (tránh TikTok đổi hành vi / chặn).
-const _AD_DENYLIST = [
-  'googlesyndication.com', 'doubleclick.net', 'googleadservices.com',
-  'google-analytics.com', 'googletagmanager.com', 'amazon-adsystem.com', 'adnxs.com',
-];
-const _BLOCKED_TYPES = new Set(['image', 'media', 'font']);
-
-async function attachCountBlocker(page) {
-  try {
-    await page.route('**/*', (route) => {
-      const req = route.request();
-      const type = req.resourceType();
-      const url = req.url();
-      if (_BLOCKED_TYPES.has(type) || _AD_DENYLIST.some(d => url.includes(d))) {
-        route.abort().catch(() => {});
-      } else {
-        route.continue().catch(() => {});
-      }
-    });
-  } catch (_) {}
-}
-
-async function interruptibleSleep(ms, stop) {
-  const step = 200;
-  for (let waited = 0; waited < ms && !stop.requested; waited += step) {
-    await sleep(Math.min(step, ms - waited));
-  }
-}
-
-// Đọc link + tên sound của video active (gần giữa màn hình nhất).
-// Nhận cả 2 dạng link sound:
-//   - For You: a[data-e2e="video-music"] (đĩa nhạc xoay)
-//   - Trình phát trong trang search: a[aria-label][href*="/music/"] (không có data-e2e)
-async function readActiveSound(page) {
-  // page.evaluate KHÔNG có timeout — nếu tab đang kẹt/điều hướng nó chờ vô hạn → treo
-  // vòng lặp (đặc biệt chế độ 'current' không đóng tab user). Đua với timeout 5s để loop
-  // còn quay lại kiểm tra cờ stop.
-  const evalPromise = page.evaluate(() => {
-    const links = Array.from(document.querySelectorAll(
-      'a[data-e2e="video-music"], a[aria-label][href*="/music/"]'));
-    const vh = window.innerHeight;
-    let best = null, bestDist = Infinity;
-    for (const a of links) {
-      const r = a.getBoundingClientRect();
-      if (r.height === 0) continue;
-      const center = r.top + r.height / 2;
-      const dist = Math.abs(center - vh / 2);
-      if (dist < bestDist) { bestDist = dist; best = a; }
-    }
-    if (!best) return null;
-    const href = best.getAttribute('href') || '';
-    let name = best.getAttribute('aria-label') || '';
-    name = name.replace(/^.*?\bmusic\b\s*/i, '').trim() || name;
-    return { href, name };
-  });
-  return Promise.race([
-    evalPromise.catch(() => null),
-    new Promise(resolve => setTimeout(() => resolve(null), 5000)),
-  ]);
-}
-
-// Đọc text số "X videos" trên trang /music/... (vd "31.5K", "8").
-// Đua với timeout 5s — page.evaluate không có timeout, tab kẹt/điều hướng dở sẽ treo
-// vô hạn (cùng bài học với readActiveSound).
-async function readVideoCount(page) {
-  const evalPromise = page.evaluate(() => {
-    const els = document.querySelectorAll('h1,h2,h3,strong,p,span,div');
-    for (const el of els) {
-      if (el.children.length !== 0) continue;
-      const t = (el.textContent || '').trim();
-      const m = t.match(/^([\d.,]+\s*[KMB]?)\s*videos?$/i);
-      if (m) return m[1].replace(/\s+/g, '');
-    }
-    return null;
-  });
-  return Promise.race([
-    evalPromise.catch(() => null),
-    new Promise(resolve => setTimeout(() => resolve(null), 5000)),
-  ]);
-}
-
-// "169.1K" → 169100, "1.2M" → 1200000, "8" → 8.
-function parseCount(s) {
-  const m = String(s).trim().match(/^([\d.,]+)\s*([KMB]?)$/i);
-  if (!m) return s;
-  let num = parseFloat(m[1].replace(/,/g, ''));
-  if (isNaN(num)) return s;
-  const unit = m[2].toUpperCase();
-  if (unit === 'K') num *= 1e3;
-  else if (unit === 'M') num *= 1e6;
-  else if (unit === 'B') num *= 1e9;
-  return Math.round(num);
-}
 
 // Số lần cuộn trước khi TẢI LẠI trang để xả RAM. Feed TikTok cuộn mãi sẽ tích DOM +
 // buffer video vô tận → RAM phình ~1.5GB/phút (đã đo) → cạn RAM → crash. Reload định kỳ
@@ -213,314 +70,6 @@ function parseCount(s) {
 // ⚙️ Cài đặt crawl (per-profile, `opts.recycleEvery`) — hằng số này chỉ còn là MẶC ĐỊNH
 // khi chưa cấu hình. 0 = tắt hẳn tự tải lại (chấp nhận rủi ro RAM để đổi lấy không gián đoạn).
 const RECYCLE_EVERY_DEFAULT = 80;
-
-// ── Theo dõi tiến độ feed: phát hiện KẸT + thống kê định kỳ (2026-07-26) ──
-// Vì sao: log cũ CHỈ ghi khi quét được sound MỚI → dòng "đã quét 0 sound" sau hàng trăm lần
-// cuộn có thể là (a) feed chạy tốt nhưng mọi sound gặp đều đã có trong bộ lọc trùng, hoặc
-// (b) feed KẸT cứng ở 1 video — hai tình huống khác hẳn nhau mà log KHÔNG phân biệt được
-// (user gặp thật: 3 giờ liền "0 sound", không có cách nào biết feed có tiến hay không).
-// Tracker đếm số sound KHÁC NHAU gặp được (feed tiến = nhiều sound khác nhau) và số lần đọc
-// trúng CÙNG 1 sound liên tiếp (feed đứng = trúng mãi 1 sound).
-const STUCK_SAME_SOUND = 20;    // đọc trúng cùng 1 sound bấy nhiêu lần LIÊN TIẾP = coi như KẸT
-const FEED_STATS_EVERY = 100;   // cứ bấy nhiêu lần cuộn thì báo cáo thống kê 1 lần
-// Số sound KHÁC NHAU liên tiếp phải đọc được thì mới coi là feed ĐÃ CHẠY LẠI ỔN ĐỊNH và hạ
-// cấp độ can thiệp về 0. ⚠ Không được hạ ngay khi thấy 1 sound khác: log thật cho thấy trang
-// chỉ có 2 video, cách 1 đẩy sang được video B (khác A) → nếu hạ cấp ngay thì lần kẹt sau lại
-// bắt đầu từ cách 1, trong khi feed đã bật ngược về A → kẹt vĩnh viễn ở cách 1, không bao giờ
-// lên cách 2/3 (bug thật, bắt được từ log user 2026-07-27).
-const STUCK_RECOVERED = 5;
-
-function makeFeedTracker() {
-  let lastHref = null, sameCount = 0, stuckLevel = 0, progressRun = 0;
-  let seen = new Set(), scrolls = 0, fresh = 0;
-  return {
-    // Ghi nhận 1 vòng cuộn. Trả true nếu nghi feed đang KẸT (cần can thiệp thoát kẹt).
-    // (2026-07-28) TRƯỚC ĐÂY chỉ đếm khi href KHÁC null (`if (href) {...}`) — nghĩa là
-    // đọc null (KHÔNG tìm thấy sound nào) liên tục KHÔNG BAO GIỜ bị coi là kẹt, vì
-    // sameCount không hề nhích. Sự cố thật: 5 profile "gặp 0 sound khác nhau" suốt ~40
-    // phút liên tục, không 1 dòng cảnh báo/chẩn đoán nào vì nhánh này chưa từng chạy.
-    // Giờ so khớp với lần đọc TRƯỚC kể cả khi cả hai đều là null — null lặp lại cũng
-    // tích lũy thành kẹt như cùng 1 sound lặp lại.
-    track(href, isNew) {
-      scrolls++;
-      if (isNew) fresh++;
-      if (href) seen.add(href);
-      if (href === lastHref) {
-        sameCount++;
-      } else {
-        lastHref = href; sameCount = 1;
-        // Chỉ hạ cấp độ khi đọc được SOUND THẬT khác trước (không phải chỉ đổi từ/sang
-        // null) — feed chạy lại ỔN ĐỊNH nghĩa là có sound mới, không phải chỉ hết null.
-        if (href && ++progressRun >= STUCK_RECOVERED) stuckLevel = 0;
-      }
-      return sameCount >= STUCK_SAME_SOUND;
-    },
-    // Cấp độ thoát kẹt kế tiếp: 1 → 2 → 3 → quay lại 1 (xoay vòng thay vì kẹt mãi ở cấp 3,
-    // vì sau khi tải lại thì cấp 1/2 lại có cơ hội hiệu quả).
-    nextStuckLevel() { stuckLevel = stuckLevel >= 3 ? 1 : stuckLevel + 1; return stuckLevel; },
-    // Tới mốc báo cáo → trả chuỗi thống kê rồi tự reset; chưa tới → null. Việc reset cũng
-    // giữ `seen` luôn nhỏ (tối đa FEED_STATS_EVERY phần tử) — app chạy vô hạn nhiều ngày.
-    dueStats() {
-      if (scrolls < FEED_STATS_EVERY) return null;
-      const s = `cuộn ${scrolls} lần, gặp ${seen.size} sound khác nhau, ${fresh} sound mới`;
-      seen = new Set(); scrolls = 0; fresh = 0;
-      return s;
-    },
-    // Sau khi đã xử lý kẹt → cho đếm lại từ đầu, nhưng GIỮ NGUYÊN lastHref.
-    // ⚠ Không được xóa lastHref: nếu xóa, vòng đọc kế tiếp thấy href "khác" lastHref(null)
-    // sẽ tưởng feed ĐÃ TIẾN → hạ stuckLevel về 0 → leo thang kẹt mãi ở cách 1, không bao
-    // giờ lên cách 2/3 (bug đã bị test bắt lúc triển khai). Giữ lastHref thì lần kẹt sau
-    // mới phân biệt được "vẫn đúng video cũ" (leo cấp) với "đã sang video mới" (hết kẹt).
-    clearStuck() { sameCount = 0; progressRun = 0; },
-  };
-}
-
-// ── CUỘN SANG VIDEO KẾ TIẾP (2026-07-27) ──
-// ⚠ TRƯỚC ĐÂY dùng `page.keyboard.press('ArrowDown')` và nó ĐÃ NGỪNG TÁC DỤNG — kiểm chứng
-// trực tiếp trên TikTok thật với profile thật: bấm phím 6 lần liên tiếp, sound đọc được
-// KHÔNG ĐỔI lần nào (ở cả viewport 800x600 lẫn 1536x864). Đây là gốc rễ của "feed kẹt".
-// CON LĂN CHUỘT thì chạy tốt: 8 lần cuộn ra 6 sound khác nhau, ở cả hai khổ màn hình.
-// Nên đổi cuộn bằng con lăn làm cách CHÍNH.
-// ── Theo dõi phiên đăng nhập TRONG LÚC CHẠY (2026-07-27) ──
-// Kiểm tra lúc bắt đầu là chưa đủ: TikTok có thể hủy phiên giữa chừng (chạy trùng máy, đổi
-// vùng VPN, nghi ngờ hoạt động). Trước đây app cứ cào tiếp hàng giờ ở chế độ khách.
-// Trả về: 'ok' | 'guest'. Tự chốt phiên VÀNG mỗi lần xác nhận còn đăng nhập.
-const LOGIN_RECHECK_MS = 15 * 60 * 1000;
-function makeLoginWatcher(page, profilePath) {
-  let last = Date.now();
-  return async function check() {
-    if (Date.now() - last < LOGIN_RECHECK_MS) return 'ok';
-    last = Date.now();
-    const s = await checkLoginState(page);
-    if (s === 'guest') return 'guest';
-    if (s === 'logged-in') browser.markSessionVerified(profilePath);
-    return 'ok';
-  };
-}
-
-async function scrollFeed(page) {
-  try {
-    let vp = null;
-    try { vp = page.viewportSize(); } catch (_) {}
-    if (!vp) {
-      vp = await Promise.race([
-        page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })).catch(() => null),
-        new Promise(r => setTimeout(() => r(null), 3000)),
-      ]);
-    }
-    const w = (vp && vp.width) || 1280, h = (vp && vp.height) || 720;
-    await page.mouse.move(Math.round(w / 2), Math.round(h / 2));
-    await page.mouse.wheel(0, h);
-    return true;
-  } catch (_) { return false; }
-}
-
-// ── Kiểm tra ĐÃ ĐĂNG NHẬP hay đang ở chế độ KHÁCH, hỏi thẳng trang TikTok (2026-07-27) ──
-// Vì sao cần: cookie `sessionid` còn trong file KHÔNG có nghĩa TikTok còn chấp nhận. Sự cố
-// thật: 1 profile thiếu cookie định tuyến → TikTok cho vào chế độ KHÁCH → feed khách chỉ có
-// 1-2 video → app cào vô ích 3 tiếng, log chỉ báo "0 sound" nên không ai biết lý do.
-// Đã kiểm chứng trên TikTok thật: khách thì có [data-e2e="top-login-button"] (nút "Log in"
-// đỏ góc phải trên); đăng nhập rồi thì không có nút đó.
-// Trả 'guest' | 'logged-in' | 'unknown' (không kết luận được → KHÔNG chặn crawl).
-async function checkLoginState(page) {
-  const evalPromise = page.evaluate(() => {
-    if (document.querySelector('[data-e2e="top-login-button"]')) return 'guest';
-    // Chưa dựng xong giao diện thì đừng kết luận vội.
-    if (!document.querySelector('[data-e2e="nav-foryou"], [data-e2e="tiktok-logo"]')) return 'unknown';
-    return 'logged-in';
-  });
-  return Promise.race([
-    evalPromise.catch(() => 'unknown'),
-    new Promise(r => setTimeout(() => r('unknown'), 5000)),
-  ]);
-}
-
-// ── Chẩn đoán khi feed kẹt: đọc trạng thái trang để biết VÌ SAO không cuộn được ──
-// (2026-07-26) Log thật cho thấy feed kẹt cứng: tải lại → đọc được 1 video → đứng im 20 lần
-// → tải lại... vòng luẩn quẩn. Cần biết nguyên nhân thay vì đoán: có lớp che (modal đăng
-// nhập/cảnh báo) chặn phím? video không tải được (blockImages chặn media)? con trỏ nhập
-// liệu đang ở đâu (phím mũi tên chỉ tới đúng phần tử đang giữ con trỏ)?
-async function diagnoseFeed(page) {
-  const evalPromise = page.evaluate(() => {
-    const links = document.querySelectorAll('a[data-e2e="video-music"], a[aria-label][href*="/music/"]');
-    const v = document.querySelector('video');
-    const ae = document.activeElement;
-    // Lớp che THẬT = phần tử position:fixed phủ >60% màn hình VÀ chặn được thao tác chuột
-    // VÀ có nội dung hiển thị (modal đăng nhập, cảnh báo tuổi...).
-    // ⚠ Bỏ qua khung chứa thông báo/trang trí: chúng cũng fixed phủ toàn màn nhưng
-    // pointer-events:none (không chặn gì) hoặc rỗng — báo nhầm sẽ che mất lớp che thật
-    // (thực tế gặp: "TUXToastProvider-centerOutlet" của TikTok bị báo nhầm suốt).
-    let overlay = '';
-    for (const el of document.querySelectorAll('div,section,dialog')) {
-      const s = getComputedStyle(el);
-      if (s.position !== 'fixed' || s.display === 'none' || s.visibility === 'hidden') continue;
-      if (s.pointerEvents === 'none' || parseFloat(s.opacity || '1') < 0.05) continue;
-      if (!(el.innerText || '').trim() && !el.querySelector('img,svg,video,button,input')) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width > window.innerWidth * 0.6 && r.height > window.innerHeight * 0.6) {
-        overlay = String(el.id || el.className || el.tagName).slice(0, 50);
-        break;
-      }
-    }
-    return {
-      links: links.length,
-      // readyState: -1 = không có thẻ video; 0 = chưa tải được tí dữ liệu nào (dấu hiệu
-      // media bị chặn); 4 = tải đủ để phát mượt.
-      videoReady: v ? v.readyState : -1,
-      active: ae ? (ae.tagName + (ae.id ? '#' + ae.id : '')) : 'none',
-      overlay,
-    };
-  });
-  const base = await Promise.race([
-    evalPromise.catch(() => null),
-    new Promise(r => setTimeout(() => r(null), 5000)),
-  ]);
-  if (!base) return null;
-  // Gọi TÁCH RIÊNG: _findNextButtonInPage là hàm phía Node, phải TRUYỀN VÀO page.evaluate
-  // để chạy trong trang — không gọi lồng bên trong một evaluate khác được (hàm không tồn
-  // tại trong ngữ cảnh trang → lỗi). Biết có nút hay không là mấu chốt để chọn cách thoát kẹt.
-  const btn = await Promise.race([
-    page.evaluate(_findNextButtonInPage).catch(() => null),
-    new Promise(r => setTimeout(() => r(null), 5000)),
-  ]);
-  base.nextBtn = btn ? btn.label : '';
-  return base;
-}
-
-// Tìm nút "video kế tiếp" của chính TikTok (mũi tên xuống ở cạnh phải khung video) —
-// trả tọa độ tâm + nhãn để bấm bằng CHUỘT THẬT, hoặc null nếu không thấy.
-// Vì sao dùng nút của trang: log thật 2026-07-27 chứng minh feed For You KHÔNG phải vùng
-// cuộn thường mà là băng chuyền dựng bằng hiệu ứng CSS — `scrollIntoView` và con lăn chuột
-// đều VÔ TÁC DỤNG (đã thử, thất bại 100%). Nút điều hướng là điều khiển chính thức của
-// trang nên đáng tin nhất.
-// HTML thật của nút (user cung cấp 2026-07-27, trang chủ TikTok):
-//   <button class="TUXButton TUXButton--capsule ... action-item css-12x5cd4"
-//           aria-disabled="false" type="button"><div class="TUXButton-content">
-//           <div class="TUXButton-iconContainer"><svg viewBox="0 0 48 48">...
-// 3 đặc điểm dùng để nhận diện AN TOÀN:
-//   • class `action-item` — riêng của cụm nút điều hướng lên/xuống;
-//   • KHÔNG có `data-e2e` ở chính nó lẫn phần tử con — trong khi nút like/bình luận/chia sẻ
-//     LUÔN có (vd data-e2e="like-icon") ⇒ loại được nguy cơ bấm nhầm gây like/follow/report;
-//   • `aria-disabled="true"` khi không dùng được (nút LÊN lúc đang ở đầu feed) ⇒ bỏ qua.
-// Trong cặp lên/xuống, nút XUỐNG nằm THẤP hơn → chọn nút thấp nhất.
-// Không tìm thấy thì trả null (KHÔNG bấm bừa nút khác — thà báo không làm được).
-function _findNextButtonInPage() {
-  const vh = window.innerHeight, vw = window.innerWidth;
-  const ok = (el) => {
-    if (el.getAttribute('aria-disabled') === 'true' || el.disabled) return false;
-    if (el.hasAttribute('data-e2e') || el.querySelector('[data-e2e]')) return false;
-    if (!el.querySelector('svg')) return false;
-    const r = el.getBoundingClientRect();
-    return r.width >= 20 && r.width <= 130 && r.height >= 20 && r.height <= 130
-      && r.top >= 0 && r.bottom <= vh && r.left >= vw * 0.45;   // cụm nút ở nửa phải màn hình
-  };
-  let list = Array.from(document.querySelectorAll('button.action-item')).filter(ok);
-  // Dự phòng nếu TikTok đổi class: chỉ nhận phần tử được đánh dấu rõ là mũi tên.
-  if (!list.length) {
-    list = Array.from(document.querySelectorAll(
-      '[data-e2e*="arrow"], button[aria-label*="next" i], button[aria-label*="Tiếp" i]'))
-      .filter(el => {
-        const r = el.getBoundingClientRect();
-        return !el.disabled && el.getAttribute('aria-disabled') !== 'true'
-          && r.width >= 20 && r.height >= 20 && r.top >= 0 && r.bottom <= vh;
-      });
-  }
-  if (!list.length) return null;
-  let best = null, bestTop = -1;
-  for (const el of list) {
-    const r = el.getBoundingClientRect();
-    if (r.top > bestTop) { bestTop = r.top; best = el; }
-  }
-  const r = best.getBoundingClientRect();
-  const cls = String(best.className || '');
-  // Nhãn NGẮN GỌN cho log: class đầy đủ của TUXButton rất dài, cắt 40 ký tự chỉ ra chuỗi
-  // "TUXButton TUXButton--capsule TUXButton--" vô nghĩa.
-  const label = best.getAttribute('data-e2e') || best.getAttribute('aria-label')
-    || (cls.includes('action-item') ? 'action-item' : (cls.split(/\s+/)[0] || best.tagName));
-  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), label };
-}
-
-// ── Thoát kẹt theo cấp độ tăng dần (user chốt 2026-07-26, chỉnh lại 2026-07-27 theo log thật) ──
-// Cấp 1: BẤM NÚT "video kế tiếp" của TikTok bằng chuột thật (điều khiển chính thức của trang).
-// Cấp 2: click vào mép khung video để vùng feed NHẬN CON TRỎ NHẬP LIỆU rồi mới gửi phím mũi
-//        tên — mô phỏng đúng thao tác user làm thành công (user bấm tay được vì đã click
-//        vào trang; app gửi phím khi con trỏ ở BODY thì TikTok bỏ qua).
-// Cấp 3: tải lại trang (phương án cuối).
-// Trả chuỗi mô tả việc đã làm (để ghi log) hoặc null nếu không làm được gì.
-async function unstickFeed(page, level) {
-  try {
-    if (level === 1) {
-      try { await page.keyboard.press('Escape'); } catch (_) {}   // đóng hộp thoại nếu có
-      const btn = await Promise.race([
-        page.evaluate(_findNextButtonInPage).catch(() => null),
-        new Promise(r => setTimeout(() => r(null), 5000)),
-      ]);
-      if (!btn) return null;
-      await page.mouse.click(btn.x, btn.y);
-      return `đã bấm nút "${btn.label}"`;
-    }
-    if (level === 2) {
-      // Cuộn MẠNH: 3 nhịp con lăn liên tiếp. Cuộn 1 nhịp đã là cách chính (scrollFeed) nên
-      // ở đây phải mạnh hơn mới có ý nghĩa.
-      // ⚠ TUYỆT ĐỐI KHÔNG click vào vùng trang để "lấy con trỏ" rồi gửi phím: đã thử trên
-      // TikTok thật, click vào trang làm HỎNG trạng thái trang (sau đó không đọc được sound
-      // nào nữa) — và phím mũi tên vốn dĩ đã không còn tác dụng.
-      for (let i = 0; i < 3; i++) {
-        if (!await scrollFeed(page)) break;
-        await sleep(700);
-      }
-      return 'đã cuộn mạnh 3 nhịp con lăn';
-    }
-  } catch (_) {}
-  return null;
-}
-
-// Tải lại trang feed để giải phóng RAM, rồi chờ video xuất hiện lại.
-async function recyclePage(page, waitSelector, stop) {
-  if (stop.requested) return;
-  try {
-    await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForSelector(waitSelector, { timeout: 30000 });
-  } catch (_) { /* reload lỗi → bỏ qua, vòng lặp vẫn tiếp tục */ }
-}
-
-// Xử lý 1 lần phát hiện kẹt: chẩn đoán → ghi log rõ nguyên nhân → can thiệp theo cấp độ.
-// allowReload=false cho chế độ 'current' (tab của NGƯỜI DÙNG — không bao giờ tự tải lại).
-// Trả true nếu đã TẢI LẠI (nơi gọi cần reset bộ đếm recycle).
-async function handleStuck(page, tracker, { profileId, onStatus, prefix, waitSelector, allowReload, stop, noHref }) {
-  const diag = await diagnoseFeed(page);
-  let level = tracker.nextStuckLevel();
-  if (!allowReload && level === 3) level = 1;   // 'current': bỏ qua cấp tải lại, quay về cấp 1
-  const info = diag
-    ? `${diag.links} link video, video tải ${diag.videoReady}/4, con trỏ ở ${diag.active}`
-      + (diag.nextBtn ? `, thấy nút kế tiếp "${diag.nextBtn}"` : ', KHÔNG thấy nút kế tiếp')
-      + (diag.overlay ? `, CÓ LỚP CHE "${diag.overlay}"` : '')
-    : 'không đọc được trạng thái trang';
-  const how = level === 1 ? 'bấm nút video kế tiếp của TikTok'
-    : level === 2 ? 'cuộn mạnh 3 nhịp con lăn'
-    : 'tải lại trang';
-  // Nguyên nhân khác nhau cần log khác nhau: "cùng 1 sound" (đọc trúng lặp, feed còn
-  // video nhưng đứng yên) khác hẳn "không đọc được sound nào" (href null liên tục — vd
-  // lớp che/đổi bố cục/chặn trang) — gộp chung dễ hiểu nhầm là feed vẫn còn video.
-  const reason = noHref
-    ? `KHÔNG đọc được sound nào (${STUCK_SAME_SOUND} lần liên tiếp)`
-    : `feed KHÔNG chuyển video (${STUCK_SAME_SOUND} lần liên tiếp cùng 1 sound)`;
-  onStatus(profileId, 'running',
-    `⚠ ${prefix}${reason}`
-    + ` — ${info} → thử cách ${level}: ${how}...`);
-  let reloaded = false;
-  if (level === 3) {
-    await recyclePage(page, waitSelector, stop);
-    reloaded = true;
-  } else {
-    // Ghi lại KẾT QUẢ can thiệp (bấm được nút gì / không tìm thấy nút) — biết cách nào
-    // thực sự chạm được vào trang thay vì chỉ biết "đã thử".
-    const done = await unstickFeed(page, level);
-    onStatus(profileId, 'running', `   ↳ ${prefix}${done || 'KHÔNG thực hiện được (không tìm thấy điều khiển phù hợp)'}.`);
-  }
-  tracker.clearStuck();
-  return reloaded;
-}
 
 // ── Vòng lặp crawl cho 1 profile (nhận cờ `stop` riêng) ──
 async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
@@ -598,7 +147,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
   // Tùy chọn: chặn ảnh/video/font ngay trên tab cuộn để giảm RAM (mặc định tắt).
   // Chế độ 'view'/'cycle' KHÔNG chặn ở đây — phải tải được video mới xem/tính thời lượng
   // được ('cycle' tự bật/tắt chặn RIÊNG cho từng pha — xem ensureBlocker bên dưới).
-  if (blockImages && mode !== 'view' && mode !== 'cycle') { await attachCountBlocker(page); }
+  if (blockImages && mode !== 'view' && mode !== 'cycle') { await attachResourceBlocker(page); }
 
   // ════════ Chế độ XEM VIDEO ════════
   // Mở lần lượt từng link trong danh sách, xem ngẫu nhiên trong khoảng % thời lượng đã
@@ -791,7 +340,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
     let sidePage = null, helper = null;
     async function newCountPage() {
       const p = await helper.ctx.newPage();
-      await attachCountBlocker(p);
+      await attachResourceBlocker(p);
       return p;
     }
     try {
@@ -980,7 +529,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
     let blockerOn = false;
     async function ensureBlocker(want) {
       if (want === blockerOn) return;
-      if (want) { await attachCountBlocker(page); } else { try { await page.unroute('**/*'); } catch (_) {} }
+      if (want) { await attachResourceBlocker(page); } else { try { await page.unroute('**/*'); } catch (_) {} }
       blockerOn = want;
     }
 
