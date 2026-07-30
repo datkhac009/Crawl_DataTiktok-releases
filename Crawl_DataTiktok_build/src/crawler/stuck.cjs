@@ -14,6 +14,17 @@ const { scrollFeed, recyclePage } = require('./page-read.cjs');
 
 const STUCK_SAME_SOUND = 20;    // đọc trúng cùng 1 sound bấy nhiêu lần LIÊN TIẾP = coi như KẸT
 const FEED_STATS_EVERY = 100;   // cứ bấy nhiêu lần cuộn thì báo cáo thống kê 1 lần
+
+// Trần chờ page.evaluate() khi chẩn đoán/thoát kẹt. (2026-07-30) TRƯỚC ĐÂY 5000ms — quá
+// ngắn khi nhiều profile CÙNG chế độ ẩn/hiện dùng CHUNG 1 Chromium (QĐ-02): 5 context cùng
+// tải nặng trang TikTok (React SPA) một lúc trên VPS giới hạn CPU có thể khiến evaluate()
+// của 1-2 context (ngẫu nhiên, tùy context nào "thua" trong tranh chấp CPU) mất hơn 5s dù
+// trang KHÔNG hề hỏng — chỉ đang chậm. Bị chẩn đoán nhầm thành "không đọc được trạng thái
+// trang" → kích hoạt thoát kẹt (bấm nút/cuộn/tải lại) → tải lại trang lại càng tốn thêm CPU
+// đúng lúc đang tranh chấp → vòng luẩn quẩn. Nới lên 15s để có đủ thời gian cho trang thật
+// sự đang chậm (không phải hỏng) kịp phản hồi, tránh chẩn đoán nhầm hàng loạt khi chạy nhiều
+// profile cùng lúc.
+const EVALUATE_TIMEOUT_MS = 15000;
 // Số sound KHÁC NHAU liên tiếp phải đọc được thì mới coi là feed ĐÃ CHẠY LẠI ỔN ĐỊNH và hạ
 // cấp độ can thiệp về 0. ⚠ Không được hạ ngay khi thấy 1 sound khác: log thật cho thấy trang
 // chỉ có 2 video, cách 1 đẩy sang được video B (khác A) → nếu hạ cấp ngay thì lần kẹt sau lại
@@ -104,7 +115,7 @@ async function diagnoseFeed(page) {
   });
   const base = await Promise.race([
     evalPromise.catch(() => null),
-    new Promise(r => setTimeout(() => r(null), 5000)),
+    new Promise(r => setTimeout(() => r(null), EVALUATE_TIMEOUT_MS)),
   ]);
   if (!base) return null;
   // Gọi TÁCH RIÊNG: _findNextButtonInPage là hàm phía Node, phải TRUYỀN VÀO page.evaluate
@@ -112,7 +123,7 @@ async function diagnoseFeed(page) {
   // tại trong ngữ cảnh trang → lỗi). Biết có nút hay không là mấu chốt để chọn cách thoát kẹt.
   const btn = await Promise.race([
     page.evaluate(_findNextButtonInPage).catch(() => null),
-    new Promise(r => setTimeout(() => r(null), 5000)),
+    new Promise(r => setTimeout(() => r(null), EVALUATE_TIMEOUT_MS)),
   ]);
   base.nextBtn = btn ? btn.label : '';
   return base;
@@ -182,7 +193,7 @@ async function unstickFeed(page, level) {
       try { await page.keyboard.press('Escape'); } catch (_) {}   // đóng hộp thoại nếu có
       const btn = await Promise.race([
         page.evaluate(_findNextButtonInPage).catch(() => null),
-        new Promise(r => setTimeout(() => r(null), 5000)),
+        new Promise(r => setTimeout(() => r(null), EVALUATE_TIMEOUT_MS)),
       ]);
       if (!btn) return null;
       await page.mouse.click(btn.x, btn.y);
