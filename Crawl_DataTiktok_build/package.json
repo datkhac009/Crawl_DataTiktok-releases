@@ -9,7 +9,7 @@
     "start": "set \"ELECTRON_RUN_AS_NODE=\" && electron .",
     "dev": "set \"ELECTRON_RUN_AS_NODE=\" && electronmon .",
     "build": "electron-builder --win portable --x64",
-    "test": "node test/crawl-modes.test.js && node test/sheet-lock.test.js && node test/google-api-timeout.test.js && node test/sheets-readlinks.test.js && node test/sheets-clean-duplicates.test.js",
+    "test": "node test/crawl-modes.test.js && node test/sheet-lock.test.js && node test/google-api-timeout.test.js && node test/sheets-readlinks.test.js && node test/sheets-clean-duplicates.test.js && node test/ip-guard.test.js",
     "test:ui": "node test/ui-responsive.test.js"
   },
   "electronmon": {

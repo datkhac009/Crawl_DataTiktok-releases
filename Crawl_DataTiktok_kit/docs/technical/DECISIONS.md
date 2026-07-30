@@ -291,6 +291,23 @@ profile dùng "UK" còn ISO 3166-1 trả "GB" — không quy đổi thì báo l�
 **Giới hạn thành thật:** chỉ so **quốc gia**, không so thành phố/ASN. VPN tụt sang một IP khác
 nhưng vẫn cùng quốc gia thì không phát hiện được.
 
+**Bổ sung (2026-07-30) — 2 nhà cung cấp PHẢI đồng thuận mới kết luận, không tin ngay cái đầu
+trả lời được.** Sự cố thật: 1 VPS có IP Hàn Quốc **đúng thật** (xác nhận độc lập bằng 2 dịch
+vụ khác ngoài app) nhưng app vẫn TẠM DỪNG cả 5 profile. Nguyên nhân: `getPublicIp()` cũ dùng
+nhà cung cấp ĐẦU TIÊN trả lời được là tin ngay, không đối chiếu nhà cung cấp còn lại —
+`ifconfig.co` (đứng đầu danh sách) có lúc trả trang chặn Cloudflare thay vì JSON, hoặc xếp
+nhầm quốc gia cho dải IP dạng VPN/datacenter (IP của case này thuộc "Datacamp Limited", một
+nhà cung cấp hay bị các dịch vụ định vị xếp nhầm).
+
+Sửa: hỏi **cả 2 nhà cung cấp song song**, chỉ kết luận `mismatch`/`ok` khi **đồng thuận**. Hai
+bên trả về quốc gia khác nhau → coi như `unknown` (không chặn) — đúng triết lý "không kết luận
+khi không chắc" đã có sẵn ở trên, chỉ là áp dụng luôn cho trường hợp "có trả lời nhưng các bên
+mâu thuẫn nhau", trước đây trường hợp này lọt lưới vì chưa từng đối chiếu. Không cache kết quả
+`unknown` (giữ nguyên `at: 0`) để lần kiểm tiếp theo thử lại ngay thay vì kẹt cả phút.
+
+**Kiểm chứng:** `test/ip-guard.test.js` (8 assertion, mock module `https` qua require.cache —
+dựng lại đúng 3 tình huống: 2 bên đồng thuận khớp/lệch, 2 bên bất đồng, 1 bên bị chặn/lỗi).
+
 ---
 
 ## QĐ-18 — Cập nhật thủ công, giữ repo phát hành private
@@ -316,6 +333,23 @@ khai source. Người dùng chốt: chưa muốn công khai mã nguồn.
    vào `.exe`). Lưu ý kỹ thuật: tải asset của release private phải gọi qua API endpoint kèm
    `Accept: application/octet-stream`, GitHub trả 302 sang S3 và **phải bỏ header
    `Authorization` khi đi theo redirect**, không bỏ là S3 từ chối.
+
+**Bổ sung (2026-07-29) — đảo ngược: đã chuyển repo sang PUBLIC.** Nguyên nhân trực tiếp:
+app hiện có **2 người phát triển, tách 2 repo riêng** để tránh xung đột code — một máy ảo
+trong dàn VPS đang trỏ mặc định về repo của người còn lại (`Hung13010/...`), tự báo nhầm
+"đã là bản mới nhất" dù thực tế đang chạy code **khác hẳn** bản `datkhac009` (không có các
+fix ngày 2026-07-28/29: khóa liên máy, chống đẩy trùng...). Rủi ro dàn máy phân kỳ code theo
+2 repo khác nhau (mục 12 TROUBLESHOOTING.md) được đánh giá là **cấp bách hơn** rủi ro lộ
+source qua `.exe` — nên chọn đường 1 (public) thay vì đường 2 (token cục bộ, chưa triển khai).
+
+Trước khi đổi, đã rà toàn bộ lịch sử git (`git log --all -S"<pattern>"` với các mẫu
+`BEGIN PRIVATE KEY`, `AKIA`, `ghp_`, `client_email`, `private_key`...) — **không có secret/
+credential thật nào từng bị commit**, chỉ có tên trường trong code. Vậy nên public hoá không
+làm lộ thêm gì ngoài đúng mã nguồn (rủi ro đã biết và được người dùng chủ động chấp nhận).
+
+**Hệ quả cần theo dõi:** mọi VPS giờ nên trỏ về **cùng một repo** (`datkhac009/
+Crawl_DataTiktok-releases`) trong ô "Nâng cao: GitHub repo phát hành" — máy nào vẫn trỏ về
+repo của người phát triển kia sẽ tiếp tục chạy code phân kỳ, không có các fix mới nhất.
 
 ---
 
@@ -487,3 +521,4 @@ tiên giữ dòng có ghi chú tay, thứ tự xóa giảm dần, `cleanDuplicat
 | Chỉ test cơ chế timeout bằng mock | Mock không mô phỏng đúng hành vi treo ở tầng TCP thật — phải có ít nhất 1 test gọi tới địa chỉ mạng thật (RFC 5737: `192.0.2.1`) mới bắt được lỗi `req.setTimeout()` ở trên |
 | Cho `enqueue()` đẩy tự động dù chưa đọc được danh sách link cũ | `_knownLinks` rỗng → coi mọi link là mới → đẩy trùng thật trên Sheet sản xuất — xem QĐ-20 |
 | Xóa dòng trên Sheet theo thứ tự tăng dần (dòng nhỏ trước) trong 1 `batchUpdate` | `deleteDimension` áp dụng tuần tự lên trạng thái hiện có — xóa dòng nhỏ trước làm lệch index mọi dòng lớn hơn còn lại trong cùng lần gọi — xem QĐ-20 |
+| Tin ngay nhà cung cấp định vị IP ĐẦU TIÊN trả lời được, không đối chiếu nhà cung cấp còn lại | 1 nhà cung cấp bị chặn (Cloudflare) hoặc xếp nhầm quốc gia cho dải IP VPN/datacenter → chặn oan cả 5 profile dù VPN đúng vùng thật — xem QĐ-17 |

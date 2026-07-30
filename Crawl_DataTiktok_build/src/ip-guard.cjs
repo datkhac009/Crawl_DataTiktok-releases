@@ -15,6 +15,16 @@
 //   - Không tra được IP      → coi như KHÔNG BIẾT, KHÔNG chặn. Mất mạng vài giây không được
 //                              phép làm treo cả 6 máy.
 //   - Profile không có nhãn  → bỏ qua hoàn toàn, không áp dụng gì.
+//
+// Bổ sung (2026-07-30) — 2 NHÀ CUNG CẤP PHẢI ĐỒNG THUẬN mới kết luận "lệch": gặp thực tế 1
+// máy ảo VPN đúng (IP Hàn Quốc thật, xác nhận độc lận bằng 2 dịch vụ khác) nhưng app vẫn báo
+// TẠM DỪNG toàn bộ 5 profile — vì trước đây `getPublicIp()` dùng nhà cung cấp ĐẦU TIÊN trả
+// lời được là TIN NGAY, không đối chiếu nhà cung cấp còn lại. `ifconfig.co` (đứng đầu danh
+// sách) trả trang chặn Cloudflare thay vì JSON cho dải IP dạng VPN/datacenter — nếu nó lỡ trả
+// JSON nhưng SAI quốc gia (geolocation DB xếp nhầm dải IP proxy) thì app tin luôn, không còn
+// cơ hội đối chiếu. Giờ hỏi CẢ 2 nhà cung cấp (song song), CHỈ kết luận "lệch"/"khớp" khi
+// đồng thuận — 2 bên trả khác quốc gia nhau thì coi như KHÔNG CHẮC, không chặn (đúng triết lý
+// ở trên: 1 nhà cung cấp lỗi/xếp nhầm không được phép tự ý chặn cả 5 profile).
 'use strict';
 
 const https = require('https');
@@ -23,8 +33,10 @@ const https = require('https');
 // chứng chỉ — cùng lý do đã xử lý trong sheets.cjs và updater.cjs.
 const _insecureAgent = new https.Agent({ rejectUnauthorized: false });
 
-// 2 nhà cung cấp: dùng cái đầu, lỗi/quá hạn thì thử cái sau. Cả hai đều miễn phí, không cần
-// khóa API, trả mã quốc gia 2 ký tự. Đã đo thực tế: ifconfig.co ~850ms, country.is ~1.5s.
+// 2 nhà cung cấp — giờ hỏi CẢ HAI (song song) để đối chiếu, không chỉ dùng cái đầu trả lời
+// được. Cả hai đều miễn phí, không cần khóa API, trả mã quốc gia 2 ký tự. Đã đo thực tế:
+// ifconfig.co ~850ms, country.is ~1.5s — chạy song song nên tổng thời gian chờ vẫn ~1.5s
+// (không cộng dồn), chỉ chậm hơn ~650ms so với trước để đổi lấy việc đối chiếu.
 const PROVIDERS = [
   { url: 'https://ifconfig.co/json', pick: (j) => ({ ip: j.ip, country: j.country_iso }) },
   { url: 'https://api.country.is/', pick: (j) => ({ ip: j.ip, country: j.country }) },
@@ -53,22 +65,41 @@ function _getJson(url) {
   });
 }
 
-// Trả { ip, country } (country = mã 2 ký tự HOA) hoặc { ip: null, country: null } nếu không
-// tra được. Có cache 1 phút để nhiều profile kiểm cùng lúc không bắn nhiều request.
+// Trả { ip, country } (country = mã 2 ký tự HOA) hoặc { ip, country: null } nếu:
+//   - không nhà cung cấp nào trả lời được, HOẶC
+//   - các nhà cung cấp trả lời NHƯNG KHÔNG ĐỒNG THUẬN quốc gia (1 bên có thể xếp nhầm dải IP
+//     VPN/datacenter — gặp thực tế 2026-07-30: ifconfig.co báo lệch trong khi country.is +
+//     một dịch vụ đối chiếu ngoài đều xác nhận IP đúng vùng. Không đồng thuận = không đủ tin
+//     cậy để chặn cả 5 profile, coi như KHÔNG BIẾT).
+// Có cache 1 phút để nhiều profile kiểm cùng lúc không bắn nhiều request — KHÔNG cache kết
+// quả "không biết" (at=0), để lần kiểm tiếp theo được thử lại ngay thay vì kẹt ở trạng thái
+// mơ hồ cả phút.
 async function getPublicIp({ force = false } = {}) {
-  if (!force && _cache.country && Date.now() - _cache.at < CACHE_MS) return _cache;
-  for (const p of PROVIDERS) {
+  if (!force && _cache.at && Date.now() - _cache.at < CACHE_MS) return _cache;
+
+  const settled = await Promise.all(PROVIDERS.map(async (p) => {
     const j = await _getJson(p.url);
-    if (!j) continue;
+    if (!j) return null;
     try {
       const { ip, country } = p.pick(j);
       if (country && String(country).length === 2) {
-        _cache = { at: Date.now(), ip: ip || null, country: String(country).toUpperCase() };
-        return _cache;
+        return { ip: ip || null, country: String(country).toUpperCase() };
       }
-    } catch (_) { /* nhà cung cấp đổi định dạng → thử cái sau */ }
+    } catch (_) { /* nhà cung cấp đổi định dạng → bỏ qua kết quả này */ }
+    return null;
+  }));
+
+  const results = settled.filter(Boolean);
+  if (!results.length) { _cache = { at: 0, ip: null, country: null }; return _cache; }
+
+  const ip = results.find(r => r.ip)?.ip || null;
+  const countries = new Set(results.map(r => r.country));
+  if (countries.size > 1) {
+    _cache = { at: 0, ip, country: null };
+    return _cache;
   }
-  return { at: 0, ip: null, country: null };
+  _cache = { at: Date.now(), ip, country: results[0].country };
+  return _cache;
 }
 
 // Nhãn quốc gia trong tên profile dùng cả UK và GB cho Anh, còn API luôn trả GB
