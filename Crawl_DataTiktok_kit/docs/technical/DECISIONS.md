@@ -142,6 +142,23 @@ link ngắn là 2 sound khác nhau.
 **Bài học chung:** Khi có ≥2 bản sao của cùng một logic, chúng **sẽ** lệch nhau. Đây cũng là
 nguyên nhân của bug mất dòng log khi sao chép vòng cuộn giữa các chế độ.
 
+**Bổ sung (2026-07-30) — `normalizeKey()` giờ so trùng theo ID, không theo nguyên văn URL.**
+Sự cố thật: 1 sound là bài hát có bản quyền (slug tiếng Thái) bị đẩy trùng lên Sheet dù đã
+lọc cả lúc quét lẫn lúc đẩy. Nguyên nhân: `canonicalSoundUrl()` cố tình **giữ nguyên slug**
+cho bài hát có bản quyền (chỉ rút gọn `original-sound`/`nhạc-nền` về `/music/original-sound-
+<id>`) — để URL lưu/hiển thị vẫn đọc được tên bài. Nhưng `normalizeKey()` cũ chỉ
+`.toLowerCase()` nguyên văn URL đó để so trùng — TikTok đôi khi trả về **slug hơi khác nhau
+cho cùng 1 ID** (viết hoa/thường không xử lý hết, dấu nháy thẳng/cong, chuẩn hóa Unicode khác
+nhau cho chữ không phải Latin) → 2 lần gặp cùng sound bị coi là 2 sound khác nhau.
+
+Sửa: `normalizeKey()` giờ **trích riêng số ID cuối URL `/music/...-<id>`** làm khóa so trùng —
+dùng chung cho cả `original-sound` lẫn bài hát bản quyền, bất kể slug khác nhau thế nào. Vẫn
+không đụng đến `canonicalSoundUrl()` (URL lưu/hiển thị không đổi, bài hát bản quyền vẫn giữ
+slug đọc được) — chỉ đổi cách SO SÁNH, không đổi dữ liệu lưu ra.
+
+**Kiểm chứng:** `test/linkkey.test.js` (10 assertion — dựng lại đúng kịch bản thật: cùng ID,
+2 slug khác nhau hoàn toàn → phải ra cùng key).
+
 ---
 
 ## QĐ-11 — Dừng cứng và Dừng mềm
@@ -522,3 +539,4 @@ tiên giữ dòng có ghi chú tay, thứ tự xóa giảm dần, `cleanDuplicat
 | Cho `enqueue()` đẩy tự động dù chưa đọc được danh sách link cũ | `_knownLinks` rỗng → coi mọi link là mới → đẩy trùng thật trên Sheet sản xuất — xem QĐ-20 |
 | Xóa dòng trên Sheet theo thứ tự tăng dần (dòng nhỏ trước) trong 1 `batchUpdate` | `deleteDimension` áp dụng tuần tự lên trạng thái hiện có — xóa dòng nhỏ trước làm lệch index mọi dòng lớn hơn còn lại trong cùng lần gọi — xem QĐ-20 |
 | Tin ngay nhà cung cấp định vị IP ĐẦU TIÊN trả lời được, không đối chiếu nhà cung cấp còn lại | 1 nhà cung cấp bị chặn (Cloudflare) hoặc xếp nhầm quốc gia cho dải IP VPN/datacenter → chặn oan cả 5 profile dù VPN đúng vùng thật — xem QĐ-17 |
+| So trùng link bằng nguyên văn URL (kể cả đã lowercase) thay vì trích ID | Bài hát có bản quyền giữ nguyên slug tên bài — TikTok trả slug hơi khác nhau cho cùng 1 ID (viết hoa/thường, dấu nháy, chuẩn hóa Unicode chữ không phải Latin) → bị đẩy trùng lên Sheet — xem QĐ-10 |

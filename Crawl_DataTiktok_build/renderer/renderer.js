@@ -448,8 +448,12 @@ function updateCfgModeUI() {
     : 'Delay mỗi lần cuộn';
 }
 
+// Ô tick này hiển thị theo đúng tiêu đề mục "Hiển thị trình duyệt": TICK = hiện cửa sổ
+// (Visible), BỎ TICK = chạy ẩn (Headless) — ngược dấu với field `headless` lưu trong
+// cấu hình (xem openSettingsModal/saveCrawlSettings), vì trước đây ô tick + chữ đi NGƯỢC
+// với tiêu đề mục (tick lại nghĩa là chạy ẩn) gây hiểu nhầm "bật lên mà vẫn hiện trình duyệt".
 function updateCfgHeadlessLabel() {
-  $('cfgHeadlessLabel').textContent = $('cfgHeadless').checked ? 'Headless (chạy ẩn)' : 'Visible (hiện cửa sổ)';
+  $('cfgHeadlessLabel').textContent = $('cfgHeadless').checked ? 'Chạy bật trình duyệt (Visible)' : 'Chạy ẩn (Headless)';
 }
 
 function openSettingsModal(ids) {
@@ -471,7 +475,7 @@ function openSettingsModal(ids) {
   $('cfgCycleViewMinutes').value = s.cycleViewMinutes;
   $('cfgCycleBreakMin').value = s.cycleBreakMin;
   $('cfgCycleBreakMax').value = s.cycleBreakMax;
-  $('cfgHeadless').checked = !!s.headless;
+  $('cfgHeadless').checked = !s.headless;  // tick = hiện trình duyệt = NGƯỢC dấu với `headless`
   $('cfgOriginalOnly').checked = !!s.originalOnly;
   $('cfgBlockImages').checked = !!s.blockImages;
   $('cfgRecycleEvery').value = s.recycleEvery;
@@ -504,7 +508,7 @@ async function saveCrawlSettings() {
     viewLikePct: Math.max(0, Math.min(100, parseInt($('cfgViewLikePct').value, 10) || 0)),
     viewScrollMin: scrMin,
     viewScrollMax: scrMax,
-    headless: $('cfgHeadless').checked,
+    headless: !$('cfgHeadless').checked,  // tick = hiện trình duyệt = NGƯỢC dấu với `headless`
     originalOnly: $('cfgOriginalOnly').checked,
     blockImages: $('cfgBlockImages').checked,
     recycleEvery: Math.max(0, parseInt($('cfgRecycleEvery').value, 10) || 0),

@@ -24,9 +24,29 @@ function canonicalSoundUrl(u) {
   return `https://www.tiktok.com/music/original-sound-${m[2]}`;
 }
 
-// Khóa so trùng: rút gọn về link chuẩn rồi đồng nhất hoa/thường. Link cũ dạng dài trên
-// Sheet và link mới rút gọn cho ra CÙNG key.
+// Lấy RIÊNG số ID cuối URL /music/..., dùng CHỈ cho việc SO TRÙNG (không dùng để quyết định
+// URL lưu/hiển thị — xem canonicalSoundUrl ở trên, vẫn cố tình giữ nguyên slug cho bài hát
+// có bản quyền để dễ đọc).
+function _extractMusicId(u) {
+  const clean = String(u || '').trim().split(/[?#]/)[0].replace(/\/+$/, '');
+  let dec = clean;
+  try { dec = decodeURIComponent(clean); } catch (_) {}
+  const m = dec.match(/\/music\/[^/]*-(\d{8,})$/);
+  return m ? m[1] : null;
+}
+
+// Khóa so trùng (2026-07-30): với bài hát có bản quyền, `canonicalSoundUrl` cố tình GIỮ
+// NGUYÊN slug tên bài (không rút gọn như original-sound) — nhưng TikTok có lúc trả về slug
+// hơi khác nhau cho CÙNG một ID (khác cách viết hoa/thường không xử lý hết, dấu nháy đơn
+// thẳng/cong, chuẩn hóa Unicode khác nhau cho chữ không phải Latin...). Nếu so trùng theo
+// NGUYÊN VĂN url (kể cả đã lowercase) thì 2 bản ghi CÙNG 1 sound nhưng lệch slug bị coi là
+// 2 sound khác nhau — gặp thực tế: 1 sound tiếng Thái bị đẩy trùng lên Sheet dù đã lọc.
+// Sửa: nếu trích được ID số ở cuối URL /music/ (đúng 1 lần duy nhất, dùng CHUNG cho original-
+// sound lẫn bài hát bản quyền) thì DÙNG ID làm khóa — chỉ cần cùng ID là cùng 1 sound, bất kể
+// slug khác nhau thế nào. Không trích được ID (URL dạng lạ) thì lùi về so nguyên văn như cũ.
 function normalizeKey(u) {
+  const id = _extractMusicId(u);
+  if (id) return `music:${id}`;
   return canonicalSoundUrl(u).toLowerCase();
 }
 
