@@ -1,6 +1,6 @@
 {
   "name": "crawl-tiktok",
-  "version": "0.1.49",
+  "version": "0.1.50",
   "description": "TikTok Data Crawler — Firefox profile manager + crawler",
   "main": "main.js",
   "author": "HUNFI",
