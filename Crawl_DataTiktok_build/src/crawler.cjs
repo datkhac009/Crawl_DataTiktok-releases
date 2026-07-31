@@ -355,10 +355,15 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
   // dòng "đã quét N sound" khi feed vẫn đứng ở đúng video/sound cũ (chưa cuộn sang video mới).
   function addSound(href, name) {
     if (!href) return false;
+    const rawUrl = href.startsWith('http') ? href : 'https://www.tiktok.com' + href;
     // Rút gọn về link chuẩn NGAY từ đầu vào — bảng kết quả/Sheet/tab đếm đều dùng link ngắn.
-    const url = canonicalSoundUrl(href.startsWith('http') ? href : 'https://www.tiktok.com' + href);
+    const url = canonicalSoundUrl(rawUrl);
     // Bộ lọc Original Sound: bật → bỏ qua sound không phải original (nhạc bản quyền).
-    if (originalOnly && !isOriginalSound(url, name)) return false;
+    // ⚠ PHẢI xét `rawUrl` (link GỐC), KHÔNG được xét `url` đã rút gọn: từ 2026-07-30
+    // canonicalSoundUrl() ghép MỌI link về dạng `/music/original-sound-<id>` (kể cả nhạc bản
+    // quyền) nên nếu xét link đã rút gọn thì isOriginalSound() luôn thấy "original-sound-"
+    // → bộ lọc này MẤT TÁC DỤNG HOÀN TOÀN, mọi nhạc bản quyền đều lọt.
+    if (originalOnly && !isOriginalSound(rawUrl, name)) return false;
     const key = normalizeKey(url);
     if (!key) return false;
     if (!_loggedFirstKey) {

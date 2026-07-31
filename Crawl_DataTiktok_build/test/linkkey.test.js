@@ -1,13 +1,15 @@
 // test/linkkey.test.js — Kiem chung normalizeKey()/canonicalSoundUrl() trong linkkey.cjs.
 //
-// Boi canh (2026-07-30): nguoi dung phat hien 1 sound (bai hat co ban quyen, slug tieng
-// Thai) bi day TRUNG len Sheet dung 2 lan, du co ca co che loc trung o luc quet lan luc day.
-// Nguyen nhan: canonicalSoundUrl() CO Y giu nguyen slug cho bai hat co ban quyen (khac voi
-// original-sound duoc rut gon ve dang /music/original-sound-<id>) - normalizeKey() cu chi
-// lowercase NGUYEN VAN url do, nen 2 lan gap CUNG 1 ID nhung TikTok tra slug hoi khac nhau
-// (viet hoa, dau nhay, chuan hoa Unicode chu khong phai Latin...) bi coi la 2 sound khac
-// nhau. Fix: normalizeKey() gio trich RIENG so ID cuoi URL lam khoa so trung (dung chung ca
-// original-sound lan bai hat ban quyen), KHONG dung cho URL luu/hien thi (van giu slug de doc).
+// Boi canh 1 (2026-07-30): 1 sound bi day TRUNG len Sheet 2 lan du da loc trung — vi
+// normalizeKey() cu so trung theo NGUYEN VAN url, ma TikTok tra slug hoi khac nhau cho cung
+// 1 ID (viet hoa, dau nhay, chuan hoa Unicode chu khong phai Latin). Fix: so trung theo ID.
+//
+// Boi canh 2 (2026-07-30, cung ngay): cung 1 profile chay tren 2 may cho ra link DINH DANG
+// KHAC NHAU — may nay ra link ngan chuan, may ao ra link dai `/music/оригинальный-звук-<id>`.
+// Nguyen nhan KHONG phai may/phien ban khac nhau: TikTok gan nhan "original sound" theo NGON
+// NGU CUA NGUOI DANG video, feed moi may phuc vu noi dung khac nhau theo IP/vung VPN. Fix:
+// canonicalSoundUrl() rut gon MOI link /music/ ve `original-sound-<id>` THEO ID, doc lap
+// hoan toan voi ngon ngu/slug.
 // Chay: node test/linkkey.test.js
 'use strict';
 
@@ -28,11 +30,22 @@ function check(label, cond, extra = '') {
     check('dung dang /music/original-sound-<id>', a === 'https://www.tiktok.com/music/original-sound-76273901234567');
   }
 
-  console.log('\n=== 2. Bai hat CO BAN QUYEN: canonicalSoundUrl KHONG rut gon (giu nguyen slug de doc) ===');
+  console.log('\n=== 2. (DOI HANH VI 2026-07-30) MOI link /music/ deu rut gon ve original-sound-<id> ===');
   {
-    const u = 'https://www.tiktok.com/music/If-You-Dont-Mean-It-7656283172601465618';
-    const c = canonicalSoundUrl(u);
-    check('giu nguyen slug (khong rut gon nhu original-sound)', c === u, c);
+    // Truoc day bai hat co ban quyen duoc GIU NGUYEN slug; nguoi dung yeu cau dinh dang
+    // DUY NHAT `original-sound-<id>` cho moi link (TikTok resolve theo ID, bo qua phan chu).
+    const c1 = canonicalSoundUrl('https://www.tiktok.com/music/If-You-Dont-Mean-It-7656283172601465618');
+    check('nhac ban quyen -> cung rut gon ve original-sound-<id>',
+      c1 === 'https://www.tiktok.com/music/original-sound-7656283172601465618', c1);
+
+    // Chinh ca link nguoi dung gui lam bang chung (nhan tieng Nga, truoc day KHONG rut gon).
+    const c2 = canonicalSoundUrl('https://www.tiktok.com/music/оригинальный-звук-7648030600474299169');
+    check('nhan tieng Nga -> rut gon dung (truoc day bi bo qua)',
+      c2 === 'https://www.tiktok.com/music/original-sound-7648030600474299169', c2);
+
+    // Link %-encode (trinh duyet tra ve dang nay) cung phai ra ket qua giong het.
+    const c3 = canonicalSoundUrl('https://www.tiktok.com/music/%D0%BE%D1%80%D0%B8%D0%B3%D0%B8%D0%BD%D0%B0%D0%BB%D1%8C%D0%BD%D1%8B%D0%B9-%D0%B7%D0%B2%D1%83%D0%BA-7648030600474299169');
+    check('link %-encode -> cung ket qua', c3 === c2, c3);
   }
 
   console.log('\n=== 3. BUG THAT: bai hat ban quyen CUNG ID nhung slug khac nhau -> normalizeKey PHAI ra CUNG 1 key ===');

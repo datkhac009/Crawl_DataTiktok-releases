@@ -152,12 +152,48 @@ cho cùng 1 ID** (viết hoa/thường không xử lý hết, dấu nháy thẳn
 nhau cho chữ không phải Latin) → 2 lần gặp cùng sound bị coi là 2 sound khác nhau.
 
 Sửa: `normalizeKey()` giờ **trích riêng số ID cuối URL `/music/...-<id>`** làm khóa so trùng —
-dùng chung cho cả `original-sound` lẫn bài hát bản quyền, bất kể slug khác nhau thế nào. Vẫn
-không đụng đến `canonicalSoundUrl()` (URL lưu/hiển thị không đổi, bài hát bản quyền vẫn giữ
-slug đọc được) — chỉ đổi cách SO SÁNH, không đổi dữ liệu lưu ra.
+dùng chung cho cả `original-sound` lẫn bài hát bản quyền, bất kể slug khác nhau thế nào.
 
-**Kiểm chứng:** `test/linkkey.test.js` (10 assertion — dựng lại đúng kịch bản thật: cùng ID,
-2 slug khác nhau hoàn toàn → phải ra cùng key).
+**Bổ sung lần 2 (2026-07-30, cùng ngày) — `canonicalSoundUrl()` rút gọn MỌI link theo ID.**
+Đoạn trên ban đầu ghi *"vẫn không đụng đến `canonicalSoundUrl()`, bài hát bản quyền vẫn giữ
+slug đọc được"* — **điều đó đã thay đổi trong cùng ngày**, ghi lại để không hiểu sai.
+
+Sự cố thật tiếp theo: cùng 1 profile chạy trên 2 máy cho ra link **định dạng khác nhau** —
+máy dev ra link ngắn chuẩn, máy ảo ra `/music/оригинальный-звук-7648030600474299169`. Nguyên
+nhân **không phải** máy/phiên bản khác nhau (người dùng đã nghi ngờ đúng hướng này và loại
+trừ): TikTok gắn nhãn "original sound" theo **ngôn ngữ của NGƯỜI ĐĂNG video**, không theo
+người xem. Feed mỗi máy phục vụ nội dung theo IP/vùng VPN khác nhau → máy ảo gặp nhiều sound
+của tác giả nước ngoài hơn nên lộ lỗi. Liệt kê nhãn theo từng thứ tiếng để rút gọn là bắt cóc
+bỏ đĩa (TikTok hỗ trợ hàng chục ngôn ngữ).
+
+Quyết định (người dùng chốt): `canonicalSoundUrl()` rút gọn **MỌI** link `/music/` về
+`/music/original-sound-<id>` **theo ID**, bỏ hoàn toàn phần chữ — độc lập tuyệt đối với ngôn
+ngữ/slug. TikTok resolve trang sound theo ID, phần chữ bị bỏ qua nên link vẫn mở đúng.
+
+⚠ **BẪY đi kèm, đã chặn:** `addSound()` trước đây gọi `isOriginalSound(url, name)` với `url`
+**đã rút gọn**. Sau thay đổi này, mọi link đều chứa `original-sound-` → bộ lọc "Chỉ lấy
+Original Sound" sẽ **mất tác dụng hoàn toàn, toàn bộ nhạc bản quyền lọt vào dữ liệu**. Đã
+sửa `addSound()` xét **link GỐC** (`rawUrl`) và ghi chú cảnh báo ở cả 2 nơi
+(`crawler.cjs`, `crawler/util.cjs`).
+
+Đánh đổi đã biết và người dùng chấp nhận: URL của nhạc bản quyền giờ cũng mang tiền tố
+`original-sound-` → **không còn nhìn URL mà biết được original hay bản quyền**; việc phân biệt
+hoàn toàn dựa vào bộ lọc lúc quét.
+
+**Bổ sung — nhãn "original sound" đa ngôn ngữ cho BỘ LỌC** (`ORIGINAL_SOUND_LABELS` trong
+`crawler/util.cjs`): sound gốc của tác giả nước ngoài trước đây bị bộ lọc **loại oan** (coi là
+nhạc bản quyền) vì chỉ nhận biết tiếng Anh + tiếng Việt — đây cũng là lý do máy ảo sản lượng
+thấp hơn dù cùng profile. Đã thêm 22 ngôn ngữ. Người dùng chốt **giữ** cơ chế lọc thật (thay
+vì bỏ lọc để nhận tất cả). ⚠ Danh sách này **best-effort, không đầy đủ**, chưa kiểm chứng
+từng chuỗi khớp đúng chuỗi TikTok thật: thiếu nhãn nào thì sound đó bị loại oan (mất sản
+lượng, **không** gây dữ liệu sai); thêm nhãn sai thì vô hại. Gặp link lạ dạng
+`/music/<chữ nước ngoài>-<id>` thì bổ sung vào danh sách. **Việc rút gọn link KHÔNG phụ
+thuộc danh sách này** — làm theo ID nên luôn đúng.
+
+**Kiểm chứng:** `test/linkkey.test.js` (12 assertion — cùng ID/khác slug ra cùng key; mọi
+ngôn ngữ rút gọn đúng, có cả link thật người dùng gửi) + `test/original-sound-filter.test.js`
+(21 assertion — nhận biết đa ngôn ngữ, nhạc bản quyền vẫn bị loại, **và test chứng minh cái
+bẫy "truyền link đã rút gọn" là thật** để không ai vô tình phá lại).
 
 ---
 
