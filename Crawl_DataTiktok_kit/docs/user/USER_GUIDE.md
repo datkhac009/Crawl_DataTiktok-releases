@@ -46,11 +46,21 @@ Chọn ở cột **Chế độ** hoặc trong ⚙️ Cài đặt.
 
 | Nút | Hành vi |
 |---|---|
-| **▶ Chạy đã chọn** | Chạy các profile đã tick |
+| **▶ Chạy đã chọn** | Chạy các profile đã tick — bật **lần lượt từng profile**, không bật ồ ạt |
 | **■ Dừng đã chọn** | Dừng **ngay lập tức** — sound trong hàng đợi chưa check sẽ bị bỏ |
 | **🕓 Dừng mềm đã chọn** | Ngừng quét ngay nhưng **check nốt** hàng đợi rồi mới dừng |
 
-Số sound sẽ mất khi dừng cứng = **cột Quét − cột Đã check**.
+**Bật lần lượt (từ 2026-07-31):** chọn nhiều profile rồi bấm ▶ thì app bật **từng profile
+một** — chờ profile vừa bật quét được sound đầu tiên mới bật profile kế tiếp (tối đa chờ 25
+giây/profile, nếu profile nào chậm thì tự bật tiếp, không đứng chờ mãi). Nút sẽ hiện
+`▶ Đang bật 2/5...` và tạm khóa cho tới khi xong lượt. Lý do: bật cùng lúc làm mấy profile
+tranh nhau CPU → có profile bị đứng, không quét được (lỗi cũ hay gặp trên VPS).
+
+Số sound sẽ mất khi dừng cứng = **cột Quét − cột Đã check**. Khoảng cách này giờ được giữ
+**nhỏ** (tối đa ~20 sound/profile): khi hàng đợi chờ đếm đầy, app **tạm dừng cuộn** và ghi rõ
+*"Tạm dừng cuộn — chờ đếm số video cho N sound đang xếp hàng..."* rồi cuộn tiếp — đây là bình
+thường, không phải treo. Muốn đếm nhanh hơn thì tăng **"Số luồng đếm video đồng thời"** trong
+⚙ (càng cao càng dễ bị TikTok chặn trang đếm — khuyến nghị giữ 2, tối đa 4–5).
 
 ## Đọc bảng profile
 

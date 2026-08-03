@@ -334,8 +334,19 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
   // Hàng đợi sound {url,name} chờ lấy số video.
   // QUEUE_MAX: đếm vốn chậm hơn quét (5-20s vs 2-3s/sound) → không giới hạn thì backlog
   // phình vô hạn qua đêm. Đầy → feedLoop tạm dừng cuộn chờ tab đếm tiêu bớt.
+  //
+  // (2026-07-31) HẠ 500 → 20. Người dùng gặp "Quét 60 mà Đã check chỉ 5" và tưởng lỗi.
+  // Không phải lỗi: bước đếm video bị ĐIỀU TIẾT TOÀN CỤC (count-throttle.cjs, mặc định 2
+  // request /music/ đồng thời cho CẢ APP) để TikTok không chặn trang đếm — nên khi chạy 5
+  // profile, tốc độ đếm chỉ bằng ~1/5 tốc độ quét. Trần 500 cho backlog phình rất to trước
+  // khi quét tự dừng lại, tạo ra khoảng cách lớn giữa 2 cột, và số chênh đó chính là số
+  // sound MẤT nếu bấm Dừng cứng.
+  // Hạ xuống 20: quét TỰ ĐIỀU TIẾT theo tốc độ đếm → 2 cột luôn đi sát nhau, mất ít dữ liệu
+  // hơn khi dừng cứng. KHÔNG làm giảm tổng sản lượng vì đếm vẫn là cổ chai (quét nhanh hơn
+  // chỉ để dồn hàng đợi rồi mất). Muốn CẢ HAI nhanh hơn thì phải nâng "Số luồng đếm video
+  // đồng thời" trong ⚙ — đánh đổi: càng cao càng dễ bị TikTok chặn trang đếm.
   const soundQueue = [];
-  const QUEUE_MAX = 500;
+  const QUEUE_MAX = 20;
   let localCount = 0;   // số sound profile NÀY tự quét được (feed) — hiển thị cột "Sound"
   let localChecked = 0; // số sound profile NÀY đã ĐI QUA bước đếm video (kể cả trả về '?')
                          // — hiển thị cột "Đã check". Tăng trong countLoop, không phải ở đây.
@@ -429,8 +440,20 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
         lastIpCheck = Date.now();   // đặt lại sau khi chờ, tránh kiểm dồn ngay vòng sau
       }
       // Queue đầy → tạm dừng cuộn, chờ tab đếm tiêu bớt (chống backlog vô hạn).
+      // (2026-07-31) BÁO RA UI: trước đây vòng chờ này im lặng hoàn toàn — cột Quét đứng yên
+      // mà không có dòng trạng thái nào, trông y như app bị treo (người dùng báo đúng hiện
+      // tượng này). Giờ nói rõ đang chờ bước đếm, có kèm số sound còn trong hàng đợi.
+      let waitedForQueue = false;
       while (soundQueue.length >= QUEUE_MAX && !stop.requested && Date.now() < deadlineAt) {
+        if (!waitedForQueue) {
+          waitedForQueue = true;
+          onStatus(profile.id, 'running',
+            `${prefix}Tạm dừng cuộn — chờ đếm số video cho ${soundQueue.length} sound đang xếp hàng...`);
+        }
         await interruptibleSleep(1000, stop);
+      }
+      if (waitedForQueue && !stop.requested) {
+        onStatus(profile.id, 'running', `${prefix}Đếm đã theo kịp — cuộn tiếp...`);
       }
       if (stop.requested || Date.now() >= deadlineAt) break;
 

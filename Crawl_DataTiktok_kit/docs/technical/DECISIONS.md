@@ -551,6 +551,65 @@ tiên giữ dòng có ghi chú tay, thứ tự xóa giảm dần, `cleanDuplicat
 
 ---
 
+## QĐ-21 — Bật profile LẦN LƯỢT (không ồ ạt) + hạ trần hàng đợi đếm để 2 cột đi sát nhau
+
+**Bối cảnh:** người dùng báo 2 việc, hóa ra liên quan nhau qua cùng một gốc là **tranh chấp
+tài nguyên khi bật nhiều profile cùng lúc**.
+
+**Vấn đề 1 — "Chạy đã chọn" bật ồ ạt, 1-2 profile ngẫu nhiên bị đứng không quét.**
+`runSelected()` trong renderer *đã có* `await startProfileById(id)` nên trông như tuần tự,
+NHƯNG `crawler.startProfile()` **trả về ngay** sau khi dựng xong — vòng crawl chạy nền, không
+await. Nên `await` đó gần như vô nghĩa: 5 profile khởi động **gần như cùng lúc**, 5 context
+cùng tải trang TikTok trên 1 Chromium dùng chung (QĐ-02) → CPU/RAM dội lên.
+
+Đây chính là **gốc rễ** của hiện tượng mà QĐ-17 *(bổ sung 2026-07-30)* và bản v0.1.49 chỉ vá
+được phần ngọn (nới trần chờ `page.evaluate` 5s → 15s trong `stuck.cjs`): profile "thua" trong
+tranh chấp CPU bị chẩn đoán nhầm là "không đọc được trạng thái trang" → kích hoạt thoát kẹt →
+tải lại trang → càng tốn CPU → vòng luẩn quẩn.
+
+**Quyết định:** bật lần lượt — chờ profile vừa bật **quét được sound đầu tiên** rồi mới bật
+profile kế tiếp (`waitProfileWarmedUp()`), với các chốt an toàn:
+- **Trần 25s/profile** (`STAGGER_MAX_MS`) — 1 profile hỏng/feed kẹt KHÔNG được chặn cả dàn.
+- Bỏ chờ ngay nếu profile đó đã dừng/lỗi (`!runningSet.has(id)`).
+- Nghỉ tối thiểu 3s (`STAGGER_MIN_MS`) kể cả khi quét được ngay.
+- Khóa nút "▶ Chạy đã chọn" + hiện tiến trình `▶ Đang bật 2/5...` trong lúc chạy lượt, tránh
+  bấm chồng gây double-start.
+- ⚠ `_runningSelectedBatch` phải khai báo ở **đầu file**, không để cạnh `runSelected`:
+  `updateRunSelectedBtnState()` đọc biến này và được gọi rất sớm lúc dựng bảng → `let` nằm
+  dưới sẽ vướng vùng chết (TDZ) → ReferenceError.
+
+**Vấn đề 2 — "Quét 60 mà Đã check chỉ 5", người dùng tưởng lỗi.** KHÔNG phải lỗi: bước đếm
+video bị **điều tiết TOÀN CỤC** (`count-throttle.cjs`, mặc định 2 request `/music/` đồng thời
+cho **cả app**, không phải mỗi profile) để TikTok không chặn trang đếm — sự cố thật đã ghi
+trong file đó: để cao thì cả 5 profile kẹt "nghỉ 300s". Chạy 5 profile → tốc độ đếm chỉ bằng
+~1/5 tốc độ quét, khoảng cách là **tất yếu về mặt toán học**, không sửa code cho bằng được.
+
+Người dùng gửi ảnh 5 profile có Quét == Đã check (705/705…) tưởng là phản bác, nhưng đọc cột
+Trạng thái thì cả 5 đang **"Đã dừng (chu kỳ)"** — hết pha Quét nên `countLoop` tiêu hết hàng
+đợi → bằng nhau. Hai quan sát nhất quán: lệch khi ĐANG quét, bằng khi NGƯNG quét. Ảnh đó thực
+ra là **bằng chứng không mất dữ liệu** (hàng đợi rồi cũng được check hết).
+
+Nhưng có 2 thứ **thật sự sai** và đã sửa:
+1. **`QUEUE_MAX` 500 → 20.** Trần 500 cho backlog phình rất to trước khi quét tự dừng lại →
+   khoảng cách 2 cột lớn, **và số chênh đó chính là số sound MẤT khi bấm Dừng cứng**
+   (USER_GUIDE: *"Số sound sẽ mất khi dừng cứng = cột Quét − cột Đã check"*). Hạ xuống 20 →
+   quét **tự điều tiết theo tốc độ đếm**, 2 cột luôn đi sát nhau, mất ít hơn hẳn.
+   **KHÔNG giảm tổng sản lượng** — đếm vẫn là cổ chai, quét nhanh hơn chỉ để dồn hàng rồi mất.
+2. **Vòng chờ khi hàng đợi đầy trước đây IM LẶNG hoàn toàn** — cột Quét đứng yên, không dòng
+   trạng thái nào, trông y như app treo (đúng hiện tượng người dùng báo). Giờ báo rõ *"Tạm
+   dừng cuộn — chờ đếm số video cho N sound đang xếp hàng..."* → *"Đếm đã theo kịp — cuộn
+   tiếp..."*.
+
+**Muốn CẢ HAI nhanh hơn** thì chỉ có một cách: nâng "Số luồng đếm video đồng thời" trong ⚙.
+Đánh đổi có thật (càng cao càng dễ bị chặn trang đếm) nên **không tự nâng mặc định** — để
+người dùng tự cân.
+
+**Cân nhắc đã LOẠI:** cho `countLoop` chạy nhiều worker song song **mỗi profile**. Vô ích với
+5 profile — trần toàn cục (2) mới là cổ chai, thêm worker không tăng thông lượng, mà mỗi
+worker cần thêm 1 tab riêng → tốn RAM. Chỉ có lợi khi chạy 1-2 profile.
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |
@@ -576,3 +635,6 @@ tiên giữ dòng có ghi chú tay, thứ tự xóa giảm dần, `cleanDuplicat
 | Xóa dòng trên Sheet theo thứ tự tăng dần (dòng nhỏ trước) trong 1 `batchUpdate` | `deleteDimension` áp dụng tuần tự lên trạng thái hiện có — xóa dòng nhỏ trước làm lệch index mọi dòng lớn hơn còn lại trong cùng lần gọi — xem QĐ-20 |
 | Tin ngay nhà cung cấp định vị IP ĐẦU TIÊN trả lời được, không đối chiếu nhà cung cấp còn lại | 1 nhà cung cấp bị chặn (Cloudflare) hoặc xếp nhầm quốc gia cho dải IP VPN/datacenter → chặn oan cả 5 profile dù VPN đúng vùng thật — xem QĐ-17 |
 | So trùng link bằng nguyên văn URL (kể cả đã lowercase) thay vì trích ID | Bài hát có bản quyền giữ nguyên slug tên bài — TikTok trả slug hơi khác nhau cho cùng 1 ID (viết hoa/thường, dấu nháy, chuẩn hóa Unicode chữ không phải Latin) → bị đẩy trùng lên Sheet — xem QĐ-10 |
+| Tin rằng `await startProfileById()` là đủ để bật profile tuần tự | `crawler.startProfile()` trả về NGAY (vòng crawl chạy nền) → 5 profile khởi động gần như cùng lúc, tranh chấp CPU làm 1-2 profile bị chẩn đoán nhầm là kẹt feed — xem QĐ-21 |
+| Để trần hàng đợi đếm quá lớn (500) | Backlog phình to → khoảng cách Quét/Đã check lớn, và đó chính là số sound MẤT khi bấm Dừng cứng; quét nhanh hơn cổ chai chỉ để dồn hàng rồi mất — xem QĐ-21 |
+| Vòng chờ/tạm dừng trong luồng crawl mà không phát status ra UI | Bảng đứng yên không một dòng thông báo → người dùng tưởng app treo, báo là bug — xem QĐ-21 |

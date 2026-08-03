@@ -16,6 +16,10 @@ const profilePhase = {};             // id -> { label, nextLabel, deadlineAt } (
 const profileLogs = {};              // id -> [dòng log]
 let logModalId = null;               // id profile đang mở log (để cập nhật trực tiếp)
 let crawlSettingsTargetIds = [];     // id(s) đang chỉnh trong modal cài đặt
+// Đang bật LẦN LƯỢT nhiều profile (xem runSelected). Khai báo ở đây, KHÔNG để cạnh
+// runSelected phía dưới: updateRunSelectedBtnState() đọc biến này và được gọi rất sớm
+// trong lúc dựng bảng → nếu `let` nằm dưới sẽ vướng vùng chết (TDZ) → ReferenceError.
+let _runningSelectedBatch = false;
 
 const DEFAULT_SETTINGS = {
   mode: 'foryou', keyword: '', headless: false, originalOnly: false,
@@ -173,6 +177,12 @@ function setRowRunning(id, running) {
 function updateRunSelectedBtnState() {
   const btn = $('runSelectedBtn');
   if (!btn) return;
+  // Đang bật LẦN LƯỢT nhiều profile → khóa nút, không cho bấm chồng (xem runSelected).
+  if (_runningSelectedBatch) {
+    btn.disabled = true;
+    btn.title = 'Đang bật lần lượt từng profile — chờ xong lượt này.';
+    return;
+  }
   const ids = getCheckedIds();
   const hasStartable = ids.some(id => !runningSet.has(id));
   btn.disabled = !hasStartable;
@@ -357,7 +367,34 @@ async function toggleProfile(id) {
 }
 
 // ── Hành động hàng loạt ──
+// BẬT LẦN LƯỢT, KHÔNG bật ồ ạt (2026-07-31). Trước đây vòng lặp có `await` nhưng
+// `crawler.startProfile()` trả về NGAY sau khi dựng xong (vòng crawl chạy nền, không await)
+// → 5 profile thực chất khởi động gần như CÙNG LÚC: 5 context cùng tải trang TikTok trên 1
+// Chromium dùng chung (QĐ-02) làm CPU/RAM dội lên, sinh ra đúng hiện tượng "1-2 profile
+// ngẫu nhiên bị đứng, không quét" mà bản v0.1.49 chỉ vá được phần ngọn (nới trần chờ
+// page.evaluate lên 15s). Giờ chờ profile vừa bật QUÉT ĐƯỢC sound đầu tiên rồi mới bật
+// profile kế tiếp — có trần thời gian để 1 profile hỏng không chặn cả dàn.
+const STAGGER_MIN_MS = 3000;    // luôn nghỉ tối thiểu, tránh 2 profile chạm feed cùng lúc
+const STAGGER_MAX_MS = 25000;   // trần chờ: quá hạn thì bật tiếp, không kẹt vô hạn
+
+// Chờ profile `id` "ấm máy": quét được ≥1 sound, hoặc đã dừng/lỗi, hoặc quá trần.
+async function waitProfileWarmedUp(id) {
+  const t0 = Date.now();
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  while (Date.now() - t0 < STAGGER_MAX_MS) {
+    await sleep(500);
+    if (!runningSet.has(id)) return 'stopped';            // dừng/lỗi → bật tiếp ngay
+    if ((profileScanned[id] || 0) > 0) {                  // đã quét được → xong
+      const left = STAGGER_MIN_MS - (Date.now() - t0);
+      if (left > 0) await sleep(left);
+      return 'scanning';
+    }
+  }
+  return 'timeout';
+}
+
 async function runSelected() {
+  if (_runningSelectedBatch) return;   // đang bật lần lượt — chặn bấm chồng
   const ids = getCheckedIds();
   if (!ids.length) return toast('Tick chọn ít nhất 1 profile.', 'err');
   // Cảnh báo chạy dài: nhiều profile ở chế độ HIỆN render video liên tục → ngốn RAM/CPU
@@ -369,8 +406,28 @@ async function runSelected() {
   if (visibleCount >= 3) {
     toast(`⚠ ${visibleCount} profile chạy chế độ HIỆN — chạy lâu/qua đêm nên bật "Chạy ẩn" trong ⚙ để nhẹ máy.`, 'err');
   }
-  for (const id of ids) {
-    if (!runningSet.has(id)) await startProfileById(id); // tuần tự để seed Sheet chỉ đọc 1 lần
+
+  const btn = $('runSelectedBtn');
+  const btnText = btn ? btn.textContent : '';
+  _runningSelectedBatch = true;
+  updateRunSelectedBtnState();
+  try {
+    const todo = ids.filter(id => !runningSet.has(id));
+    for (let i = 0; i < todo.length; i++) {
+      const id = todo[i];
+      if (runningSet.has(id)) continue;   // vừa được bật bằng đường khác
+      if (btn && todo.length > 1) btn.textContent = `▶ Đang bật ${i + 1}/${todo.length}...`;
+      await startProfileById(id);         // tuần tự để seed Sheet chỉ đọc 1 lần
+      if (i === todo.length - 1) break;   // profile cuối → không cần chờ thêm
+      if (!runningSet.has(id)) continue;  // bật thất bại → sang profile kế tiếp ngay
+      $('crawlStatusMsg').textContent =
+        `Đang bật lần lượt ${i + 1}/${todo.length} — chờ "${nameOf(id)}" quét được rồi mới bật profile kế tiếp...`;
+      await waitProfileWarmedUp(id);
+    }
+  } finally {
+    _runningSelectedBatch = false;
+    if (btn) btn.textContent = btnText;
+    updateRunSelectedBtnState();
   }
 }
 
