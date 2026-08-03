@@ -42,6 +42,10 @@ contextBridge.exposeInMainWorld('api', {
   sheetsScanDuplicates: () => ipcRenderer.invoke('sheets-scan-duplicates'),
   sheetsCleanDuplicates: () => ipcRenderer.invoke('sheets-clean-duplicates'),
 
+  // Lịch sử thu thập theo ngày
+  historyGet: (limit) => ipcRenderer.invoke('history-get', limit),
+  historyClear: () => ipcRenderer.invoke('history-clear'),
+
   // Storage
   storeGet: (keys) => ipcRenderer.invoke('store-get', keys),
   storeSet: (data) => ipcRenderer.invoke('store-set', data),

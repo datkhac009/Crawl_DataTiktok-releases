@@ -42,6 +42,7 @@ sound TikTok. Mỗi profile = một tài khoản TikTok, chạy độc lập, c�
 | `sheets.cjs` | Đẩy dữ liệu lên Google Sheets, chống trùng liên máy |
 | `sheet-lock.cjs` | **Khóa liên máy**: chặn 1 profile chạy trên 2+ máy, qua tab `_locks` **ẩn** trên Sheet |
 | `profiles.cjs` | Thêm/sửa/xóa/import profile, ánh xạ id → thư mục |
+| `history.cjs` | **Lịch sử theo ngày**: đếm sound thu được, ghi `config/history.json` (ghi trễ + atomic) |
 | `paths.cjs` | Đường dẫn dữ liệu (cạnh file .exe khi đóng gói) |
 | `updater.cjs` | Tải Firefox khi thiếu. **Tự cập nhật đang TẮT** — xem [QĐ-18](DECISIONS.md) |
 

@@ -861,6 +861,135 @@ async function cleanSheetDuplicates() {
   }
 }
 
+// ══════════════════════════════════════════
+// LỊCH SỬ THU THẬP THEO NGÀY
+// ══════════════════════════════════════════
+// Số liệu do main process ghi vào config/history.json mỗi khi có 1 sound vào bảng
+// (xem src/history.cjs). Ở đây chỉ đọc ra và hiển thị.
+function _fmtDate(iso) {
+  const [y, m, d] = String(iso).split('-');
+  return `${d}/${m}/${y}`;
+}
+
+// Trạng thái rỗng / đang tải / lỗi — chiếm cả bảng, căn giữa cho gọn.
+function _historyPlaceholder(icon, text) {
+  $('historySummary').innerHTML = '';
+  // Ẩn cả khung tổng kết: để trống nó vẫn chiếm một dải trắng giữa tiêu đề và bảng.
+  $('historySummarySection').style.display = 'none';
+  const body = $('historyBody');
+  body.innerHTML = '';
+  const tr = document.createElement('tr');
+  const td = document.createElement('td');
+  td.colSpan = 3;
+  td.className = 'history-empty';
+  const i = document.createElement('span');
+  i.className = 'history-empty-icon';
+  i.textContent = icon;
+  td.appendChild(i);
+  td.appendChild(document.createTextNode(text));
+  tr.appendChild(td);
+  body.appendChild(tr);
+}
+
+function renderHistory(days) {
+  const body = $('historyBody');
+  const today = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const todayKey = `${today.getFullYear()}-${p(today.getMonth() + 1)}-${p(today.getDate())}`;
+
+  if (!days.length) {
+    _historyPlaceholder('📭', 'Chưa có dữ liệu — số liệu sẽ được ghi lại từ lần chạy tiếp theo.');
+    return;
+  }
+
+  body.innerHTML = '';
+  for (const d of days) {
+    const tr = document.createElement('tr');
+    const isToday = d.date === todayKey;
+    if (isToday) tr.classList.add('is-today');
+
+    const tdDate = document.createElement('td');
+    tdDate.className = 'history-date';
+    tdDate.appendChild(document.createTextNode(_fmtDate(d.date)));
+    if (isToday) {
+      const tag = document.createElement('span');
+      tag.className = 'history-today-tag';
+      tag.textContent = 'hôm nay';
+      tdDate.appendChild(tag);
+    }
+
+    const tdNum = document.createElement('td');
+    tdNum.className = 'history-num';
+    tdNum.textContent = d.valid.toLocaleString('vi-VN');
+
+    const tdBy = document.createElement('td');
+    tdBy.className = 'history-profiles';
+    // Sắp giảm dần để profile năng suất nhất hiện trước.
+    const pairs = Object.entries(d.byProfile || {}).sort((a, b) => b[1] - a[1]);
+    tdBy.textContent = pairs.length ? pairs.map(([n, v]) => `${n}: ${v}`).join('  ·  ') : '—';
+    if (pairs.length) tdBy.title = pairs.map(([n, v]) => `${n}: ${v}`).join('\n');
+
+    tr.append(tdDate, tdNum, tdBy);
+    body.appendChild(tr);
+  }
+
+  // Tổng kết nhanh: hôm nay / 7 ngày / tổng đang lưu + trung bình mỗi ngày CÓ CHẠY (chia cho
+  // số ngày thực sự thu được sound, không chia đều cả ngày nghỉ — nếu không con số vô nghĩa).
+  const total = days.reduce((s, d) => s + d.valid, 0);
+  const todayVal = (days.find(d => d.date === todayKey) || { valid: 0 }).valid;
+  const last7 = days.slice(0, 7).reduce((s, d) => s + d.valid, 0);
+  const activeDays = days.filter(d => d.valid > 0).length;
+  const avg = activeDays ? Math.round(total / activeDays) : 0;
+
+  $('historySummarySection').style.display = '';
+  const sum = $('historySummary');
+  sum.innerHTML = '';
+  const cards = [
+    ['Hôm nay', todayVal, 'is-today'],
+    ['7 ngày gần nhất', last7, ''],
+    [`Tổng ${days.length} ngày`, total, 'is-total'],
+    ['TB ngày có chạy', avg, ''],
+  ];
+  for (const [label, val, cls] of cards) {
+    const box = document.createElement('div');
+    box.className = 'hstat' + (cls ? ' ' + cls : '');
+    const l = document.createElement('div');
+    l.className = 'hstat-label';
+    l.textContent = label;
+    const v = document.createElement('div');
+    v.className = 'hstat-value';
+    v.textContent = val.toLocaleString('vi-VN');
+    box.append(l, v);
+    sum.appendChild(box);
+  }
+}
+
+async function openHistoryModal() {
+  _historyPlaceholder('⏳', 'Đang đọc lịch sử...');
+  $('historyModal').classList.add('open');
+  try {
+    const r = await api.historyGet(60);
+    if (!r.ok) { _historyPlaceholder('⚠', 'Lỗi đọc lịch sử: ' + (r.msg || '')); return; }
+    renderHistory(r.days || []);
+  } catch (e) {
+    _historyPlaceholder('⚠', 'Lỗi đọc lịch sử: ' + e.message);
+  }
+}
+
+function initHistory() {
+  $('historyBtn').addEventListener('click', openHistoryModal);
+  $('historyModalClose').addEventListener('click', () => $('historyModal').classList.remove('open'));
+  $('historyCloseBtn').addEventListener('click', () => $('historyModal').classList.remove('open'));
+  $('historyClearBtn').addEventListener('click', async () => {
+    // Xóa dữ liệu THẬT, không hoàn tác được → bắt buộc xác nhận (cùng nguyên tắc với
+    // nút "Dọn trùng trên Sheet").
+    if (!confirm('Xóa TOÀN BỘ số liệu lịch sử trên máy này?\n\nKhông thể hoàn tác.')) return;
+    const r = await api.historyClear();
+    if (r && r.ok) { toast('Đã xóa lịch sử.', 'ok'); renderHistory([]); }
+    else toast('Xóa lịch sử thất bại: ' + ((r && r.msg) || ''), 'err');
+  });
+}
+
 function initSheets() {
   $('sheetsBtn').addEventListener('click', async () => {
     await loadSheetsConfig();
@@ -1144,6 +1273,7 @@ async function init() {
 
   initCrawlEvents();
   initSheets();
+  initHistory();
   initUpdater();
 }
 

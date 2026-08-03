@@ -610,6 +610,98 @@ worker cần thêm 1 tab riêng → tốn RAM. Chỉ có lợi khi chạy 1-2 pr
 
 ---
 
+## QĐ-22 — Kết luận "chế độ KHÁCH" phải ỔN ĐỊNH mới được tin
+
+**Sự cố thật:** nút **🔑 Kiểm tra đăng nhập** báo *"Đã đăng nhập"*, nhưng bấm **▶ Chạy** thì
+app báo *"Profile đang ở chế độ KHÁCH"* và dừng hẳn. Dừng rồi chạy lại **~2 lần là bình
+thường**. Cùng một profile, cùng một file session — hai luồng cho hai kết luận khác nhau.
+
+**Nguyên nhân — BẤT ĐỐI XỨNG giữa 2 luồng** (cả hai dùng chung `_loadStorageState()` nên
+KHÔNG phải do file session khác nhau):
+
+| Luồng | Cách đọc trang | Kết quả |
+|---|---|---|
+| `verifyProfileLogin()` (nút 🔑) | Đọc lại tối đa **12 lần × 2s = 24s** | Kiên nhẫn, ra đúng |
+| Luồng crawl (`checkLoginState`) | Đọc **MỘT LẦN DUY NHẤT** rồi chốt luôn | Gặp đúng nhịp là sai |
+
+Chú thích sẵn có trong `verifyProfileLogin()` chính là bằng chứng bài học này đã từng được đo:
+*"kiểm tra sớm quá sẽ ra 'unknown' (đã gặp: 9s chưa đủ, 20s đủ)"* — nhưng luồng crawl **không
+được áp dụng cùng mức kiên nhẫn**. Trang TikTok trong lúc hydrate có thể hiện nút `Log in`
+(`[data-e2e="top-login-button"]`) **thoáng qua** trước khi cookie được áp → đọc trúng nhịp đó
+là kết luận KHÁCH và **dừng cả profile**. Chi tiết *"chạy lại 2 lần thì được"* khớp chính xác
+với lỗi phụ thuộc thời điểm: lần sau trang đã có cache, hydrate nhanh hơn nên không kịp lộ nút.
+
+**Quyết định:** thêm `checkLoginStateStable()` — **tin ngay tin TỐT, bắt tin XẤU phải ổn định**:
+- Thấy `logged-in` → tin **ngay** (nav đã dựng + không có nút Log in = chắc chắn).
+- Thấy `guest` → **chưa** kết luận; phải **3 lần đọc LIÊN TIẾP** (cách nhau 2s, ~4-6s) cùng nói
+  guest mới chốt. Có `unknown` xen vào thì **đếm lại từ đầu**.
+- Hết trần 20s mà chưa chắc → `unknown` → **KHÔNG chặn** crawl.
+- Nhận `stop` và thoát ngay khi người dùng bấm Dừng — nếu không thì nút Dừng phản hồi chậm
+  tới 20s (đã bắt được lỗi này ngay lúc triển khai, xem test #7/#8).
+
+Đây đúng triết lý đã dùng ở **ip-guard** (2 nhà cung cấp phải đồng thuận mới chốt "lệch vùng")
+và **sheet-lock** (chỉ chặn khi CHẮC CHẮN). Áp dụng cho **cả 3** điểm quyết định: kiểm lúc bắt
+đầu (chế độ thường + pha Quét của chu kỳ) và `makeLoginWatcher` giữa lúc chạy — cắt một phiên
+đang chạy tốt hàng giờ chỉ vì 1 lần đọc trúng nhịp hydrate là quá đắt.
+
+**Giả thuyết phụ CHƯA kiểm chứng:** khi bật *"Không tải ảnh/video (giảm RAM)"*, luồng crawl
+gắn `resource-blocker` **trước** khi mở trang, còn nút 🔑 thì **không** chặn gì. Chính
+`resource-blocker.cjs` đã ghi cảnh báo *"chặn media làm TikTok đổi hành vi"*, nên trang thiếu
+ảnh/font có thể hydrate khác đi và dễ lộ nút Log in hơn. Nếu sau bản vá này vẫn còn báo khách
+oan → thử tắt *"Không tải ảnh/video"* để xác nhận, rồi cân nhắc chỉ gắn blocker **sau** khi
+kiểm đăng nhập xong.
+
+**Kiểm chứng:** `test/session-watch.test.js` (12 assertion — dựng lại đúng kịch bản nút Log in
+nháy 1-2 nhịp rồi mất → phải ra `logged-in`; khách thật vẫn chốt `guest`; tôn trọng cờ Dừng).
+`test/crawl-modes.test.js` kịch bản GUEST đã nới `runMs` 600ms → 9000ms cho khớp ngưỡng mới
+(vẫn báo đúng lỗi chế độ khách).
+
+---
+
+## QĐ-23 — Lịch sử thu thập theo ngày: tự ghi vào `config/history.json`, không gộp liên máy
+
+**Vấn đề:** người dùng muốn biết "hôm nay/mỗi ngày thu được bao nhiêu sound". **Không thể đếm
+lại từ Google Sheet** vì Sheet KHÔNG có cột thời gian — muốn biết thì phải tự ghi ngay lúc thu.
+
+**Quyết định:** `src/history.cjs` + nút **📊 Lịch sử** (modal bảng theo ngày).
+
+| Chọn | Lý do |
+|---|---|
+| Đếm **cột "Hợp lệ"** (dòng vào bảng dữ liệu) | Đúng nghĩa "thu được". Không đếm số lướt, không đếm sound bị lọc bỏ |
+| Ghi ở `config/history.json` **cạnh .exe** | Cùng quy ước `config/profiles.json` → chép máy/sao lưu mang theo được, và **không mất khi cập nhật `.exe`** (chỉ thay 1 file trong cùng thư mục). electron-store nằm sâu trong AppData, khó sao lưu/đối chiếu |
+| Móc ở callback `onData` của `crawler.startProfile` (main.js) | Đúng một chỗ mọi sound hợp lệ đi qua. KHÔNG móc ở chỗ đẩy Sheet: người dùng có thể tắt đẩy Sheet nhưng vẫn muốn biết sản lượng |
+| Ghi **trễ 5s** + **atomic** (tạm → rename) | Một đêm 5 profile thu vài trăm sound, ghi đĩa mỗi sound là vô ích. Atomic để app bị giết giữa lúc ghi không để lại file cắt cụt (như QĐ-04) |
+| `flush()` ở `window-all-closed` **và** `before-quit` | Đóng app bằng đường nào cũng không mất số liệu đang chờ trong RAM |
+| Ngày theo **giờ máy**, không UTC | Người dùng nghĩ theo ngày ở chỗ mình; các VPS đã đặt theo múi giờ vận hành |
+| Giữ **400 ngày** rồi tự dọn | Hơn 1 năm để so cùng kỳ, file vẫn rất nhỏ (vài trăm byte/ngày) |
+
+**⛔ RÀNG BUỘC BẮT BUỘC — lịch sử CHỈ lưu trong app, TUYỆT ĐỐI không đẩy lên Google Sheet**
+(người dùng chốt 2026-08-03): không thêm tab, không thêm cột, không gọi Google API. Lý do:
+(a) người dùng đã phản đối việc app tự thêm tab lạ trên Sheet của họ — QĐ-19 đã phải chuyển
+tab `_locks` sang **ẩn** vì việc này; (b) tải Google API đang chính là điểm nghẽn (QĐ-20:
+Sheet >130k dòng gây timeout thật). Ràng buộc được **thi hành bằng thiết kế**: `history.cjs`
+chỉ `require` `fs` / `path` / `paths.cjs` — thấy ai thêm `google-api.cjs` hay `sheets.cjs`
+vào file đó là SAI.
+
+**Hệ quả đã chấp nhận — KHÔNG gộp liên máy:** số liệu là của riêng từng máy. Muốn tổng cả dàn
+6 VPS thì cộng tay từng máy.
+
+**Bài học layout bắt được nhờ chụp ảnh kiểm tra (không đoán mắt thường):** modal ban đầu dùng
+lại `.result-table` của bảng dữ liệu chính — bảng đó có `min-width: 720px` (cố ý, cho 5 cột)
+nên nhồi vào modal 520px là **ép sinh thanh cuộn ngang**, bó hết nội dung. Đã tách bộ style
+riêng (`.history-table`/`.history-wrap`, modal 780px, `table-layout: fixed`). Dựng dữ liệu mẫu
+9 ngày rồi **render thật trong Chromium + đo `scrollWidth - clientWidth`** ở 2 khổ (1180/720px)
+mới phát hiện thêm 2 lỗi mà đọc code không thấy:
+- `-webkit-line-clamp: 2` **cắt không sạch** — hở một dải của dòng bị cắt, trông như lỗi hiển
+  thị (chiều cao dòng làm tròn lẻ). Đổi sang **1 dòng + ellipsis**, chi tiết xem bằng `title`.
+- Trạng thái rỗng còn **dải trắng** vì khung tổng kết rỗng vẫn chiếm chỗ → ẩn hẳn khi rỗng.
+
+**Kiểm chứng:** `test/history.test.js` (20 assertion — đếm đúng/tách theo profile, ghi trễ,
+mở lại app không mất số cũ, **file hỏng không làm chết app**, dọn ngày quá hạn không xóa mất
+hôm nay, tên profile rỗng gom vào "(không rõ)"). `npm run test:ui` vẫn 0/5 khổ lỗi layout.
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |
@@ -638,3 +730,7 @@ worker cần thêm 1 tab riêng → tốn RAM. Chỉ có lợi khi chạy 1-2 pr
 | Tin rằng `await startProfileById()` là đủ để bật profile tuần tự | `crawler.startProfile()` trả về NGAY (vòng crawl chạy nền) → 5 profile khởi động gần như cùng lúc, tranh chấp CPU làm 1-2 profile bị chẩn đoán nhầm là kẹt feed — xem QĐ-21 |
 | Để trần hàng đợi đếm quá lớn (500) | Backlog phình to → khoảng cách Quét/Đã check lớn, và đó chính là số sound MẤT khi bấm Dừng cứng; quét nhanh hơn cổ chai chỉ để dồn hàng rồi mất — xem QĐ-21 |
 | Vòng chờ/tạm dừng trong luồng crawl mà không phát status ra UI | Bảng đứng yên không một dòng thông báo → người dùng tưởng app treo, báo là bug — xem QĐ-21 |
+| Kết luận "chế độ KHÁCH" từ MỘT lần đọc DOM rồi dừng cả profile | Trang TikTok lúc hydrate hiện nút Log in thoáng qua → báo khách OAN, dừng oan; nút 🔑 đọc lại 24s nên không bị, gây mâu thuẫn "🔑 nói đăng nhập mà ▶ nói khách" — xem QĐ-22 |
+| Thêm vòng chờ/đọc lại nhiều lần mà không nhận cờ `stop` | Bấm Dừng phải chờ hết cửa sổ (tới 20s) mới phản hồi — xem QĐ-22 |
+| Dùng lại `.result-table` (min-width 720px) cho bảng trong modal hẹp | Ép sinh thanh cuộn ngang, bó hết nội dung — modal cần bộ style riêng, xem QĐ-23 |
+| Tin layout "nhìn code thấy ổn" mà không render thật để đo | Bỏ sót cuộn ngang, `-webkit-line-clamp` cắt hở, dải trắng ở trạng thái rỗng — chụp ảnh + đo `scrollWidth-clientWidth` mới thấy, xem QĐ-23 |

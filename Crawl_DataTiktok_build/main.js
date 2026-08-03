@@ -14,6 +14,7 @@ const browser = require('./src/browser.cjs');
 const crawler = require('./src/crawler.cjs');
 const sheets = require('./src/sheets.cjs');
 const sheetLock = require('./src/sheet-lock.cjs');
+const history = require('./src/history.cjs');
 const { withDeadline } = require('./src/google-api.cjs');
 const updater = require('./src/updater.cjs');
 const { getLogsDir } = require('./src/paths.cjs');
@@ -334,6 +335,10 @@ ipcMain.handle('profile-start', async (_e, params) => {
     { ...params, seedUrls },
     (data) => {
       send('crawl-data', data);
+      // Lịch sử theo ngày: đếm ĐÚNG số sound thực sự thu được (dòng vào bảng = cột "Hợp lệ").
+      // Ghi ở đây chứ không ở chỗ đẩy Sheet: người dùng có thể tắt đẩy Sheet nhưng vẫn muốn
+      // biết sản lượng, và dòng nào vào bảng mới là "thu được".
+      try { history.recordSound(data.profileName); } catch (_) {}
       // Đẩy lên Sheet: cột Tên sound | Link | Số video | Profile.
       if (sheets.isEnabled()) sheets.enqueue([data.name || '', data.url || '', data.count ?? '', data.profileName || '']);
     },
@@ -420,6 +425,16 @@ ipcMain.handle('sheets-clean-duplicates', async () => {
   const r = _sheetsCfgOrErr();
   if (r.err) return r.err;
   try { return await sheets.cleanDuplicates(r.cfg.spreadsheetId, r.cfg.tab || 'Data', r.sa); }
+  catch (e) { return { ok: false, msg: e.message }; }
+});
+
+// ── Lịch sử thu thập theo ngày ──
+ipcMain.handle('history-get', (_e, limit) => {
+  try { return { ok: true, days: history.getDays({ limit: limit || 60 }) }; }
+  catch (e) { return { ok: false, msg: e.message, days: [] }; }
+});
+ipcMain.handle('history-clear', () => {
+  try { history.clearAll(); return { ok: true }; }
   catch (e) { return { ok: false, msg: e.message }; }
 });
 
@@ -620,7 +635,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   browser.closeAll().catch(() => {});
+  history.flush();   // ghi nốt lịch sử đang chờ (debounce 5s) — đóng app không mất số liệu
   if (process.platform !== 'darwin') app.quit();
 });
+
+// Thoát bằng đường khác (Alt+F4 lúc còn cửa sổ, lệnh quit) cũng phải ghi nốt.
+app.on('before-quit', () => { history.flush(); });
 
 app.on('activate', () => { if (mainWindow === null) createWindow(); });

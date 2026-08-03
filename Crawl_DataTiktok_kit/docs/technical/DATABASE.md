@@ -7,7 +7,8 @@
 <thư mục chứa .exe>/
 ├── Crawl_DataTiktok.exe
 ├── config/
-│   └── profiles.json          # danh sách profile: id, tên, tên thư mục
+│   ├── profiles.json          # danh sách profile: id, tên, tên thư mục
+│   └── history.json           # lịch sử thu thập theo ngày (giữ 400 ngày)
 ├── logs/
 │   ├── crawler_<thời gian>.log   # log chạy (tự xóa sau 7 ngày)
 │   └── crash_<thời gian>.log     # stack trace khi lỗi nghiêm trọng
@@ -65,6 +66,25 @@ Nên chép kèm khi sao lưu profile.
 `{ host, pid, beat }` — máy nào đang dùng profile, cập nhật nhịp tim mỗi 30 giây. Quá 3 phút
 không có nhịp tim thì coi như đã tắt. Dùng để **cảnh báo** (không chặn) khi phát hiện profile
 đang chạy ở nơi khác — chạy trùng là nguyên nhân số 1 khiến TikTok hủy phiên.
+
+### `config/history.json` — lịch sử thu thập theo ngày
+
+```json
+{ "days": {
+    "2026-08-03": { "valid": 230,
+                    "byProfile": { "rsgweakde533@hotmail.com(UK)": 93, "nytshoo083@hotmail.com(UK)": 92 } }
+} }
+```
+
+`valid` = số sound **thực sự thu được** trong ngày (bằng cột **Hợp lệ** — đã qua bộ lọc số
+video và vào bảng dữ liệu). Ngày tính theo **giờ máy**, không phải UTC.
+
+Ghi **có trễ 5 giây** (gom trong RAM rồi mới ghi — một đêm 5 profile thu vài trăm sound, ghi
+đĩa mỗi sound là vô ích) và **ghi atomic** (file tạm → đổi tên) như `session.state.json`.
+Giữ 400 ngày rồi tự dọn ngày cũ nhất. File hỏng thì đọc lại từ 0, không làm chết app.
+
+⚠️ Số liệu **của riêng từng máy** — không gộp liên máy (gộp sẽ phải ghi thêm lên Google Sheet,
+tăng tải API). Xem QĐ-23.
 
 ### `fingerprint.json`
 

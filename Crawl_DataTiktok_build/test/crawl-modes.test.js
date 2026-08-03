@@ -209,9 +209,11 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
     mode: 'foryou', sounds: [null], runMs: 1500,
   }));
 
+  // runMs phai DU DAI: tu 2026-07-31 ket luan 'guest' can 3 lan doc LIEN TIEP cach nhau 2s
+  // (~4-6s) de khong bao khach oan luc trang dang hydrate — xem session-watch.cjs.
   results.push(await run({
     name: 'GUEST: feed hien nhung dang che do khach -> phai dung ngay',
-    mode: 'foryou', sounds: [SOUND_A], loginState: 'guest', runMs: 600,
+    mode: 'foryou', sounds: [SOUND_A], loginState: 'guest', runMs: 9000,
   }));
 
   // ── 2 case KIEM CHUNG KHAC BIET HANH VI giua cac che do (de hoi quy nhat khi gop) ──

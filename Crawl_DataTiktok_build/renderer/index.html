@@ -13,6 +13,7 @@
       <span class="title">TikTok Crawler</span>
     </div>
     <div class="topbar-right">
+      <button class="btn btn-sm" id="historyBtn" title="Xem sản lượng thu thập theo từng ngày (lưu trên máy này)">📊 Lịch sử</button>
       <button class="btn btn-sm" id="sheetsBtn">☁ Google Sheet</button>
       <button class="btn btn-sm" id="updateBtn" title="Kiểm tra & cài đặt bản cập nhật">⬆ Cập nhật</button>
       <button class="btn btn-sm" id="reloadBtn" title="Nạp lại giao diện (chỉ bản dev)" hidden>🔄 Reload</button>
@@ -123,6 +124,47 @@
 
       <div class="modal-foot">
         <button class="btn btn-primary" id="profileModalDone">Xong</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Lịch sử thu thập theo ngày -->
+  <div class="modal" id="historyModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>📊 Lịch sử thu thập</h3>
+        <button class="btn-icon" id="historyModalClose">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="section" id="historySummarySection">
+          <div class="history-summary" id="historySummary"></div>
+        </div>
+
+        <div class="section">
+          <div class="history-wrap">
+            <table class="history-table" id="historyTable">
+              <thead>
+                <tr>
+                  <th style="width:170px">Ngày</th>
+                  <th style="width:120px; text-align:right">Sound thu được</th>
+                  <th>Theo profile</th>
+                </tr>
+              </thead>
+              <tbody id="historyBody"></tbody>
+            </table>
+          </div>
+          <div class="section-desc" style="margin-top:8px">
+            Đếm số sound <b>thực sự thu được</b> (bằng cột <b>Hợp lệ</b> — đã qua bộ lọc số video
+            và vào bảng dữ liệu). Số liệu lưu <b>trên máy này</b> tại <code>config/history.json</code>,
+            không gộp sound do máy khác thu.
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn" id="historyClearBtn" title="Xóa toàn bộ số liệu lịch sử trên máy này (không thể hoàn tác)">🗑 Xóa lịch sử</button>
+        <button class="btn btn-primary" id="historyCloseBtn">Đóng</button>
       </div>
     </div>
   </div>

@@ -14,6 +14,7 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 | `crawl-data` | nhận | Một sound đã qua bộ lọc → thêm dòng vào bảng |
 | `crawl-status` | nhận | Trạng thái profile. Có 3 loại đặc biệt: `counts` (số Quét/Đã check), `phase` (mốc chuyển pha để đếm ngược), `sheet-error` |
 | `sheets-*` | gọi | Đọc/ghi cấu hình, test kết nối, đẩy bù thủ công |
+| `history-get`, `history-clear` | gọi | Đọc/xóa lịch sử thu thập theo ngày (`config/history.json`) |
 | `check-updates`, `download-and-update` | gọi | Kiểm tra & cài bản mới |
 | `download-progress`, `update-available` | nhận | Tiến trình tải bản cập nhật |
 

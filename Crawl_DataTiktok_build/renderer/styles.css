@@ -433,3 +433,91 @@ textarea.input { resize: vertical; font-family: 'Consolas', monospace; font-size
   .data-table td, .result-table td { padding: 5px 8px; }
   .log-box { max-height: 40vh; }
 }
+
+/* ══════════ Modal Lịch sử thu thập ══════════ */
+/* Rộng hơn modal mặc định (520px): bảng có 3 cột, trong đó cột "Theo profile" là văn bản
+   dài (tên profile là email + số) nên 520px bị bó, sinh thanh cuộn ngang rất xấu. */
+#historyModal .modal-box { width: 780px; }
+
+/* KHÔNG dùng .result-wrap/.result-table ở đây: .result-table có min-width:720px (cho bảng dữ
+   liệu 5 cột ngoài trang chính) — nhồi vào modal hẹp là ép cuộn ngang. Bảng này tự co giãn. */
+.history-wrap {
+  border: 1px solid var(--border); border-radius: 10px;
+  overflow: auto;                /* chỉ cuộn DỌC khi nhiều ngày; ngang thì không cần */
+  max-height: 52vh;
+}
+.history-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+  table-layout: fixed;           /* giữ cột số hẹp, dồn chỗ cho cột "Theo profile" */
+}
+.history-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--panel-2); color: var(--text-muted);
+  text-align: left; padding: 9px 12px; font-weight: 600; white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+.history-table td {
+  padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle;
+}
+.history-table tbody tr:last-child td { border-bottom: 0; }
+.history-table tbody tr:nth-child(even) { background: rgba(255,255,255,.015); }
+.history-table tbody tr:hover { background: var(--panel-2); }
+
+.history-date { white-space: nowrap; color: var(--text); }
+.history-num {
+  text-align: right; font-weight: 700; color: var(--ok);
+  font-variant-numeric: tabular-nums;   /* các con số thẳng cột, dễ so sánh nhanh */
+  font-size: 14px;
+}
+/* Kẹp 2 dòng: 5 profile với tên là email dài sẽ đội hàng lên 3-5 dòng, khổ hẹp chỉ còn thấy
+   được 3 ngày. Kẹp lại cho mọi hàng cao đều nhau và thấy được nhiều ngày; chi tiết đầy đủ
+   xem bằng cách trỏ chuột vào (thuộc tính title đặt trong renderer.js). */
+/* MỘT dòng + ellipsis, KHÔNG dùng -webkit-line-clamp 2 dòng: đã thử và chụp ảnh kiểm tra thì
+   clamp cắt không sạch (hở một dải của dòng bị cắt, trông như lỗi hiển thị) vì chiều cao dòng
+   bị làm tròn lẻ. Một dòng thì mọi hàng cao đều nhau, thấy được nhiều ngày hơn; danh sách
+   đầy đủ theo profile xem bằng cách TRỎ CHUỘT vào (title đặt trong renderer.js). */
+.history-profiles {
+  font-size: 12px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: default;
+}
+
+/* Dòng HÔM NAY: gạch màu bên trái + nền nhạt để tìm thấy ngay giữa danh sách dài. */
+.history-table tbody tr.is-today td { background: rgba(254,44,85,.07); }
+.history-table tbody tr.is-today td:first-child {
+  box-shadow: inset 3px 0 0 var(--primary);
+  font-weight: 700;
+}
+.history-today-tag {
+  display: inline-block; margin-left: 6px; padding: 1px 7px;
+  border-radius: 20px; font-size: 11px; font-weight: 600;
+  background: var(--primary); color: #fff; vertical-align: middle;
+}
+
+/* ── Ô tổng kết: thẻ số liệu thay vì mấy viên badge cho dễ đọc ── */
+.history-summary {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+.history-summary:empty { display: none; }
+.hstat {
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px;
+}
+.hstat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .3px; }
+.hstat-value { font-size: 22px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.hstat.is-today .hstat-value { color: var(--primary-hover); }
+.hstat.is-total .hstat-value { color: var(--ok); }
+
+/* Trạng thái rỗng / đang tải / lỗi — căn giữa cho gọn thay vì 1 dòng chữ lệch góc. */
+.history-empty {
+  padding: 34px 18px; text-align: center; color: var(--text-dim); font-size: 13px; line-height: 1.6;
+}
+.history-empty .history-empty-icon { font-size: 30px; display: block; margin-bottom: 8px; opacity: .55; }
+
+/* Cửa sổ hẹp: bỏ cột "Theo profile" ra khỏi hàng, xếp xuống dưới cho khỏi bó. */
+@media (max-width: 700px) {
+  #historyModal .modal-box { width: 96vw; }
+  .history-summary { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+  .hstat-value { font-size: 18px; }
+}

@@ -48,7 +48,7 @@ const {
 } = require('./crawler/count-throttle.cjs');
 const { readActiveSound, readVideoCount, scrollFeed, recyclePage } = require('./crawler/page-read.cjs');
 const { makeFeedTracker, handleStuck } = require('./crawler/stuck.cjs');
-const { checkLoginState, makeLoginWatcher } = require('./crawler/session-watch.cjs');
+const { checkLoginStateStable, makeLoginWatcher } = require('./crawler/session-watch.cjs');
 
 const TIKTOK_HOME = 'https://www.tiktok.com/';
 
@@ -428,7 +428,8 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
     if (startMsg) onStatus(profile.id, 'running', startMsg);
     let scrolls = 0;
     const tracker = makeFeedTracker();
-    const watchLogin = enableWatchLogin ? makeLoginWatcher(page, profilePath) : null;
+    // Truyền `stop` để lần đọc lại phiên (tới 20s) không làm nút Dừng phản hồi chậm.
+    const watchLogin = enableWatchLogin ? makeLoginWatcher(page, profilePath, stop) : null;
     let lastIpCheck = Date.now();   // vừa kiểm ở đầu crawlOneProfile nên chưa cần kiểm lại ngay
 
     while (!stop.requested && Date.now() < deadlineAt) {
@@ -750,8 +751,9 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
         return;
       }
       // Đang ở chế độ KHÁCH thì feed chỉ có 1-2 video, cào cũng vô ích → dừng hẳn, báo rõ.
+      // Bản ỔN ĐỊNH — tránh báo KHÁCH oan lúc trang đang hydrate (xem session-watch.cjs).
       {
-        const s = await checkLoginState(page);
+        const s = await checkLoginStateStable(page, { stop });
         if (!stop.requested && s === 'guest') { guestDetected = true; return; }
         if (s === 'logged-in') browser.markSessionVerified(profilePath);
       }
@@ -1042,8 +1044,11 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
     return;
   }
   // Chế độ KHÁCH → feed chỉ 1-2 video, cào vô ích → dừng ngay và nói rõ lý do.
+  // Dùng bản ỔN ĐỊNH (đọc lại tới 20s) — bằng mức nút 🔑 "Kiểm tra đăng nhập" đang dùng.
+  // Trước đây chỉ đọc 1 lần nên gặp đúng nhịp TikTok hydrate là báo KHÁCH oan, dừng cả
+  // profile; dừng rồi chạy lại 2 lần thì hết. Xem chú thích ở session-watch.cjs.
   {
-    const s = await checkLoginState(page);
+    const s = await checkLoginStateStable(page, { stop });
     if (!stop.requested && s === 'guest') {
       onStatus(profile.id, 'error',
         'Profile đang ở chế độ KHÁCH (chưa đăng nhập) — TikTok chỉ cho xem 1-2 video nên không quét được gì. '

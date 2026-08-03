@@ -73,6 +73,37 @@ thường, không phải treo. Muốn đếm nhanh hơn thì tăng **"Số luồ
 
 Nhấn **📄** để xem log chi tiết của từng profile — đây là nơi đầu tiên cần xem khi có vấn đề.
 
+## 📊 Lịch sử thu thập theo ngày
+
+Nút **📊 Lịch sử** trên thanh trên cùng mở bảng sản lượng từng ngày:
+
+| Ngày | Sound thu được | Theo profile |
+|---|---|---|
+| 03/08/2026 *(hôm nay)* | 230 | `vzvazzrbw1083...: 72 · jfmpjtks750...: 59 · …` |
+| 02/08/2026 | 265 | … |
+
+Kèm 4 ô tổng kết: **Hôm nay** · **7 ngày gần nhất** · **Tổng N ngày** · **TB ngày có chạy**
+(trung bình chỉ chia cho những ngày thực sự thu được sound, không chia đều cả ngày nghỉ).
+Cột "Theo profile" hiện 1 dòng cho gọn — **trỏ chuột vào để xem đầy đủ** danh sách.
+
+**Đếm gì:** số sound **thực sự thu được** = cột **Hợp lệ** (đã qua bộ lọc số video và vào bảng
+dữ liệu). Không đếm số lần lướt, cũng không đếm sound quét được rồi bị lọc bỏ.
+
+**Lưu ở đâu:** `config/history.json` **cạnh file .exe** (cùng chỗ với `config/profiles.json`)
+— nên chép máy hay sao lưu là mang theo được, và **không mất khi bạn cập nhật `.exe`** vì chỉ
+thay đúng file .exe trong cùng thư mục. Giữ 400 ngày rồi tự dọn ngày cũ nhất.
+
+✅ **Lịch sử chỉ nằm trong app, KHÔNG đẩy gì lên Google Sheet** — không thêm tab, không thêm
+cột, không gọi Google API. Sheet của bạn giữ nguyên như cũ.
+
+⚠️ **Số liệu là của RIÊNG máy này** — không gộp sound do 5 VPS khác thu. Muốn xem tổng cả dàn
+thì cộng tay từ từng máy.
+
+⚠️ Lịch sử chỉ bắt đầu ghi **từ khi cập nhật bản này** — những ngày trước không dựng lại được
+(Google Sheet không có cột thời gian nên không đếm ngược lại được).
+
+Nút **🗑 Xóa lịch sử** xóa sạch số liệu trên máy này, **không hoàn tác được** (có hỏi xác nhận).
+
 ## Google Sheet
 
 Modal **☁ Google Sheet**:
