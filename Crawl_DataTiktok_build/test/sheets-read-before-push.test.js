@@ -37,7 +37,11 @@ const row = (n) => [`sound ${n}`, L(n), 1000, 'profileA'];
 // thi kich ban sai hoan toan (da bi chinh loi nay lua mot lan).
 function installMock({ initialRows = ['Link'] } = {}) {
   const state = { rows: initialRows.slice(), appends: [], reads: [] };
-  const ctl = { failRead: false, injectOnRead: null, injectLinks: [] };
+  // ctl.readStatus/readBody: dat ma HTTP tuy y cho lan doc (dung de gia lap 400 tab khong ton tai).
+  // ⚠ PHAI dieu khien qua ctl BEN TRONG mock — KHONG the doi apiMod.httpRequest sau khi require:
+  // sheets.cjs destructure `const { httpRequest } = require(...)` nen no giu THAM CHIEU CU,
+  // gan lai vao module sau do khong co tac dung (da bi chinh loi nay lua mot lan).
+  const ctl = { failRead: false, injectOnRead: null, injectLinks: [], readStatus: 0, readBody: '' };
   const fake = {
     SHEETS_BASE: BASE, TOKEN_URL: '', SCOPE: '',
     base64url: () => '', normalizeServiceAccount: () => ({ email: 'a@b.c', privateKey: 'k' }),
@@ -54,6 +58,7 @@ function installMock({ initialRows = ['Link'] } = {}) {
       const readNo = state.reads.length + 1;
       if (ctl.injectOnRead === readNo) state.rows.push(...ctl.injectLinks);
       if (ctl.failRead) { state.reads.push(-1); return { status: 500, body: '{"error":"gia lap loi doc"}' }; }
+      if (ctl.readStatus) { state.reads.push(-1); return { status: ctl.readStatus, body: ctl.readBody }; }
       const m = u.match(/!B(\d+)?:B/);
       const from = m && m[1] ? parseInt(m[1], 10) : 1;
       state.reads.push(from);
@@ -166,6 +171,61 @@ function installMock({ initialRows = ['Link'] } = {}) {
     await sheets.flush();                                  // doc #2: phai la from = 5
     check('lan doc truoc khi ghi bat dau tu dong 5 (khong phai 1)',
       state.reads[1] === 5, `reads=${JSON.stringify(state.reads)}`);
+  }
+
+  console.log('\n=== 9. SO DONG SHEET: phai TANG khi MAY KHAC day len (5 may cung day 1 Sheet) ===');
+  {
+    const { sheets, state } = installMock({ initialRows: ['Link', L(1), L(2)] });
+    await sheets.refreshKnownLinks({ full: true });
+    check('sau doc toan bo: 3 dong', sheets.sheetRowCount() === 3, String(sheets.sheetRowCount()));
+
+    state.rows.push(L(10), L(11), L(12));       // MAY KHAC day 3 dong, may nay khong lam gi
+    await sheets.refreshKnownLinks();
+    check('may KHAC day 3 dong -> 6', sheets.sheetRowCount() === 6, String(sheets.sheetRowCount()));
+
+    state.rows.push(L(13), L(14));
+    await sheets.refreshKnownLinks();
+    check('day tiep 2 dong -> 8', sheets.sheetRowCount() === 8, String(sheets.sheetRowCount()));
+
+    await sheets.refreshKnownLinks();
+    check('khong ai day -> giu nguyen 8', sheets.sheetRowCount() === 8, String(sheets.sheetRowCount()));
+  }
+
+  console.log('\n=== 10. SO DONG SHEET: tang NGAY khi may NAY tu day (khong cho lan doc sau) ===');
+  {
+    const { sheets, state } = installMock({ initialRows: ['Link', L(1)] });
+    await sheets.refreshKnownLinks({ full: true });
+    check('ban dau 2 dong', sheets.sheetRowCount() === 2, String(sheets.sheetRowCount()));
+    sheets.enqueue(row(20));
+    sheets.enqueue(row(21));
+    await sheets.flush();
+    check('day 2 dong -> tang ngay thanh 4', sheets.sheetRowCount() === 4, String(sheets.sheetRowCount()));
+    check('Sheet that su co 4 dong', state.rows.length === 4, String(state.rows.length));
+    await sheets.refreshKnownLinks();
+    check('doc lai KHONG dem trung', sheets.sheetRowCount() === 4, String(sheets.sheetRowCount()));
+  }
+
+  console.log('\n=== 11. Doi Sheet KHAC -> so dong reset 0 (UI khong hien so cua Sheet cu) ===');
+  {
+    const { sheets } = installMock({ initialRows: ['Link', L(1), L(2)] });
+    await sheets.refreshKnownLinks({ full: true });
+    check('co so', sheets.sheetRowCount() === 3);
+    sheets.configure({ enabled: true, spreadsheetId: 'ID_KHAC', tab: 'Data', sa: { client_email: 'a@b.c', private_key: 'k' } });
+    check('doi Sheet -> reset 0', sheets.sheetRowCount() === 0, String(sheets.sheetRowCount()));
+  }
+
+  console.log('\n=== 12. BUG THAT: tab khong ton tai -> loi phai NOI RO, khong de nguyen chu Google ===');
+  {
+    // Nguoi dung mat thoi gian vi thong bao goc: "Unable to parse range: Data!B:B".
+    const { sheets, ctl } = installMock({ initialRows: ['Link'] });
+    ctl.readStatus = 400;
+    ctl.readBody = '{"error":{"code":400,"message":"Unable to parse range: Data!B:B","status":"INVALID_ARGUMENT"}}';
+    let msg = '';
+    try { await sheets.refreshKnownLinks({ full: true }); } catch (e) { msg = e.message; }
+    check('noi ro KHONG CO TAB', msg.includes('Không có tab'), msg);
+    check('nhac dung ten tab dang dung', msg.includes('"Data"'), msg);
+    check('chi cho nguoi dung cho sua', msg.includes('Tên tab'), msg);
+    check('KHONG de nguyen chu Google kho hieu', !msg.includes('Unable to parse range'), msg);
   }
 
   console.log('\n' + '='.repeat(60));

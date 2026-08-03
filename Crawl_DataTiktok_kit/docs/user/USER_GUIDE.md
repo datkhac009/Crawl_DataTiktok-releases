@@ -117,6 +117,21 @@ Modal **☁ Google Sheet**:
 Dữ liệu ghi vào 4 cột **A–D**: Tên sound | Link | Số video | Profile. Các cột từ E trở đi
 để trống cho bạn tự dùng.
 
+⚠️ **"Tên tab" phải khớp CHÍNH XÁC** tên tab trên Sheet (phân biệt chữ hoa/thường, đúng cả dấu
+gạch dưới — vd `Total_Link_Voice`). Sai tên tab thì app báo:
+*"Không có tab tên "X" trên Google Sheet này"* và **không đọc/ghi được gì**. Bấm **🔌 Test kết
+nối** để xem danh sách tab có thật trên Sheet.
+
+**Số dòng trên Sheet hiện ở dòng trạng thái** (cạnh badge "N sound"):
+
+```
+[ 86 sound ]  [ Bỏ qua trùng: 30 ]   Sheet: 156.946 dòng data
+```
+
+Con số này **tự cập nhật** khi Sheet thay đổi — kể cả khi **máy khác** đẩy dữ liệu lên (biết
+trong vòng ~1 phút), và tăng **ngay lập tức** khi chính máy này đẩy. Khi có lỗi/cảnh báo thì
+dòng đó ưu tiên hiện lỗi (số dòng sẽ hiện lại sau khi hết lỗi).
+
 **Chạy nhiều máy cùng một Sheet — chống trùng thế nào (cải tiến 2026-08-03):**
 - App **tự đọc phần MỚI thêm ở cuối Sheet mỗi phút** (rẻ + nhanh) → máy này biết sound máy khác
   vừa đẩy trong vòng **~1 phút**, thay vì 5–15 phút như trước.

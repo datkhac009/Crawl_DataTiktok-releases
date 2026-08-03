@@ -623,17 +623,6 @@ app.whenReady().then(() => {
           console.log(`[reseed] ${r.full ? `Đọc TOÀN BỘ Sheet (${r.rawRows} dòng)` : `Đọc phần mới (${r.rawRows} dòng từ dòng ${r.from})`}`
             + `: +${addedScan} link mới vào bộ lọc quét.`);
         }
-        // BÁO RA UI (2026-08-03, người dùng hỏi "sao không phải số data mới từ sheet nhỉ"):
-        // trước đây phần đồng bộ CHỈ ghi console nên người dùng không thấy cơ chế chống trùng
-        // liên máy đang chạy. Chỉ báo khi THẬT SỰ có link mới — báo cả lúc 0 link mới thì dòng
-        // trạng thái nhấp nháy vô nghĩa mỗi phút.
-        if (addedScan > 0) {
-          send('crawl-status', {
-            profileId: null, status: 'info',
-            msg: `Đồng bộ Sheet: +${addedScan} link mới từ máy khác`
-              + ` — đang lọc trùng với ${sheets.knownCount().toLocaleString('vi-VN')} link.`,
-          });
-        }
       }
     } catch (e) {
       console.warn('[reseed] Đọc lại Sheet lỗi (thử lại vòng sau):', e.message);
@@ -641,6 +630,20 @@ app.whenReady().then(() => {
       _reseedBusy = false;
     }
   }, 60000);
+
+  // ── BADGE "SỐ DÒNG TRÊN SHEET" (2026-08-03, người dùng yêu cầu) ──
+  // Kênh RIÊNG `sheet-rows`, KHÔNG dùng dòng trạng thái chung: dòng đó bị nhiều thứ khác ghi
+  // đè liên tục (log profile, tiến trình bật lần lượt...) nên số liệu sẽ biến mất ngay.
+  // Chỉ gửi KHI SỐ ĐỔI để không bắn IPC vô ích mỗi 5 giây.
+  // Số này do sheets.cjs tự cập nhật ở 3 chỗ: đọc toàn bộ, đọc phần đuôi (máy khác đẩy), và
+  // sau khi máy này tự đẩy thành công — nên nó theo sát Sheet chứ không chỉ đúng lúc mới đọc.
+  let _lastSentSheetRows = -1;
+  setInterval(() => {
+    const n = sheets.sheetRowCount();
+    if (n === _lastSentSheetRows) return;
+    _lastSentSheetRows = n;
+    send('crawl-status', { profileId: null, status: 'sheet-rows', sheetRows: n, knownLinks: sheets.knownCount() });
+  }, 5000);
 
   // ── NHỊP TIM KHÓA LIÊN MÁY (2026-07-28) ──
   // Ghi nhịp tim cho các profile ĐANG chạy trên máy này lên tab `_locks` để máy khác biết mà

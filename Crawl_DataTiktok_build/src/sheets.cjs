@@ -43,6 +43,10 @@ async function appendRows(spreadsheetId, tab, rows, sa) {
       throw new Error(`Google API vượt giới hạn (HTTP ${resp.status}) — lô này được giữ lại`
         + ` trong bộ đệm và tự đẩy lại sau ${Math.round(quota.COOLDOWN_MS / 1000)}s.`);
     }
+    if (resp.status === 400 && /unable to parse range/i.test(resp.body || '')) {
+      throw new Error(`Không có tab tên "${tab}" trên Google Sheet này — không ghi được.`
+        + ' Mở ☁ Google Sheet sửa lại "Tên tab" rồi Lưu (bấm 🔌 Test kết nối để xem tab có thật).');
+    }
     throw new Error(`append HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
   }
 }
@@ -91,6 +95,15 @@ async function readLinkColumn(spreadsheetId, tab, sa, { startRow = 1 } = {}) {
             + ` ${Math.round(quota.COOLDOWN_MS / 1000)}s. Nếu bị thường xuyên: dùng Service Account`
             + ' RIÊNG cho từng máy (hạn 60 request/phút tính theo từng Service Account).');
         }
+        // HTTP 400 "Unable to parse range" = TÊN TAB KHÔNG TỒN TẠI trên Sheet. Thông báo gốc
+        // của Google (`Unable to parse range: Data!B:B`) rất khó hiểu — người dùng đã mất thời
+        // gian vì nó (2026-08-03: cấu hình để tab mặc định "Data" nhưng Sheet không có tab đó).
+        // Nói thẳng ra vấn đề + chỉ đúng chỗ sửa.
+        if (resp.status === 400 && /unable to parse range/i.test(resp.body || '')) {
+          throw new Error(`Không có tab tên "${tab || 'Data'}" trên Google Sheet này.`
+            + ' Mở ☁ Google Sheet → sửa lại đúng "Tên tab" (phân biệt chữ hoa/thường, đúng cả'
+            + ' dấu gạch dưới) → Lưu. Bấm 🔌 Test kết nối để xem danh sách tab có thật.');
+        }
         throw new Error(`đọc Sheet HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
       }
       let data;
@@ -134,6 +147,16 @@ function isSeeded() { return _seeded; }
 // Số link đã biết (nạp từ Sheet + đã tự đẩy) — hiện ra UI để người dùng thấy bộ lọc
 // trùng đang giữ bao nhiêu link, thay vì phải mò trong log.
 function knownCount() { return _knownLinks.size; }
+
+// ── TỔNG SỐ DÒNG hiện có trên tab Sheet (để hiện lên UI) ──
+// Đếm theo SỐ DÒNG THÔ của cột B mà app đã đọc được — khớp với số dòng cuối bạn thấy trên
+// Google Sheet. Cập nhật ở 3 chỗ để luôn sát thực tế:
+//   (a) đọc toàn bộ  → gán bằng số dòng đọc được
+//   (b) đọc phần đuôi → cộng thêm số dòng mới (máy khác vừa đẩy)
+//   (c) app tự đẩy thành công → cộng thêm số dòng vừa ghi (không phải chờ tới lần đọc sau)
+// 0 = chưa đọc lần nào (chưa cấu hình Sheet, hoặc chưa chạy) → UI ẩn badge.
+let _sheetRows = 0;
+function sheetRowCount() { return _sheetRows; }
 function updateKnownLinks(links) {
   let added = 0;
   for (const u of (links || [])) {
@@ -359,7 +382,7 @@ function configure(cfg, onError) {
   const changedTarget = (next && next.spreadsheetId) !== (_cfg && _cfg.spreadsheetId)
     || (next && next.tab) !== (_cfg && _cfg.tab);
   _cfg = next;
-  if (changedTarget) _nextRow = 0;
+  if (changedTarget) { _nextRow = 0; _sheetRows = 0; }
   _onError = onError || null;
 }
 
@@ -391,6 +414,7 @@ async function refreshKnownLinks({ full = false } = {}) {
     // cộng dồn từ chỗ bắt đầu. Dùng rawRows (số dòng THÔ) chứ KHÔNG dùng links.length —
     // links đã lọc bỏ dòng rỗng nên mốc sẽ lệch dần (có test riêng cho bẫy này).
     _nextRow = doFull ? r.rawRows + 1 : from + r.rawRows;
+    _sheetRows = doFull ? r.rawRows : _sheetRows + r.rawRows;
     return { links: r.links, rawRows: r.rawRows, from, full: doFull };
   })();
   try {
@@ -483,6 +507,11 @@ function flush() {
       // Ghi thành công → các link này giờ ĐÃ có trên Sheet, ghi nhớ để mọi đường đẩy
       // sau (kể cả buffer retry) không bao giờ đẩy lại.
       for (const r of pending) { const k = normalizeKey(r && r[1]); if (k) _knownLinks.add(k); }
+      // Cộng luôn vào tổng số dòng + đẩy mốc đọc lên: dòng mình vừa ghi cũng nằm ở cuối tab,
+      // nếu không cộng thì badge trên UI bị tụt lại tới lần đọc sau, và lần đọc tăng dần kế
+      // tiếp sẽ đọc lại chính mấy dòng mình vừa ghi (vô ích).
+      if (_sheetRows > 0) _sheetRows += pending.length;
+      if (_nextRow > 0) _nextRow += pending.length;
     })
     .catch(e => {
       console.error('[sheets] flush lỗi:', e.message);
@@ -512,6 +541,7 @@ module.exports = {
   isEnabled,
   isSeeded,
   knownCount,
+  sheetRowCount,
   enqueue,
   flush,
   flushAll,

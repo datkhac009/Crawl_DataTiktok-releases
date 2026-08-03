@@ -312,3 +312,20 @@ Xóa tab thừa (`_locks 2`), giữ lại đúng 1 tab `_locks`. Cập nhật b�
    nằm ở chính profile.
 3. **Đừng tin cookie có trong file là còn đăng nhập** — phải hỏi TikTok mới biết.
 4. **Chụp màn hình trang thật** khi bí — nhìn tận mắt nhanh hơn suy đoán rất nhiều.
+
+## 13. Báo "Không có tab tên X trên Google Sheet này" / "Unable to parse range"
+
+Tên tab trong ☁ Google Sheet **không khớp** tab thật trên Sheet. Đã gặp thật (2026-08-03):
+app đóng gói để tab mặc định `Data` nhưng Sheet không có tab nào tên đó → không đọc/ghi được
+gì, và thông báo gốc của Google (`Unable to parse range: Data!B:B`) rất khó hiểu nên mất thời
+gian mới tìm ra.
+
+Sửa: mở **☁ Google Sheet** → sửa **"Tên tab"** cho khớp chính xác (phân biệt chữ hoa/thường,
+đúng cả dấu gạch dưới, vd `Total_Link_Voice`) → **Lưu**. Bấm **🔌 Test kết nối** để xem danh
+sách tab có thật.
+
+⚠️ Cấu hình của **app đóng gói** và **app dev** nằm ở 2 chỗ KHÁC NHAU
+(`%APPDATA%/TikTokCrawler` vs `%APPDATA%/TikTokCrawler-Dev`) — sửa ở bản này không ảnh hưởng
+bản kia. Đã gặp: dev đúng tab mà bản đóng gói vẫn sai.
+
+---

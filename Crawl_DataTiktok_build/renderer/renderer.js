@@ -255,6 +255,31 @@ function updateProfileCounts(id, scanned, checked) {
   }
 }
 
+// ── SỐ DÒNG DATA TRÊN SHEET, hiện ở dòng trạng thái (2026-08-03, người dùng chốt chỗ này) ──
+// Người dùng muốn thay chữ "Đang chạy N profile." (vô ích — bảng phía trên đã cho biết profile
+// nào đang chạy) bằng số dòng data thật đang có trên Sheet, và luôn tự cập nhật.
+//
+// ⚠ Dòng trạng thái này DÙNG CHUNG với thông báo lỗi/cảnh báo (vd "Không đọc được Sheet...",
+// "Google Sheet: ..."). Nếu cứ 5 giây lại ghi đè số dòng lên đó thì THÔNG BÁO LỖI SẼ BỊ XÓA
+// mất trước khi người dùng kịp đọc. Nên chỉ ghi khi dòng đang ở trạng thái "rảnh": trống, hoặc
+// đang là chính số dòng Sheet, hoặc mấy câu placeholder/thông tin đầu phiên. Gặp lỗi thì để
+// nguyên lỗi trên đó.
+let _lastSheetRows = 0;
+function _statusIsIdle(t) {
+  const s = String(t || '').trim();
+  return s === '' || s === 'Chưa chạy'
+    || s.startsWith('Sheet: ')          // chính số dòng mình đã ghi
+    || s.startsWith('Đang chạy ')       // câu cũ, cho phép thay
+    || s.startsWith('Đã nạp ');         // thông báo nạp link đầu phiên
+}
+function setSheetRowsStatus(rows) {
+  if (typeof rows === 'number') _lastSheetRows = rows;
+  const el = $('crawlStatusMsg');
+  if (!el || !_lastSheetRows) return;
+  if (!_statusIsIdle(el.textContent)) return;   // đang hiện lỗi/cảnh báo → không ghi đè
+  el.textContent = `Sheet: ${_lastSheetRows.toLocaleString('vi-VN')} dòng data`;
+}
+
 // Số đếm SỐNG "Bỏ qua trùng" — dùng CHUNG cho cả phiên (không riêng 1 profile), để người
 // dùng thấy ngay lọc trùng đang hoạt động thay vì chỉ biết được lúc "Hoàn tất phiên" (chế
 // độ Quét⇄Xem gần như không bao giờ tới lúc đó).
@@ -433,8 +458,8 @@ async function runSelected() {
     // thông tin hữu ích hơn (đồng bộ Sheet, nạp link lọc trùng) trên cùng dòng trạng thái đó.
     const msg = $('crawlStatusMsg');
     if (msg && msg.textContent.startsWith('Đang bật lần lượt')) {
-      const n = ids.filter(id => runningSet.has(id)).length;
-      msg.textContent = n ? `Đang chạy ${n} profile.` : 'Chưa chạy';
+      msg.textContent = '';        // để trống rồi nhường chỗ cho số dòng Sheet
+      setSheetRowsStatus();
     }
   }
 }
@@ -1108,7 +1133,9 @@ function initUpdater() {
 function initCrawlEvents() {
   api.onCrawlData((d) => addResultRow(d));
   api.onCrawlStatus((s) => {
-    if (s.profileId && s.status === 'counts') {
+    if (!s.profileId && s.status === 'sheet-rows') {
+      setSheetRowsStatus(s.sheetRows);
+    } else if (s.profileId && s.status === 'counts') {
       // Kênh RIÊNG chỉ cập nhật số Quét/Đã check — không đụng badge trạng thái hay log.
       updateProfileCounts(s.profileId, s.scanned, s.checked);
       updateSkippedDup(s.skippedDup);

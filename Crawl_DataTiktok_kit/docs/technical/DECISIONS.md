@@ -812,6 +812,67 @@ mất dữ liệu** sau khi hết chặn).
 
 ---
 
+## QĐ-25 — Hiện SỐ DÒNG DATA trên Sheet ở dòng trạng thái, và không để nó xóa mất thông báo lỗi
+
+**Yêu cầu người dùng (2026-08-03):** *"thay cái 5 profile chạy bằng số data lấy được từ Sheet"*
+— câu `Đang chạy N profile.` vô ích (bảng phía trên đã cho biết profile nào đang chạy), thay
+bằng **số dòng data thật đang có trên Sheet**, và *"data của Sheet thay đổi thì cũng phải
+update vì có tận 5 máy cũng đang đẩy lên đó"*.
+
+**Cập nhật ở 3 chỗ** để con số theo sát Sheet, không chỉ đúng lúc mới đọc:
+
+| Thời điểm | Cách tính |
+|---|---|
+| Đọc lại **toàn bộ** (10 phút/lần) | Gán `= rawRows` — resync tuyệt đối, sửa mọi lệch |
+| Đọc **phần đuôi** (mỗi phút) | `+= rawRows` — bắt được dòng **máy khác** vừa đẩy |
+| Ngay sau khi **máy này** đẩy xong | `+= số dòng vừa ghi` — không phải chờ tới lần đọc sau |
+
+**Cái bẫy đã chặn — KHÔNG được ghi đè thông báo lỗi.** Dòng trạng thái này **dùng chung** với
+thông báo lỗi/cảnh báo (`Không đọc được Sheet...`, `Google Sheet: ...`). Nếu cứ 5 giây ghi đè số
+dòng lên đó thì **lỗi bị xóa trước khi người dùng kịp đọc**. Nên chỉ ghi khi dòng đang "rảnh":
+trống, `Chưa chạy`, hoặc đang là chính số dòng / câu `Đã nạp N link...`. Gặp lỗi thì **để nguyên
+lỗi**. Đã kiểm chứng bằng render thật trong Chromium (có lỗi → nhận số mới → **vẫn giữ lỗi**).
+
+**Đã cân nhắc và LOẠI — badge riêng.** Ban đầu tôi làm badge `Sheet: N dòng` cạnh badge
+"Bỏ qua trùng" (bền hơn vì không bị ghi đè). Nhưng người dùng chốt đặt ở dòng trạng thái, và
+giữ cả hai là hiện **trùng một thông tin ở 2 chỗ** → đã bỏ badge.
+
+**Giới hạn đã biết:** vòng đồng bộ chỉ chạy **khi đang crawl** (`crawler.isAnyRunning()`), nên
+dừng hết profile thì con số **đứng lại** cho tới lần chạy sau. Cố ý không poll khi rảnh để
+không tốn quota vô ích (QĐ-24).
+
+**Kiểm chứng:** `test/sheets-read-before-push.test.js` mục 9–11 (máy KHÁC đẩy 3 dòng → tăng
+đúng 3; không ai đẩy → không tự nhảy; máy này đẩy → tăng ngay và lần đọc sau **không đếm
+trùng**; đổi Sheet → reset 0).
+
+---
+
+## QĐ-26 — Lỗi "tab không tồn tại" phải nói thẳng, không để nguyên thông báo của Google
+
+**Sự cố thật (2026-08-03):** app đóng gói báo
+`đọc Sheet HTTP 400: {"error":{"message":"Unable to parse range: Data!B:B"}}` và **không
+đọc/ghi được gì**. Nguyên nhân: ô **"Tên tab"** trong cấu hình để `Data` (giá trị mặc định)
+nhưng Sheet của người dùng **không có tab nào tên đó** (tab thật: `Total_Link_Voice`).
+
+Thông báo gốc của Google rất khó hiểu — *"Unable to parse range"* nghe như lỗi cú pháp, không
+ai đoán ra là **thiếu tab**. Người dùng đã mất thời gian tưởng là bug code.
+
+**Sửa:** bắt riêng `HTTP 400` + nội dung khớp `/unable to parse range/i` (ở **cả** đường đọc và
+đường ghi) rồi ném ra thông báo chỉ đúng chỗ sửa: *"Không có tab tên "X" trên Google Sheet này.
+Mở ☁ Google Sheet → sửa lại đúng "Tên tab" → Lưu. Bấm 🔌 Test kết nối để xem danh sách tab có
+thật."*
+
+⚠ **Bài học vận hành:** cấu hình của **app đóng gói** và **app dev** nằm ở 2 chỗ KHÁC NHAU
+(`%APPDATA%/TikTokCrawler` vs `%APPDATA%/TikTokCrawler-Dev`). Lần này dev đúng tab mà bản đóng
+gói vẫn sai → chẩn đoán bằng cách **đọc thẳng 2 file config** mới ra, đoán thì không ra. Xem
+TROUBLESHOOTING.md mục 13.
+
+**Kiểm chứng:** `test/sheets-read-before-push.test.js` mục 12 (dựng lại đúng phản hồi 400 của
+Google → thông báo phải nói "Không có tab", nhắc đúng tên tab, chỉ chỗ sửa, và **không** để lọt
+chữ "Unable to parse range").
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |
@@ -846,6 +907,9 @@ mất dữ liệu** sau khi hết chặn).
 | Đọc lại TOÀN BỘ cột Link mỗi lần đồng bộ chống trùng liên máy | Tab 156k dòng mất hàng chục giây → chỉ dám chạy 5–15 phút/lần, chính khoảng hở đó sinh trùng. Dòng mới luôn ở cuối nên đọc TĂNG DẦN phần đuôi vừa nhanh hơn vừa nhẹ hơn — xem QĐ-09 |
 | Dựng ID dài trong test bằng phép CỘNG số (`76000000000000000 + n`) | Vượt `Number.MAX_SAFE_INTEGER` → mọi `n` ra CÙNG một số → mọi link test giống nhau → test pass VÔ NGHĨA, che mất bug thật. Phải ghép CHUỖI — xem QĐ-09 |
 | Gọi Google API mà không xử lý riêng 429/quota | Gặp là ném lỗi như lỗi mạng thường rồi timer 5s thử lại → càng dội, càng bị chặn sâu. Phải có cầu dao tạm ngưng — xem QĐ-24 |
+| Để nguyên thông báo lỗi thô của Google cho người dùng đọc | `Unable to parse range: Data!B:B` nghe như lỗi cú pháp, thực ra là THIẾU TAB — người dùng mất thời gian tưởng bug code. Phải dịch thành câu chỉ đúng chỗ sửa — xem QĐ-26 |
+| Ghi số liệu định kỳ vào dòng trạng thái dùng chung với thông báo lỗi | Lỗi bị xóa trước khi người dùng kịp đọc. Chỉ ghi khi dòng đang "rảnh" — xem QĐ-25 |
+| Sửa cấu hình ở app dev rồi tưởng bản đóng gói cũng đúng | 2 app dùng 2 electron-store KHÁC NHAU (`TikTokCrawler` vs `TikTokCrawler-Dev`) — xem QĐ-26 |
 | Coi MỌI lỗi 403 là vượt quota | 403 còn nghĩa "chưa chia sẻ Sheet cho service account" — báo nhầm sẽ che mất lỗi thiếu quyền, cực khó đoán. Phải soi nội dung — xem QĐ-24 |
 | Để mốc đọc tăng dần ở 2 nơi (main.js + sheets.cjs) | 2 mốc lệch nhau (bẫy QĐ-10) và 2 nơi cùng đọc sẽ cùng đẩy mốc → nhảy qua mất dòng chưa đọc. Phải để MỘT nơi + gộp lời gọi trùng — xem QĐ-09 |
 | Tính mốc đọc tăng dần bằng `links.length` (đã lọc dòng rỗng) | Mốc lệch dần mỗi khi Sheet có dòng rỗng → đọc lặp vô ích/bỏ sót. Phải dùng số dòng THÔ (`rawRows`) — xem QĐ-09 |
