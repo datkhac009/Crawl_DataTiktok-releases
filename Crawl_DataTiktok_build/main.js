@@ -623,6 +623,17 @@ app.whenReady().then(() => {
           console.log(`[reseed] ${r.full ? `Đọc TOÀN BỘ Sheet (${r.rawRows} dòng)` : `Đọc phần mới (${r.rawRows} dòng từ dòng ${r.from})`}`
             + `: +${addedScan} link mới vào bộ lọc quét.`);
         }
+        // BÁO RA UI (2026-08-03, người dùng hỏi "sao không phải số data mới từ sheet nhỉ"):
+        // trước đây phần đồng bộ CHỈ ghi console nên người dùng không thấy cơ chế chống trùng
+        // liên máy đang chạy. Chỉ báo khi THẬT SỰ có link mới — báo cả lúc 0 link mới thì dòng
+        // trạng thái nhấp nháy vô nghĩa mỗi phút.
+        if (addedScan > 0) {
+          send('crawl-status', {
+            profileId: null, status: 'info',
+            msg: `Đồng bộ Sheet: +${addedScan} link mới từ máy khác`
+              + ` — đang lọc trùng với ${sheets.knownCount().toLocaleString('vi-VN')} link.`,
+          });
+        }
       }
     } catch (e) {
       console.warn('[reseed] Đọc lại Sheet lỗi (thử lại vòng sau):', e.message);

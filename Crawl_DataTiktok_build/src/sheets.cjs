@@ -131,6 +131,9 @@ const _knownLinks = new Set();
 // lại đọc mỗi phút cho tới khi thành công.
 let _seeded = false;
 function isSeeded() { return _seeded; }
+// Số link đã biết (nạp từ Sheet + đã tự đẩy) — hiện ra UI để người dùng thấy bộ lọc
+// trùng đang giữ bao nhiêu link, thay vì phải mò trong log.
+function knownCount() { return _knownLinks.size; }
 function updateKnownLinks(links) {
   let added = 0;
   for (const u of (links || [])) {
@@ -508,6 +511,7 @@ module.exports = {
   configure,
   isEnabled,
   isSeeded,
+  knownCount,
   enqueue,
   flush,
   flushAll,

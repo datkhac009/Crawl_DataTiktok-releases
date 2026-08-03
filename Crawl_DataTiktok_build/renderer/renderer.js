@@ -428,6 +428,14 @@ async function runSelected() {
     _runningSelectedBatch = false;
     if (btn) btn.textContent = btnText;
     updateRunSelectedBtnState();
+    // XÓA tin nhắn tiến trình khi xong lượt (2026-08-03): trước đây nó KẸT LẠI mãi ở
+    // "Đang bật lần lượt 2/5..." dù cả 5 profile đã chạy từ lâu — vừa sai vừa CHIẾM CHỖ của
+    // thông tin hữu ích hơn (đồng bộ Sheet, nạp link lọc trùng) trên cùng dòng trạng thái đó.
+    const msg = $('crawlStatusMsg');
+    if (msg && msg.textContent.startsWith('Đang bật lần lượt')) {
+      const n = ids.filter(id => runningSet.has(id)).length;
+      msg.textContent = n ? `Đang chạy ${n} profile.` : 'Chưa chạy';
+    }
   }
 }
 
