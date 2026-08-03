@@ -786,7 +786,7 @@ async function loadSheetsConfig() {
     $('sheetsId').value = cfg.spreadsheetId || '';
     $('sheetsTab').value = cfg.tab || 'Data';
     $('sheetsSa').value = cfg.saJson || '';
-    $('sheetsReseedMin').value = cfg.reseedMinutes || 5;
+    $('sheetsReseedMin').value = cfg.reseedMinutes || 10;
   } catch {}
 }
 
@@ -796,7 +796,7 @@ function readSheetsForm() {
     spreadsheetId: $('sheetsId').value.trim(),
     tab: $('sheetsTab').value.trim() || 'Data',
     saJson: $('sheetsSa').value.trim(),
-    reseedMinutes: Math.max(1, parseFloat($('sheetsReseedMin').value) || 5),
+    reseedMinutes: Math.max(1, parseFloat($('sheetsReseedMin').value) || 10),
   };
 }
 

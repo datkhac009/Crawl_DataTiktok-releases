@@ -51,11 +51,23 @@ async function appendRows(spreadsheetId, tab, rows, sa) {
 // Retry 1 lần khi lỗi/timeout: đây là GET thuần đọc, gọi lại không gây trùng dữ liệu.
 const READ_LINKS_TIMEOUT_MS = 120000;
 
-async function readLinks(spreadsheetId, tab, sa) {
+// Đọc cột B, có thể chỉ đọc TỪ MỘT DÒNG TRỞ ĐI (đọc phần mới thêm ở cuối).
+// Trả `{ links, rawRows }`:
+//   links   = danh sách link không rỗng (đã trim)
+//   rawRows = SỐ DÒNG THÔ Google trả về (kể cả dòng rỗng) — cần để tính mốc đọc tiếp lần sau.
+//             Không dùng links.length được vì nó đã lọc bỏ dòng rỗng → mốc sẽ lệch dần.
+//
+// (2026-08-03) Vì sao cần đọc TỪNG PHẦN: tab thật đã 156.000 dòng. Đọc lại TOÀN BỘ mỗi lần
+// đồng bộ vừa chậm (hàng chục giây) vừa nặng, nên trước đây chỉ dám chạy 5–15 phút/lần —
+// chính khoảng hở đó sinh trùng liên máy: máy A đẩy sound X, máy B phải chờ tới lần đọc kế
+// tiếp mới biết, trong lúc chờ mà B cũng quét trúng X thì B đẩy X lần nữa. Đọc phần đuôi
+// (vài trăm dòng mới) thì rẻ và nhanh → chạy được mỗi phút, thu hẹp cửa sổ trùng hàng chục lần.
+async function readLinkColumn(spreadsheetId, tab, sa, { startRow = 1 } = {}) {
   const id = extractSpreadsheetId(spreadsheetId);
-  if (!id) return [];
-  const range = encodeURIComponent(`${tab || 'Data'}!B:B`);
-  const url = `${SHEETS_BASE}/${id}/values/${range}?majorDimension=ROWS`;
+  if (!id) return { links: [], rawRows: 0 };
+  const from = Math.max(1, parseInt(startRow, 10) || 1);
+  const a1 = from > 1 ? `${tab || 'Data'}!B${from}:B` : `${tab || 'Data'}!B:B`;
+  const url = `${SHEETS_BASE}/${id}/values/${encodeURIComponent(a1)}?majorDimension=ROWS`;
 
   let lastErr;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -71,13 +83,22 @@ async function readLinks(spreadsheetId, tab, sa) {
       let data;
       try { data = JSON.parse(resp.body); } catch (_) { data = {}; }
       const rows = data.values || [];
-      return rows.map(r => (r && r[0] ? String(r[0]).trim() : '')).filter(Boolean);
+      return {
+        links: rows.map(r => (r && r[0] ? String(r[0]).trim() : '')).filter(Boolean),
+        rawRows: rows.length,
+      };
     } catch (e) {
       lastErr = e;
       if (attempt === 0) await new Promise(r => setTimeout(r, 1000));
     }
   }
   throw lastErr;
+}
+
+// Đọc TOÀN BỘ cột Link (giữ nguyên chữ ký cũ — dùng ở đầu phiên và ở nút "Đẩy lên Sheet").
+async function readLinks(spreadsheetId, tab, sa) {
+  const { links } = await readLinkColumn(spreadsheetId, tab, sa, { startRow: 1 });
+  return links;
 }
 
 // Khóa so trùng dùng CHUNG với crawler.cjs (src/linkkey.cjs) — trước đây là bản copy
@@ -392,6 +413,7 @@ async function flushAll() {
 module.exports = {
   testConnection,
   readLinks,
+  readLinkColumn,
   extractSpreadsheetId,
   configure,
   isEnabled,

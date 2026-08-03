@@ -204,11 +204,16 @@
         </div>
 
         <div class="section">
-          <label class="toggle-row" title="Nhiều máy cùng đẩy vào 1 Sheet: mỗi máy tự đọc lại cột Link định kỳ để biết sound máy khác vừa đẩy → không quét lại, không đẩy trùng. Sheet rất lớn (trên 100 nghìn dòng) nên tăng lên 10-15 phút.">
-            <span>Đồng bộ lọc trùng liên máy mỗi</span>
-            <input type="number" id="sheetsReseedMin" class="input input-sm" min="1" step="1" value="5" style="width:70px" />
+          <label class="toggle-row" title="Chu kỳ ĐỌC LẠI TOÀN BỘ cột Link để đồng bộ mốc (dùng khi có dòng bị xóa làm lệch mốc). Sheet rất lớn (trên 100 nghìn dòng) nên để 10-15 phút cho nhẹ. KHÔNG cần hạ xuống thấp: phần MỚI thêm ở cuối Sheet đã được đọc TỰ ĐỘNG MỖI PHÚT nên máy này biết tin máy khác vừa đẩy trong vòng ~1 phút.">
+            <span>Đọc lại toàn bộ Sheet mỗi</span>
+            <input type="number" id="sheetsReseedMin" class="input input-sm" min="1" step="1" value="10" style="width:70px" />
             <span>phút</span>
           </label>
+          <div class="section-desc" style="margin-top:6px">
+            Phần <b>mới thêm</b> ở cuối Sheet được đọc <b>tự động mỗi phút</b> (rẻ + nhanh) nên
+            máy này biết sound máy khác vừa đẩy trong vòng ~1 phút. Số ở đây chỉ là chu kỳ đọc
+            lại <b>toàn bộ</b> để đồng bộ lại mốc — để 10–15 phút cho nhẹ.
+          </div>
         </div>
 
         <div class="sheets-test-row">

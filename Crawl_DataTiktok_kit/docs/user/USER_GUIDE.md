@@ -117,8 +117,16 @@ Modal **☁ Google Sheet**:
 Dữ liệu ghi vào 4 cột **A–D**: Tên sound | Link | Số video | Profile. Các cột từ E trở đi
 để trống cho bạn tự dùng.
 
-**Chạy nhiều máy cùng một Sheet:** đặt "Đồng bộ lọc trùng liên máy mỗi X phút" (mặc định 5)
-để các máy biết nhau vừa đẩy gì, tránh trùng.
+**Chạy nhiều máy cùng một Sheet — chống trùng thế nào (cải tiến 2026-08-03):**
+- App **tự đọc phần MỚI thêm ở cuối Sheet mỗi phút** (rẻ + nhanh) → máy này biết sound máy khác
+  vừa đẩy trong vòng **~1 phút**, thay vì 5–15 phút như trước.
+- Ô **"Đọc lại toàn bộ Sheet mỗi X phút"** (mặc định 10) chỉ là chu kỳ đọc lại **toàn bộ** để
+  đồng bộ lại mốc (cần khi có dòng bị xóa làm các dòng phía sau dịch lên). **Không cần hạ
+  xuống thấp** — phần mới đã đọc mỗi phút rồi; hạ thấp chỉ làm nặng thêm.
+
+⚠️ **Thành thật:** vẫn không thể hết trùng 100%. Google Sheets không có cơ chế "giành quyền"
+nên nếu 2 máy quét trúng **cùng một sound trong cùng 1 phút** thì vẫn có thể đẩy trùng — chỉ là
+khả năng đã giảm 5–15 lần. Trùng còn sót thì dùng nút **🧹 Dọn trùng trên Sheet** để dọn.
 
 ⚠️ Khi dọn trùng trên Sheet, luôn **xóa cả dòng** (Delete rows), đừng xóa nội dung ô — xóa
 nội dung sẽ làm app ghi lệch cột ở lần đẩy sau.

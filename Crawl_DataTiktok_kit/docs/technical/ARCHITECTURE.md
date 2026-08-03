@@ -136,8 +136,9 @@ Hai tầng, dùng **chung một hàm khóa** (`linkkey.cjs`) nên không bao gi�
 
 - **Khi quét**: bộ nhớ link đã thu thập trong phiên + link nạp từ Sheet.
 - **Khi đẩy**: chặn ngay ở cửa enqueue, lọc lại trước khi ghi, ghi nhớ link đã ghi thành công.
-- **Liên máy**: mỗi máy đọc lại cột Link trên Sheet định kỳ (mặc định 5 phút, chỉnh trong
-  modal ☁) để biết máy khác vừa đẩy gì.
+- **Liên máy**: mỗi máy đọc **phần mới thêm ở cuối** cột Link **mỗi phút** (đọc tăng dần từ
+  mốc dòng — rẻ vì chỉ vài trăm dòng), cộng đọc lại **toàn bộ** mỗi 10 phút để đồng bộ mốc
+  (chỉnh trong modal ☁). Cửa sổ sinh trùng co từ 5–15 phút xuống ~1 phút — xem QĐ-09.
 
 Link sound original được **rút gọn về dạng chuẩn** `/music/original-sound-<id>` — cùng một
 sound với 2 kiểu slug khác nhau không còn bị tính là 2 sound.
@@ -181,7 +182,7 @@ sound với 2 kiểu slug khác nhau không còn bị tính là 2 sound.
 | Cơ chế | Phạm vi | Ghi chú |
 |---|---|---|
 | Ghi Google Sheet | Liên máy — an toàn | `values:append` được Google xử lý tuần tự (QĐ-08) |
-| Chống trùng dữ liệu | Liên máy — gần đúng | Đọc lại cột Link mỗi N phút; vẫn trùng trong cùng cửa sổ (QĐ-09) |
+| Chống trùng dữ liệu | Liên máy — gần đúng | Đọc **phần mới ở cuối** mỗi phút + đọc lại toàn bộ mỗi 10 phút; vẫn trùng nếu 2 máy trúng cùng sound trong cùng 1 phút (QĐ-09) |
 | Vân tay thiết bị | Theo profile | Tất định từ tên thư mục → chép sang máy khác vẫn cùng "thiết bị" (QĐ-05) |
 | Canh IP đúng quốc gia | Theo máy | Tạm dừng khi VPN tụt, tự chạy tiếp khi về vùng (QĐ-17) |
 | Số luồng đếm video | **Theo từng máy** | N máy = N × số luồng tới cùng IP nếu các máy chia sẻ exit IP |

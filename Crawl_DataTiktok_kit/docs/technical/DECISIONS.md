@@ -128,6 +128,36 @@ hoàn toàn về những gì 3 máy kia đẩy lên → sound phổ biến gần
 **Đánh đổi đã báo trước:** Không triệt để 100% — 2 máy quét trúng cùng sound trong cùng cửa
 sổ 5 phút vẫn trùng. Số "Hợp lệ" của từng máy sẽ cao hơn số dòng máy đó thực đóng góp.
 
+**Bổ sung (2026-08-03) — ĐỌC TĂNG DẦN phần đuôi, cửa sổ trùng co từ 5–15 phút xuống ~1 phút.**
+Đánh đổi ở trên đã thành sự cố thật: người dùng chạy 2 máy với profile cùng vùng (UK/KR/US),
+ảnh chụp Sheet cho thấy nhiều dòng trùng. Người dùng tự chẩn đoán đúng gốc rễ: *"cả 2 máy đều
+lấy API từ sheet về, nhưng khi quét thì cả 2 đều trả về 1 sound rồi đẩy lên"*.
+
+Gốc rễ là **ĐỘ TRỄ BIẾT TIN**, không phải logic lọc sai: đọc lại **toàn bộ** cột B của tab
+156.000 dòng mất hàng chục giây nên chỉ dám chạy 5–15 phút/lần. Nghịch lý: muốn giảm trùng thì
+phải đọc dày hơn, mà đọc dày hơn thì càng nặng/càng dễ timeout (QĐ-20 đã gặp).
+
+Cách thoát nghịch lý: dòng mới **luôn được append vào CUỐI** tab (QĐ-08) → chỉ cần đọc **phần
+đuôi** kể từ mốc lần trước (`readLinkColumn({ startRow })`). Vài trăm dòng thì rẻ + nhanh →
+chạy được **mỗi phút**, vừa nhanh hơn 5–15 lần vừa **nhẹ hơn** cách cũ.
+
+- `rawRows` (số dòng THÔ, kể cả dòng rỗng) mới là thứ tính mốc — **không** dùng
+  `links.length` vì nó đã lọc bỏ dòng rỗng → mốc lệch dần, đọc lặp vô ích (có test riêng).
+- Vẫn đọc lại **toàn bộ** thưa hơn (`reseedMinutes`, mặc định đổi 5 → **10 phút**) để đồng bộ
+  lại mốc: nút "🧹 Dọn trùng trên Sheet" hoặc người dùng tự xóa dòng làm mọi dòng phía sau
+  **dịch lên** → đọc từ mốc cũ sẽ bỏ sót.
+- Nhãn cài đặt đổi thành *"Đọc lại toàn bộ Sheet mỗi X phút"* cho khớp nghĩa mới.
+
+**Thành thật về giới hạn còn lại:** vẫn **KHÔNG thể về 0 tuyệt đối**. Google Sheets không có
+phép "giành quyền" nguyên tử (atomic claim) nên mọi cách hỏi-đáp định kỳ đều còn cửa sổ hở —
+2 máy quét trúng cùng sound trong **cùng 1 phút** vẫn trùng. Chỉ là cửa sổ đã co 5–15 lần.
+Trùng còn sót thì dọn bằng nút "🧹 Dọn trùng trên Sheet" (QĐ-20).
+
+**Đã cân nhắc và LOẠI — chia vùng ID theo máy** (máy i chỉ lấy sound có `id % N == i`): diệt
+trùng liên máy 100% *bằng thiết kế*, nhưng mỗi máy phải bỏ (N−1)/N số sound quét được → với 6
+máy là bỏ 5/6. Bước đếm vốn đã là cổ chai (QĐ-21) nhưng bước QUÉT thì có hạn (~20 lần lướt/phút)
+nên hàng đợi đếm sẽ bị bỏ đói → **tổng sản lượng cả dàn giảm mạnh**. Không đáng.
+
 ---
 
 ## QĐ-10 — Hàm chuẩn hóa link để ở một nơi duy nhất
@@ -733,4 +763,6 @@ hôm nay, tên profile rỗng gom vào "(không rõ)"). `npm run test:ui` vẫn 
 | Kết luận "chế độ KHÁCH" từ MỘT lần đọc DOM rồi dừng cả profile | Trang TikTok lúc hydrate hiện nút Log in thoáng qua → báo khách OAN, dừng oan; nút 🔑 đọc lại 24s nên không bị, gây mâu thuẫn "🔑 nói đăng nhập mà ▶ nói khách" — xem QĐ-22 |
 | Thêm vòng chờ/đọc lại nhiều lần mà không nhận cờ `stop` | Bấm Dừng phải chờ hết cửa sổ (tới 20s) mới phản hồi — xem QĐ-22 |
 | Dùng lại `.result-table` (min-width 720px) cho bảng trong modal hẹp | Ép sinh thanh cuộn ngang, bó hết nội dung — modal cần bộ style riêng, xem QĐ-23 |
+| Đọc lại TOÀN BỘ cột Link mỗi lần đồng bộ chống trùng liên máy | Tab 156k dòng mất hàng chục giây → chỉ dám chạy 5–15 phút/lần, chính khoảng hở đó sinh trùng. Dòng mới luôn ở cuối nên đọc TĂNG DẦN phần đuôi vừa nhanh hơn vừa nhẹ hơn — xem QĐ-09 |
+| Tính mốc đọc tăng dần bằng `links.length` (đã lọc dòng rỗng) | Mốc lệch dần mỗi khi Sheet có dòng rỗng → đọc lặp vô ích/bỏ sót. Phải dùng số dòng THÔ (`rawRows`) — xem QĐ-09 |
 | Tin layout "nhìn code thấy ổn" mà không render thật để đo | Bỏ sót cuộn ngang, `-webkit-line-clamp` cắt hở, dải trắng ở trạng thái rỗng — chụp ảnh + đo `scrollWidth-clientWidth` mới thấy, xem QĐ-23 |
