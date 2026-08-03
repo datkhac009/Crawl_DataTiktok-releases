@@ -11,6 +11,7 @@
 const {
   httpRequest, getToken, extractSpreadsheetId, SHEETS_BASE,
 } = require('./google-api.cjs');
+const quota = require('./quota-guard.cjs');
 
 const BATCH_SIZE = 10;
 const FLUSH_MS = 5000;
@@ -37,6 +38,11 @@ async function appendRows(spreadsheetId, tab, rows, sa) {
     body: { values: rows },
   });
   if (resp.status < 200 || resp.status >= 300) {
+    if (quota.isQuotaError(resp.status, resp.body)) {
+      quota.noteQuotaHit('ghi dòng lên Sheet');
+      throw new Error(`Google API vượt giới hạn (HTTP ${resp.status}) — lô này được giữ lại`
+        + ` trong bộ đệm và tự đẩy lại sau ${Math.round(quota.COOLDOWN_MS / 1000)}s.`);
+    }
     throw new Error(`append HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
   }
 }
@@ -78,6 +84,13 @@ async function readLinkColumn(spreadsheetId, tab, sa, { startRow = 1 } = {}) {
         timeoutMs: READ_LINKS_TIMEOUT_MS,
       });
       if (resp.status < 200 || resp.status >= 300) {
+        // Vượt quota thì MỞ CẦU DAO rồi ném lỗi nói rõ — để nơi gọi không thử lại dồn dập.
+        if (quota.isQuotaError(resp.status, resp.body)) {
+          quota.noteQuotaHit('đọc cột Link');
+          throw new Error(`Google API vượt giới hạn (HTTP ${resp.status}) — tạm ngưng đọc Sheet`
+            + ` ${Math.round(quota.COOLDOWN_MS / 1000)}s. Nếu bị thường xuyên: dùng Service Account`
+            + ' RIÊNG cho từng máy (hạn 60 request/phút tính theo từng Service Account).');
+        }
         throw new Error(`đọc Sheet HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
       }
       let data;
@@ -359,6 +372,11 @@ let _refreshInFlight = null;   // gộp các lời gọi trùng nhau, tránh 2 n
                                // đẩy mốc lên → nhảy qua mất dòng chưa đọc
 async function refreshKnownLinks({ full = false } = {}) {
   if (!_cfg) return { links: [], rawRows: 0, from: 0, full: false };
+  // Đang bị Google chặn vì vượt quota → KHÔNG gọi thêm (càng dội càng bị chặn sâu). Dùng lại
+  // danh sách đã biết; hết cooldown thì lần sau đọc tiếp từ đúng mốc, không mất dòng nào.
+  if (quota.isCoolingDown()) {
+    return { links: [], rawRows: 0, from: _nextRow, full: false, skipped: 'quota' };
+  }
   if (_refreshInFlight) return _refreshInFlight;   // đang đọc → dùng chung kết quả
   const cfg = _cfg;
   const doFull = full || _nextRow <= 0;
@@ -408,14 +426,22 @@ function dropFromBuffer(links) {
   _buffer = _buffer.filter(r => !keys.has(normalizeKey(r && r[1])));
 }
 
-function ensureTimer() {
+// `delayMs`: mặc định FLUSH_MS. Khi đang bị chặn quota thì hẹn đúng phần cooldown còn lại —
+// nếu vẫn hẹn 5s thì cứ 5s lại tỉnh dậy một lần vô ích suốt cả phút.
+function ensureTimer(delayMs = FLUSH_MS) {
   if (_timer) return;
-  _timer = setTimeout(() => { _timer = null; flush(); }, FLUSH_MS);
+  _timer = setTimeout(() => { _timer = null; flush(); }, Math.max(500, delayMs));
 }
 
 function flush() {
   if (_timer) { clearTimeout(_timer); _timer = null; }
   if (!_cfg || !_buffer.length) return _flushChain;
+  // Đang bị chặn vì quota → hoãn cả lô, giữ nguyên trong bộ đệm rồi hẹn thử lại. KHÔNG ghi
+  // lúc này (sẽ lại 429) và KHÔNG bỏ dữ liệu.
+  if (quota.isCoolingDown()) {
+    ensureTimer(quota.cooldownRemaining() + 500);
+    return _flushChain;
+  }
   // Lọc lần cuối trước khi ghi: bỏ dòng đã lên Sheet bằng đường khác trong lúc nằm chờ
   // buffer (máy khác đẩy giữa 2 lần đọc lại) — chốt chặn cuối của chống trùng liên máy.
   const rows = _buffer.filter(r => {

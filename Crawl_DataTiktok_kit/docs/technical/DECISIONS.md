@@ -758,6 +758,58 @@ hôm nay, tên profile rỗng gom vào "(không rõ)"). `npm run test:ui` vẫn 
 
 ---
 
+## QĐ-24 — Cầu dao chống dội quota Google API + dùng Service Account RIÊNG cho từng máy
+
+**Câu hỏi của người dùng (2026-08-03):** *"Nếu lượt call API nhiều quá nó sẽ bị nghẽn thì sao?
+Bạn đã fix được lỗi đấy không và liệu có phải chia profile ra không?"* — hỏi đúng chỗ: các bản
+vá chống trùng trong ngày (QĐ-09 bổ sung 1 & 2) **đã LÀM TĂNG số lần gọi API**, mà lúc đó app
+**không có một dòng nào** xử lý 429/quota.
+
+**Giới hạn thật của Google Sheets API v4:** 300 request/phút mỗi **project** và **60 request/phút
+mỗi "người dùng"** — *người dùng* ở đây là **danh tính xác thực**, tức chính Service Account.
+⚠ Cả 6 VPS đang dùng **CHUNG MỘT** file Service Account → hạn 60/phút áp cho **TỔNG cả 6 máy**,
+không phải mỗi máy 60.
+
+**Ước lượng tải sau các bản vá** (mỗi máy, mỗi phút):
+
+| Nguồn gọi | Đọc | Ghi |
+|---|---|---|
+| Đồng bộ định kỳ (đọc tăng dần) | 1 | 0 |
+| Mỗi lần `flush` (đọc-trước-khi-ghi + append) | ~2–3 | ~2–3 |
+| Nhịp tim `sheet-lock` | 1 | 1 |
+| **Tổng 1 máy** | **~4–5** | **~3–4** |
+| **× 6 máy (chung 1 Service Account)** | **~25–30** | **~20–25** |
+
+→ Ở tải bình thường vẫn **dưới 60/phút**, nhưng **không nhiều dư địa**. Lúc dồn dập (`flush` tối
+đa mỗi 5s = 12 lần/phút) thì 6 máy có thể vượt 60 → Google trả 429.
+
+**Quyết định 1 — cầu dao `src/quota-guard.cjs`:** thấy 429 (hoặc 403 *có* chữ quota/rateLimit)
+thì **mở cầu dao 60 giây** (bằng cửa sổ quota của Google) — mọi lời gọi **tự động** tạm ngưng:
+- `refreshKnownLinks()` bỏ qua, **vẫn trả đúng mốc dòng** để hết cooldown đọc tiếp, không mất dòng.
+- `flush()` **không ghi**, giữ nguyên lô trong bộ đệm và hẹn lại đúng phần cooldown còn lại
+  (không hẹn 5s để khỏi tỉnh dậy vô ích 12 lần/phút).
+- **Dữ liệu KHÔNG mất**: hết cooldown là lô cũ được đẩy tiếp (có test).
+
+⚠ **403 phải soi nội dung, KHÔNG được coi mọi 403 là quota**: 403 còn nghĩa *"chưa chia sẻ Sheet
+cho service account"* — báo nhầm thành quota sẽ **che mất** lỗi thiếu quyền, rất khó đoán ra
+(đã có test riêng chốt điều này).
+
+**Quyết định 2 (khuyến nghị vận hành, chưa làm) — mỗi máy một Service Account RIÊNG:** vì hạn
+60/phút tính **theo từng Service Account**, tạo 6 service account và chia mỗi máy một cái sẽ
+nâng trần từ 60 lên **60 × 6 = 360/phút** (chỉ còn bị hạn project 300/phút). Không cần đổi code
+— chỉ dán JSON khác vào modal ☁ trên từng máy, và chia sẻ Sheet cho cả 6 email đó (quyền Editor).
+
+**Trả lời "có phải chia profile ra không": KHÔNG.** Chia profile **không giải quyết** vấn đề
+quota: số lần gọi tỉ lệ với **lượng sound thu được** (mỗi lần `flush`) chứ không phải với số
+profile — dồn profile về ít máy hơn thì giảm phần cố định (đồng bộ + nhịp tim) nhưng lại giảm
+luôn sản lượng. Đúng chỗ cần chia là **Service Account**, không phải profile.
+
+**Kiểm chứng:** `test/quota-guard.test.js` (21 assertion — nhận diện đúng 429/403-quota,
+**không** nhầm 403-thiếu-quyền, mở cầu dao, không gọi thêm khi đang cooldown, và **lô chờ không
+mất dữ liệu** sau khi hết chặn).
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |
@@ -791,6 +843,8 @@ hôm nay, tên profile rỗng gom vào "(không rõ)"). `npm run test:ui` vẫn 
 | Dùng lại `.result-table` (min-width 720px) cho bảng trong modal hẹp | Ép sinh thanh cuộn ngang, bó hết nội dung — modal cần bộ style riêng, xem QĐ-23 |
 | Đọc lại TOÀN BỘ cột Link mỗi lần đồng bộ chống trùng liên máy | Tab 156k dòng mất hàng chục giây → chỉ dám chạy 5–15 phút/lần, chính khoảng hở đó sinh trùng. Dòng mới luôn ở cuối nên đọc TĂNG DẦN phần đuôi vừa nhanh hơn vừa nhẹ hơn — xem QĐ-09 |
 | Dựng ID dài trong test bằng phép CỘNG số (`76000000000000000 + n`) | Vượt `Number.MAX_SAFE_INTEGER` → mọi `n` ra CÙNG một số → mọi link test giống nhau → test pass VÔ NGHĨA, che mất bug thật. Phải ghép CHUỖI — xem QĐ-09 |
+| Gọi Google API mà không xử lý riêng 429/quota | Gặp là ném lỗi như lỗi mạng thường rồi timer 5s thử lại → càng dội, càng bị chặn sâu. Phải có cầu dao tạm ngưng — xem QĐ-24 |
+| Coi MỌI lỗi 403 là vượt quota | 403 còn nghĩa "chưa chia sẻ Sheet cho service account" — báo nhầm sẽ che mất lỗi thiếu quyền, cực khó đoán. Phải soi nội dung — xem QĐ-24 |
 | Để mốc đọc tăng dần ở 2 nơi (main.js + sheets.cjs) | 2 mốc lệch nhau (bẫy QĐ-10) và 2 nơi cùng đọc sẽ cùng đẩy mốc → nhảy qua mất dòng chưa đọc. Phải để MỘT nơi + gộp lời gọi trùng — xem QĐ-09 |
 | Tính mốc đọc tăng dần bằng `links.length` (đã lọc dòng rỗng) | Mốc lệch dần mỗi khi Sheet có dòng rỗng → đọc lặp vô ích/bỏ sót. Phải dùng số dòng THÔ (`rawRows`) — xem QĐ-09 |
 | Tin layout "nhìn code thấy ổn" mà không render thật để đo | Bỏ sót cuộn ngang, `-webkit-line-clamp` cắt hở, dải trắng ở trạng thái rỗng — chụp ảnh + đo `scrollWidth-clientWidth` mới thấy, xem QĐ-23 |

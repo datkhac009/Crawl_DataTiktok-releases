@@ -38,6 +38,7 @@ sound TikTok. Mỗi profile = một tài khoản TikTok, chạy độc lập, c�
 | `browser.cjs` | Vòng đời Chromium, phiên đăng nhập, context theo profile |
 | `fingerprint.cjs` | Dấu vân tay cố định theo profile (chuyển máy vẫn giữ đăng nhập) |
 | `linkkey.cjs` | Chuẩn hóa link sound — **dùng chung** cho lọc trùng khi quét và khi đẩy Sheet |
+| `quota-guard.cjs` | **Cầu dao quota**: gặp 429 → tạm ngưng gọi API 60s, không mất dữ liệu (QĐ-24) |
 | `google-api.cjs` | Xác thực Service Account + `httpRequest` (có timeout) — **dùng chung** cho `sheets.cjs` và `sheet-lock.cjs` |
 | `sheets.cjs` | Đẩy dữ liệu lên Google Sheets, chống trùng liên máy |
 | `sheet-lock.cjs` | **Khóa liên máy**: chặn 1 profile chạy trên 2+ máy, qua tab `_locks` **ẩn** trên Sheet |

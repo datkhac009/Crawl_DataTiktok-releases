@@ -128,6 +128,17 @@ Dữ liệu ghi vào 4 cột **A–D**: Tên sound | Link | Số video | Profile
   nữa rồi lọc lại. Nên nếu 2 máy quét trúng cùng 1 link, **máy đẩy sau sẽ thấy máy trước vừa
   đẩy và tự bỏ** — không ghi trùng.
 
+**Nếu Google báo quá giới hạn gọi API (429):** app **tự tạm ngưng 60 giây** rồi làm tiếp —
+**không mất dữ liệu**, lô đang chờ vẫn nằm trong bộ đệm và tự đẩy lại sau. Log ghi rõ
+`[quota] Google API báo vượt giới hạn — tạm ngưng gọi tự động 60s`.
+
+⚠️ **Quan trọng khi chạy nhiều máy:** giới hạn của Google là **60 request/phút cho mỗi Service
+Account**, mà cả 6 VPS đang dùng **CHUNG một** file Service Account → hạn đó chia cho cả 6 máy.
+Nếu hay bị báo vượt giới hạn, **tạo Service Account riêng cho từng máy** (mỗi máy dán một file
+JSON khác trong modal ☁, và chia sẻ Sheet cho cả 6 email đó với quyền Editor) — trần sẽ tăng từ
+60 lên tới 360 request/phút. **Không cần chia lại profile** — chia profile không giúp gì cho
+giới hạn này.
+
 ⚠️ **Thành thật:** vẫn không thể hết trùng 100%. Google Sheets không có cơ chế "giành quyền"
 nên nếu 2 máy đọc-rồi-ghi lồng vào nhau trong **cùng dưới một giây** thì cả hai vẫn thấy "chưa
 có" rồi cùng ghi. Cửa sổ đã co từ 5–15 phút xuống dưới 1 giây, nhưng không phải 0. Trùng còn
