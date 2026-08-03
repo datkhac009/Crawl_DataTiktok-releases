@@ -57,7 +57,10 @@ function installMock(sheetRows) {
 }
 
 const SA = { client_email: 'a@b.c', private_key: 'k' };
-const L = (n) => `https://www.tiktok.com/music/original-sound-${76000000000000000 + n}`;
+// ⚠ Ghep CHUOI, khong cong so: 76000000000000000 vuot Number.MAX_SAFE_INTEGER (~9.007e15)
+// nen `76000000000000000 + n` cho ra CUNG MOT so voi moi n -> moi L(n) thanh cung 1 link,
+// test se pass mot cach VO NGHIA. Da bi chinh loi nay lua mot lan (2026-08-03).
+const L = (n) => `https://www.tiktok.com/music/original-sound-76000000000${String(100000 + n)}`;
 
 (async () => {
   console.log('\n=== 1. Doc TOAN BO (startRow=1) -> dung range B:B, tra du link + rawRows ===');

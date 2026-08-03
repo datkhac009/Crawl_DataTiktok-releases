@@ -148,10 +148,36 @@ chạy được **mỗi phút**, vừa nhanh hơn 5–15 lần vừa **nhẹ hơ
   **dịch lên** → đọc từ mốc cũ sẽ bỏ sót.
 - Nhãn cài đặt đổi thành *"Đọc lại toàn bộ Sheet mỗi X phút"* cho khớp nghĩa mới.
 
+**Bổ sung lần 2 (2026-08-03, cùng ngày) — ĐỌC MỚI NHẤT NGAY TRƯỚC KHI GHI.** Người dùng nêu
+đúng phần còn hở: *"2 máy chủ quét cùng 1 link, máy kia quét check xong đẩy lên trước, xong
+máy kia quét check xong đẩy lên → bị trùng"* — đọc định kỳ mỗi phút vẫn hở đúng 1 phút đó.
+
+Sửa: `flush()` gọi `refreshKnownLinks()` **ngay trước khi append**, rồi **lọc lại lô** một lần
+nữa. Máy đẩy SAU nhìn thấy dòng máy trước vừa ghi và tự bỏ → cửa hở co từ ~1 phút xuống còn
+đúng thời gian của 1 request (dưới 1 giây). Rẻ vì chỉ đọc vài dòng mới kể từ mốc.
+
+Nguyên tắc đi kèm:
+- **Lỗi mạng ở bước đọc này KHÔNG được chặn việc ghi** — thà chấp nhận cửa hở như cũ còn hơn
+  nghẽn/mất dữ liệu. Chỉ ghi log rồi đi tiếp (có test).
+- Khi append lỗi, chỉ trả **phần thực sự định ghi** về buffer — số bị bỏ vì máy khác đã đẩy thì
+  KHÔNG đẩy lại nữa.
+- **Mốc dòng nằm ở MỘT NƠI DUY NHẤT** (`sheets.cjs`), có gộp lời gọi trùng (`_refreshInFlight`).
+  Ban đầu tôi để mốc ở cả `main.js` lẫn `sheets.cjs` → đúng bẫy QĐ-10 (2 bản sao SẼ lệch) và
+  2 nơi cùng đọc sẽ cùng đẩy mốc → **nhảy qua mất dòng chưa đọc**. Đã gộp về `sheets.cjs`.
+- Đầu phiên dùng `refreshKnownLinks({ full: true })` chứ không phải `readLinks()`: vừa nạp bộ
+  lọc vừa **đặt mốc**, nếu không thì lần đẩy đầu tiên lại đọc lại 156.000 dòng lần nữa.
+- `configure()` chỉ quên mốc khi **thực sự đổi** Sheet/tab — reset vô điều kiện là lặp lại bẫy
+  QĐ-19 (configure được gọi ở mỗi lần bấm Chạy).
+
 **Thành thật về giới hạn còn lại:** vẫn **KHÔNG thể về 0 tuyệt đối**. Google Sheets không có
-phép "giành quyền" nguyên tử (atomic claim) nên mọi cách hỏi-đáp định kỳ đều còn cửa sổ hở —
-2 máy quét trúng cùng sound trong **cùng 1 phút** vẫn trùng. Chỉ là cửa sổ đã co 5–15 lần.
-Trùng còn sót thì dọn bằng nút "🧹 Dọn trùng trên Sheet" (QĐ-20).
+phép "giành quyền" nguyên tử (atomic claim): nếu 2 máy đọc-rồi-ghi **lồng vào nhau trong cùng
+dưới một giây** thì cả hai vẫn thấy "chưa có" rồi cùng ghi. Cửa sổ đã co từ 5–15 phút xuống
+dưới 1 giây, nhưng không phải 0. Trùng còn sót thì dọn bằng nút "🧹 Dọn trùng trên Sheet" (QĐ-20).
+
+**Bài học test (2026-08-03):** helper test ban đầu dùng `76000000000000000 + n` để sinh ID sound
+— con số này **vượt `Number.MAX_SAFE_INTEGER`** (~9.007e15) nên mọi `n` cho ra **cùng một số** →
+mọi link test giống nhau → bộ test `sheets-incremental` **pass một cách vô nghĩa**. Phải ghép
+CHUỖI khi dựng ID dài. Chính lỗi này che mất việc `flush()` chưa hoạt động ở lần chạy đầu.
 
 **Đã cân nhắc và LOẠI — chia vùng ID theo máy** (máy i chỉ lấy sound có `id % N == i`): diệt
 trùng liên máy 100% *bằng thiết kế*, nhưng mỗi máy phải bỏ (N−1)/N số sound quét được → với 6
@@ -764,5 +790,7 @@ hôm nay, tên profile rỗng gom vào "(không rõ)"). `npm run test:ui` vẫn 
 | Thêm vòng chờ/đọc lại nhiều lần mà không nhận cờ `stop` | Bấm Dừng phải chờ hết cửa sổ (tới 20s) mới phản hồi — xem QĐ-22 |
 | Dùng lại `.result-table` (min-width 720px) cho bảng trong modal hẹp | Ép sinh thanh cuộn ngang, bó hết nội dung — modal cần bộ style riêng, xem QĐ-23 |
 | Đọc lại TOÀN BỘ cột Link mỗi lần đồng bộ chống trùng liên máy | Tab 156k dòng mất hàng chục giây → chỉ dám chạy 5–15 phút/lần, chính khoảng hở đó sinh trùng. Dòng mới luôn ở cuối nên đọc TĂNG DẦN phần đuôi vừa nhanh hơn vừa nhẹ hơn — xem QĐ-09 |
+| Dựng ID dài trong test bằng phép CỘNG số (`76000000000000000 + n`) | Vượt `Number.MAX_SAFE_INTEGER` → mọi `n` ra CÙNG một số → mọi link test giống nhau → test pass VÔ NGHĨA, che mất bug thật. Phải ghép CHUỖI — xem QĐ-09 |
+| Để mốc đọc tăng dần ở 2 nơi (main.js + sheets.cjs) | 2 mốc lệch nhau (bẫy QĐ-10) và 2 nơi cùng đọc sẽ cùng đẩy mốc → nhảy qua mất dòng chưa đọc. Phải để MỘT nơi + gộp lời gọi trùng — xem QĐ-09 |
 | Tính mốc đọc tăng dần bằng `links.length` (đã lọc dòng rỗng) | Mốc lệch dần mỗi khi Sheet có dòng rỗng → đọc lặp vô ích/bỏ sót. Phải dùng số dòng THÔ (`rawRows`) — xem QĐ-09 |
 | Tin layout "nhìn code thấy ổn" mà không render thật để đo | Bỏ sót cuộn ngang, `-webkit-line-clamp` cắt hở, dải trắng ở trạng thái rỗng — chụp ảnh + đo `scrollWidth-clientWidth` mới thấy, xem QĐ-23 |

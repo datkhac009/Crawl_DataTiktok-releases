@@ -331,13 +331,52 @@ let _flushChain = Promise.resolve();
 let _onError = null;      // callback báo lỗi ra UI
 
 function configure(cfg, onError) {
-  _cfg = cfg && cfg.enabled ? {
+  const next = cfg && cfg.enabled ? {
     enabled: true,
     spreadsheetId: extractSpreadsheetId(cfg.spreadsheetId),
     tab: cfg.tab || 'Data',
     sa: cfg.sa,
   } : null;
+  // Đổi sang Sheet/tab KHÁC thì mốc dòng cũ vô nghĩa → phải quên đi để lần sau đọc lại toàn bộ.
+  // ⚠ CHỈ khi thực sự đổi: configure() được gọi lại ở MỖI lần bấm Chạy, reset vô điều kiện là
+  // lặp lại đúng cái bẫy đã gặp ở sheet-lock (QĐ-19) — mất mốc liên tục, đọc lại toàn bộ mãi.
+  const changedTarget = (next && next.spreadsheetId) !== (_cfg && _cfg.spreadsheetId)
+    || (next && next.tab) !== (_cfg && _cfg.tab);
+  _cfg = next;
+  if (changedTarget) _nextRow = 0;
   _onError = onError || null;
+}
+
+// ── ĐỌC DỮ LIỆU MỚI NHẤT TỪ SHEET (đọc tăng dần từ mốc dòng) ──
+// MỘT NƠI DUY NHẤT giữ mốc `_nextRow`: cả vòng đồng bộ định kỳ (main.js) lẫn bước đẩy
+// (flush) đều gọi hàm này. Nếu mỗi nơi tự giữ mốc riêng thì 2 mốc SẼ lệch nhau — đúng bẫy
+// QĐ-10 ("có ≥2 bản sao của cùng một logic thì chúng SẼ lệch").
+//
+// Trả `{ links, rawRows, from, full }` — `links` là phần MỚI đọc được (để nơi gọi nạp thêm
+// vào bộ lọc quét của crawler).
+let _nextRow = 0;              // 0 = chưa biết mốc → phải đọc toàn bộ
+let _refreshInFlight = null;   // gộp các lời gọi trùng nhau, tránh 2 nơi cùng đọc rồi cùng
+                               // đẩy mốc lên → nhảy qua mất dòng chưa đọc
+async function refreshKnownLinks({ full = false } = {}) {
+  if (!_cfg) return { links: [], rawRows: 0, from: 0, full: false };
+  if (_refreshInFlight) return _refreshInFlight;   // đang đọc → dùng chung kết quả
+  const cfg = _cfg;
+  const doFull = full || _nextRow <= 0;
+  const from = doFull ? 1 : _nextRow;
+  _refreshInFlight = (async () => {
+    const r = await readLinkColumn(cfg.spreadsheetId, cfg.tab, cfg.sa, { startRow: from });
+    updateKnownLinks(r.links);
+    // Mốc kế tiếp: đọc toàn bộ thì bắt đầu từ dòng 1 nên mốc = rawRows + 1; đọc tăng dần thì
+    // cộng dồn từ chỗ bắt đầu. Dùng rawRows (số dòng THÔ) chứ KHÔNG dùng links.length —
+    // links đã lọc bỏ dòng rỗng nên mốc sẽ lệch dần (có test riêng cho bẫy này).
+    _nextRow = doFull ? r.rawRows + 1 : from + r.rawRows;
+    return { links: r.links, rawRows: r.rawRows, from, full: doFull };
+  })();
+  try {
+    return await _refreshInFlight;
+  } finally {
+    _refreshInFlight = null;
+  }
 }
 
 function isEnabled() { return !!_cfg; }
@@ -386,19 +425,43 @@ function flush() {
   _buffer = [];
   if (!rows.length) return _flushChain;
   const cfg = _cfg;
+  let pending = rows;   // lô THỰC SỰ sẽ ghi (có thể bị co lại sau khi đọc mới nhất)
   _flushChain = _flushChain
-    .then(() => appendRows(cfg.spreadsheetId, cfg.tab, rows, cfg.sa))
-    .then(() => {
+    .then(async () => {
+      // ── ĐỌC MỚI NHẤT NGAY TRƯỚC KHI GHI (2026-08-03, người dùng yêu cầu) ──
+      // Tình huống người dùng lo đúng: 2 máy quét trúng CÙNG 1 link, máy A check xong đẩy
+      // lên trước, máy B check xong đẩy lên sau → TRÙNG. Đọc định kỳ mỗi phút vẫn còn cửa
+      // hở trong đúng 1 phút đó. Đọc phần đuôi NGAY TRƯỚC KHI GHI thì máy đẩy sau nhìn thấy
+      // dòng máy trước vừa ghi và tự bỏ → cửa hở co xuống còn đúng thời gian của 1 request.
+      // Rẻ: chỉ đọc vài dòng mới kể từ mốc, không phải 156.000 dòng.
+      // Lỗi mạng ở bước này KHÔNG được chặn việc ghi (thà chấp nhận cửa hở như cũ còn hơn
+      // nghẽn/mất dữ liệu) → chỉ ghi log rồi đi tiếp.
+      try {
+        await refreshKnownLinks();
+      } catch (e) {
+        console.warn('[sheets] Không đọc được phần mới trước khi ghi (vẫn ghi):', e.message);
+      }
+      pending = rows.filter(r => {
+        const k = normalizeKey(r && r[1]);
+        return !(k && _knownLinks.has(k));
+      });
+      const dropped = rows.length - pending.length;
+      if (dropped > 0) {
+        console.log(`[sheets] Bỏ ${dropped} dòng trước khi ghi — máy khác vừa đẩy lên trước (chống trùng liên máy).`);
+      }
+      if (!pending.length) return;
+      await appendRows(cfg.spreadsheetId, cfg.tab, pending, cfg.sa);
       // Ghi thành công → các link này giờ ĐÃ có trên Sheet, ghi nhớ để mọi đường đẩy
       // sau (kể cả buffer retry) không bao giờ đẩy lại.
-      for (const r of rows) { const k = normalizeKey(r && r[1]); if (k) _knownLinks.add(k); }
+      for (const r of pending) { const k = normalizeKey(r && r[1]); if (k) _knownLinks.add(k); }
     })
     .catch(e => {
       console.error('[sheets] flush lỗi:', e.message);
       // KHÔNG bỏ rơi lô lỗi (trước đây lô lỗi bị mất luôn → "nghẽn" là mất data):
       // trả các dòng về ĐẦU buffer để timer thử đẩy lại sau. Nếu lỗi kéo dài, dữ liệu
       // vẫn nằm chờ trong buffer + user có nút "Đẩy lên Sheet" để đẩy bù thủ công.
-      _buffer = rows.concat(_buffer);
+      // Chỉ trả lại `pending` — số bị bỏ vì máy khác đã đẩy thì KHÔNG đẩy lại nữa.
+      _buffer = pending.concat(_buffer);
       ensureTimer();
       if (_onError) _onError(e.message);
     });
@@ -414,6 +477,7 @@ module.exports = {
   testConnection,
   readLinks,
   readLinkColumn,
+  refreshKnownLinks,
   extractSpreadsheetId,
   configure,
   isEnabled,

@@ -124,9 +124,14 @@ Dữ liệu ghi vào 4 cột **A–D**: Tên sound | Link | Số video | Profile
   đồng bộ lại mốc (cần khi có dòng bị xóa làm các dòng phía sau dịch lên). **Không cần hạ
   xuống thấp** — phần mới đã đọc mỗi phút rồi; hạ thấp chỉ làm nặng thêm.
 
+- **Quan trọng nhất:** ngay **TRƯỚC MỖI LẦN GHI** lên Sheet, app đọc lại phần mới nhất một lần
+  nữa rồi lọc lại. Nên nếu 2 máy quét trúng cùng 1 link, **máy đẩy sau sẽ thấy máy trước vừa
+  đẩy và tự bỏ** — không ghi trùng.
+
 ⚠️ **Thành thật:** vẫn không thể hết trùng 100%. Google Sheets không có cơ chế "giành quyền"
-nên nếu 2 máy quét trúng **cùng một sound trong cùng 1 phút** thì vẫn có thể đẩy trùng — chỉ là
-khả năng đã giảm 5–15 lần. Trùng còn sót thì dùng nút **🧹 Dọn trùng trên Sheet** để dọn.
+nên nếu 2 máy đọc-rồi-ghi lồng vào nhau trong **cùng dưới một giây** thì cả hai vẫn thấy "chưa
+có" rồi cùng ghi. Cửa sổ đã co từ 5–15 phút xuống dưới 1 giây, nhưng không phải 0. Trùng còn
+sót thì dùng nút **🧹 Dọn trùng trên Sheet** để dọn.
 
 ⚠️ Khi dọn trùng trên Sheet, luôn **xóa cả dòng** (Delete rows), đừng xóa nội dung ô — xóa
 nội dung sẽ làm app ghi lệch cột ở lần đẩy sau.

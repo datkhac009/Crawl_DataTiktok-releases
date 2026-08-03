@@ -314,8 +314,11 @@ ipcMain.handle('profile-start', async (_e, params) => {
   let seedUrls = [];
   if (!crawler.isAnyRunning() && sheetsCfg.enabled && sa && sheetsCfg.spreadsheetId) {
     try {
-      seedUrls = await sheets.readLinks(sheetsCfg.spreadsheetId, sheetsCfg.tab || 'Data', sa);
-      sheets.updateKnownLinks(seedUrls);   // chặn trùng cả ở CỬA ĐẨY (không chỉ cửa quét)
+      // Dùng refreshKnownLinks (không phải readLinks): nó vừa nạp vào bộ lọc ĐẨY vừa ĐẶT MỐC
+      // dòng. Nếu chỉ readLinks thì mốc vẫn 0 → lần đẩy đầu tiên lại phải đọc lại 156.000
+      // dòng lần nữa (đọc trùng vô ích ngay lúc khởi động).
+      const seed = await sheets.refreshKnownLinks({ full: true });
+      seedUrls = seed.links;
       send('crawl-status', { profileId: null, status: 'info', msg: `Đã nạp ${seedUrls.length} link từ Sheet để lọc trùng...` });
     } catch (e) {
       // (2026-07-29) Chưa nạp được → sheets.enqueue() tự tạm dừng đẩy realtime cho tới khi
@@ -596,43 +599,29 @@ app.whenReady().then(() => {
   // Vẫn phải đọc lại TOÀN BỘ thưa hơn (theo `reseedMinutes`) vì mốc dòng có thể LỆCH: nút
   // "🧹 Dọn trùng trên Sheet" xóa dòng làm mọi dòng phía sau dịch lên, hoặc người dùng tự xóa
   // dòng trên Sheet → đọc từ mốc cũ sẽ bỏ sót. Đọc lại toàn bộ để đồng bộ lại mốc.
+  // Mốc dòng do `sheets.cjs` giữ (MỘT NƠI DUY NHẤT — xem refreshKnownLinks). Ở đây chỉ quyết
+  // định KHI NÀO đọc toàn bộ, và nạp phần link mới vào bộ lọc QUÉT của crawler (sheets.cjs đã
+  // tự nạp vào bộ lọc ĐẨY của nó).
   let _reseedBusy = false;
   let _lastFullReseedAt = 0;
-  let _reseedNextRow = 0;   // 0 = chưa biết mốc → lần tới đọc toàn bộ
-
-  // Cho phép các nơi khác (đầu phiên) đặt mốc sau khi đã đọc toàn bộ.
-  const applyReseed = (links, label) => {
-    const addedScan = crawler.addSeedUrls(links);
-    const addedPush = sheets.updateKnownLinks(links);
-    if (addedScan > 0 || addedPush > 0) {
-      console.log(`[reseed] ${label}: +${addedScan} link mới vào bộ lọc quét, +${addedPush} vào cửa đẩy.`);
-    }
-    return addedScan + addedPush;
-  };
 
   setInterval(async () => {
     if (_reseedBusy || !crawler.isAnyRunning()) return;
     const cfg = store.get('sheets_config') || {};
     if (!cfg.enabled || !cfg.spreadsheetId || !cfg.saJson) return;
-    let sa = null;
-    try { sa = JSON.parse(cfg.saJson); } catch (_) { return; }
-    const tab = cfg.tab || 'Data';
     // `reseedMinutes` giờ là chu kỳ ĐỌC LẠI TOÀN BỘ (đồng bộ mốc); phần đuôi đọc mỗi phút.
-    const fullEveryMin = Math.max(1, parseFloat(cfg.reseedMinutes) || 5);
-    const needFull = _reseedNextRow <= 0 || Date.now() - _lastFullReseedAt >= fullEveryMin * 60000;
+    const fullEveryMin = Math.max(1, parseFloat(cfg.reseedMinutes) || 10);
+    const needFull = Date.now() - _lastFullReseedAt >= fullEveryMin * 60000;
 
     _reseedBusy = true;
     try {
-      if (needFull) {
-        const r = await sheets.readLinkColumn(cfg.spreadsheetId, tab, sa, { startRow: 1 });
-        applyReseed(r.links, `Đồng bộ TOÀN BỘ Sheet (${r.rawRows} dòng)`);
-        _reseedNextRow = r.rawRows + 1;   // lần sau đọc từ dòng kế tiếp
-        _lastFullReseedAt = Date.now();
-      } else {
-        const r = await sheets.readLinkColumn(cfg.spreadsheetId, tab, sa, { startRow: _reseedNextRow });
-        if (r.rawRows > 0) {
-          applyReseed(r.links, `Đồng bộ phần mới (${r.rawRows} dòng từ dòng ${_reseedNextRow})`);
-          _reseedNextRow += r.rawRows;
+      const r = await sheets.refreshKnownLinks({ full: needFull });
+      if (r.full) _lastFullReseedAt = Date.now();
+      if (r.rawRows > 0) {
+        const addedScan = crawler.addSeedUrls(r.links);
+        if (addedScan > 0 || r.full) {
+          console.log(`[reseed] ${r.full ? `Đọc TOÀN BỘ Sheet (${r.rawRows} dòng)` : `Đọc phần mới (${r.rawRows} dòng từ dòng ${r.from})`}`
+            + `: +${addedScan} link mới vào bộ lọc quét.`);
         }
       }
     } catch (e) {
