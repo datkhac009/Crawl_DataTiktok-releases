@@ -24,7 +24,7 @@
 //
 // TRIẾT LÝ XỬ LÝ LỖI (giống ip-guard.cjs): chỉ CHẶN khi chắc chắn.
 //   - Đọc được và thấy máy khác có nhịp tim còn tươi (<3 phút) → CHẶN, nói rõ tên máy kia.
-//   - Sheet chưa cấu hình / lỗi mạng / lỗi API → KHÔNG chặn (không được để 6 máy đứng im
+//   - Sheet chưa cấu hình / lỗi mạng / lỗi API → KHÔNG chặn (không được để cả dàn máy đứng im
 //     chỉ vì Sheet lỗi tạm thời). Chỉ ghi log.
 'use strict';
 

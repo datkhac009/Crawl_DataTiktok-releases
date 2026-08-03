@@ -365,7 +365,7 @@ Gộp cùng lúc sửa cả 3. Cũng gộp `attachCountBlocker` (crawler) và `a
 làm lưới an toàn — trước đó dự án **không có test nào**.
 
 **Đã cân nhắc và HOÃN:** tách `browser.cjs` (770 dòng). Nó chứa toàn bộ 5 lớp bảo vệ phiên
-đăng nhập; sửa sai là mất đăng nhập trên cả 6 máy, mà khôi phục phải bấm 🦊 từng profile qua
+đăng nhập; sửa sai là mất đăng nhập trên cả dàn máy, mà khôi phục phải bấm 🦊 từng profile qua
 RDP. Không đáng đánh đổi khi đang có production chạy.
 
 ---
@@ -383,14 +383,14 @@ VPN — **mà VPN có lúc tụt**. Khi tụt lúc 3h sáng, 5 profile vẫn kha
 là dùng proxy"*. Trước đây app **không hề biết** và cào tiếp hàng giờ.
 
 **Vì sao tạm dừng chứ không dừng hẳn:** VPN thường tự kết nối lại sau vài phút. Dừng hẳn là
-mất cả đêm sản lượng trên 6 máy.
+mất cả đêm sản lượng trên cả dàn máy.
 
 **Triết lý xử lý (giống `checkLoginState`) — không kết luận khi không chắc:**
 
 | Tình huống | Xử lý |
 |---|---|
 | Lệch quốc gia rõ ràng | Tạm dừng |
-| Không tra được IP (mất mạng) | **KHÔNG chặn** — mạng lỗi vài giây không được làm treo 6 máy |
+| Không tra được IP (mất mạng) | **KHÔNG chặn** — mạng lỗi vài giây không được làm treo cả dàn máy |
 | Profile không có nhãn quốc gia | Bỏ qua hoàn toàn (tương thích profile cũ chưa tag) |
 
 **Chi tiết:** 2 nhà cung cấp dự phòng (`ifconfig.co` ~850ms, `api.country.is` ~1.5s — đo thật),
@@ -531,7 +531,7 @@ mạng thật, không chỉ qua mock).
 **Bổ sung (2026-07-28, cùng ngày) — ẨN tab `_locks`:** người dùng phản đối việc tab `_locks`
 hiện ra trên thanh tab của Sheet chính (nhìn thấy ngay khi mở Sheet, giữa các tab dữ liệu
 thật). Yêu cầu: không muốn thấy tab lạ, nhưng vẫn cần thông báo rõ khi phát hiện profile
-chạy trùng ở máy khác. Vì không có hạ tầng dùng chung nào khác ngoài chính Sheet đó (6 VPS
+chạy trùng ở máy khác. Vì không có hạ tầng dùng chung nào khác ngoài chính Sheet đó (các VPS
 không có kết nối trực tiếp với nhau), giải pháp dung hòa: tạo tab `_locks` với thuộc tính
 `hidden: true` của Google Sheets API — dữ liệu vẫn nằm trong đúng spreadsheet đó (không cần
 Sheet thứ hai), nhưng **không hiện trên thanh tab** khi mở bình thường (vẫn xem được qua
@@ -740,7 +740,7 @@ chỉ `require` `fs` / `path` / `paths.cjs` — thấy ai thêm `google-api.cjs`
 vào file đó là SAI.
 
 **Hệ quả đã chấp nhận — KHÔNG gộp liên máy:** số liệu là của riêng từng máy. Muốn tổng cả dàn
-6 VPS thì cộng tay từng máy.
+cả dàn (5 máy) thì cộng tay từng máy.
 
 **Bài học layout bắt được nhờ chụp ảnh kiểm tra (không đoán mắt thường):** modal ban đầu dùng
 lại `.result-table` của bảng dữ liệu chính — bảng đó có `min-width: 720px` (cố ý, cho 5 cột)
@@ -767,7 +767,8 @@ vá chống trùng trong ngày (QĐ-09 bổ sung 1 & 2) **đã LÀM TĂNG số l
 
 **Giới hạn thật của Google Sheets API v4:** 300 request/phút mỗi **project** và **60 request/phút
 mỗi "người dùng"** — *người dùng* ở đây là **danh tính xác thực**, tức chính Service Account.
-⚠ Cả 6 VPS đang dùng **CHUNG MỘT** file Service Account → hạn 60/phút áp cho **TỔNG cả 6 máy**,
+⚠ Cả **5 máy** (4 VPS + máy của người dùng, mỗi máy 5 profile theo khu vực) đang dùng
+**CHUNG MỘT** file Service Account → hạn 60/phút áp cho **TỔNG cả 5 máy**,
 không phải mỗi máy 60.
 
 **Ước lượng tải sau các bản vá** (mỗi máy, mỗi phút):
@@ -778,10 +779,10 @@ không phải mỗi máy 60.
 | Mỗi lần `flush` (đọc-trước-khi-ghi + append) | ~2–3 | ~2–3 |
 | Nhịp tim `sheet-lock` | 1 | 1 |
 | **Tổng 1 máy** | **~4–5** | **~3–4** |
-| **× 6 máy (chung 1 Service Account)** | **~25–30** | **~20–25** |
+| **× 5 máy (chung 1 Service Account)** | **~20–25** | **~15–20** |
 
 → Ở tải bình thường vẫn **dưới 60/phút**, nhưng **không nhiều dư địa**. Lúc dồn dập (`flush` tối
-đa mỗi 5s = 12 lần/phút) thì 6 máy có thể vượt 60 → Google trả 429.
+đa mỗi 5s = 12 lần/phút → ~14 đọc/máy) thì 5 máy vẫn có thể vượt 60 → Google trả 429.
 
 **Quyết định 1 — cầu dao `src/quota-guard.cjs`:** thấy 429 (hoặc 403 *có* chữ quota/rateLimit)
 thì **mở cầu dao 60 giây** (bằng cửa sổ quota của Google) — mọi lời gọi **tự động** tạm ngưng:
@@ -796,8 +797,9 @@ cho service account"* — báo nhầm thành quota sẽ **che mất** lỗi thi�
 
 **Quyết định 2 (khuyến nghị vận hành, chưa làm) — mỗi máy một Service Account RIÊNG:** vì hạn
 60/phút tính **theo từng Service Account**, tạo 6 service account và chia mỗi máy một cái sẽ
-nâng trần từ 60 lên **60 × 6 = 360/phút** (chỉ còn bị hạn project 300/phút). Không cần đổi code
-— chỉ dán JSON khác vào modal ☁ trên từng máy, và chia sẻ Sheet cho cả 6 email đó (quyền Editor).
+nâng trần từ 60 lên **60 × 5 = 300/phút** — bằng đúng hạn project (300/phút), tức dùng hết dư địa
+Google cho phép. Không cần đổi code — chỉ dán JSON khác vào modal ☁ trên từng máy, và chia sẻ
+Sheet cho cả 5 email đó (quyền Editor).
 
 **Trả lời "có phải chia profile ra không": KHÔNG.** Chia profile **không giải quyết** vấn đề
 quota: số lần gọi tỉ lệ với **lượng sound thu được** (mỗi lần `flush`) chứ không phải với số

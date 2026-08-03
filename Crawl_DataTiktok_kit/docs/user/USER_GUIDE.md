@@ -96,8 +96,8 @@ thay đúng file .exe trong cùng thư mục. Giữ 400 ngày rồi tự dọn n
 ✅ **Lịch sử chỉ nằm trong app, KHÔNG đẩy gì lên Google Sheet** — không thêm tab, không thêm
 cột, không gọi Google API. Sheet của bạn giữ nguyên như cũ.
 
-⚠️ **Số liệu là của RIÊNG máy này** — không gộp sound do 5 VPS khác thu. Muốn xem tổng cả dàn
-thì cộng tay từ từng máy.
+⚠️ **Số liệu là của RIÊNG máy này** — không gộp sound do các máy khác thu. Muốn xem tổng cả dàn
+(5 máy) thì cộng tay từ từng máy.
 
 ⚠️ Lịch sử chỉ bắt đầu ghi **từ khi cập nhật bản này** — những ngày trước không dựng lại được
 (Google Sheet không có cột thời gian nên không đếm ngược lại được).
@@ -133,10 +133,11 @@ Dữ liệu ghi vào 4 cột **A–D**: Tên sound | Link | Số video | Profile
 `[quota] Google API báo vượt giới hạn — tạm ngưng gọi tự động 60s`.
 
 ⚠️ **Quan trọng khi chạy nhiều máy:** giới hạn của Google là **60 request/phút cho mỗi Service
-Account**, mà cả 6 VPS đang dùng **CHUNG một** file Service Account → hạn đó chia cho cả 6 máy.
+Account**, mà cả **5 máy** (4 VPS + máy của bạn) đang dùng **CHUNG một** file Service Account →
+hạn đó chia cho cả 5 máy (hiện dùng khoảng 20–25 đọc + 15–20 ghi mỗi phút).
 Nếu hay bị báo vượt giới hạn, **tạo Service Account riêng cho từng máy** (mỗi máy dán một file
-JSON khác trong modal ☁, và chia sẻ Sheet cho cả 6 email đó với quyền Editor) — trần sẽ tăng từ
-60 lên tới 360 request/phút. **Không cần chia lại profile** — chia profile không giúp gì cho
+JSON khác trong modal ☁, và chia sẻ Sheet cho cả 5 email đó với quyền Editor) — trần sẽ tăng từ
+60 lên **300 request/phút**. **Không cần chia lại profile** — chia profile không giúp gì cho
 giới hạn này.
 
 ⚠️ **Thành thật:** vẫn không thể hết trùng 100%. Google Sheets không có cơ chế "giành quyền"

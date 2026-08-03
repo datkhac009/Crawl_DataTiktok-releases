@@ -270,7 +270,7 @@ ipcMain.handle('profile-start', async (_e, params) => {
   // ── CHẶN CHẠY TRÙNG PROFILE GIỮA CÁC MÁY (2026-07-28) ──
   // Đây là nguyên nhân SỐ 1 khiến TikTok hủy phiên đăng nhập (1 phiên phát từ 2 IP). Khác
   // `profile.lock` (chỉ thấy được trong cùng 1 máy), khóa này ghi lên Google Sheet dùng chung
-  // nên 6 máy thấy nhau. CHẶN thật (không chỉ cảnh báo) vì cảnh báo lúc 3h sáng thì không ai
+  // nên các máy thấy nhau. CHẶN thật (không chỉ cảnh báo) vì cảnh báo lúc 3h sáng thì không ai
   // đọc, mà hậu quả là phải bấm 🦊 đăng nhập lại từng profile qua RDP.
   configureSheetLockFromStore();
   {

@@ -1,6 +1,6 @@
 // src/ip-guard.cjs — CANH IP CÔNG KHAI khớp với nhãn quốc gia của profile.
 //
-// VÌ SAO CẦN (2026-07-28, sau khi triển khai 6 VPS):
+// VÌ SAO CẦN (2026-07-28, sau khi triển khai nhiều VPS):
 // `fingerprint.cjs` đặt múi giờ + ngôn ngữ theo NHÃN QUỐC GIA trong tên profile — profile
 // "...(US)" luôn khai `America/New_York` + `en-US`. Cách này chỉ an toàn khi IP thật cũng ở
 // Mỹ. Trên VPS, IP đúng vùng là nhờ VPN (HMA) — mà VPN thì CÓ LÚC TỤT.
@@ -13,7 +13,7 @@
 //   - Lệch quốc gia rõ ràng  → báo để nơi gọi TẠM DỪNG (không phải dừng hẳn: VPN thường tự
 //                              kết nối lại sau vài phút, dừng hẳn là mất cả đêm sản lượng).
 //   - Không tra được IP      → coi như KHÔNG BIẾT, KHÔNG chặn. Mất mạng vài giây không được
-//                              phép làm treo cả 6 máy.
+//                              phép làm treo cả dàn máy.
 //   - Profile không có nhãn  → bỏ qua hoàn toàn, không áp dụng gì.
 //
 // Bổ sung (2026-07-30) — 2 NHÀ CUNG CẤP PHẢI ĐỒNG THUẬN mới kết luận "lệch": gặp thực tế 1

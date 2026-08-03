@@ -6,13 +6,14 @@
 //
 // GIỚI HẠN CỦA GOOGLE SHEETS API v4 (theo tài liệu Google): 300 request/phút cho mỗi PROJECT
 // và **60 request/phút cho mỗi NGƯỜI DÙNG** — "người dùng" ở đây là **danh tính xác thực**,
-// tức chính Service Account. ⚠ CẢ 6 VPS đang dùng CHUNG MỘT file Service Account, nên hạn
-// 60/phút áp cho TỔNG của cả 6 máy, không phải mỗi máy 60.
+// tức chính Service Account. ⚠ CẢ 5 MÁY (4 VPS + máy của người dùng, mỗi máy 5 profile theo
+// khu vực) đang dùng CHUNG MỘT file Service Account, nên hạn 60/phút áp cho TỔNG của cả 5 máy,
+// không phải mỗi máy 60.
 //
 // Ước lượng thực tế mỗi máy mỗi phút (sau bản vá đọc-trước-khi-ghi):
 //   ~1 đọc (đồng bộ định kỳ) + ~2-3 đọc & 2-3 ghi (mỗi lần flush) + 1 đọc & 1 ghi (nhịp tim)
-//   ≈ 4-5 đọc, 3-4 ghi  →  ×6 máy ≈ 25-30 đọc, 20-25 ghi mỗi phút → còn dưới 60, nhưng KHÔNG
-//   nhiều dư địa. Lúc dồn dập (flush tối đa mỗi 5s) có thể vượt.
+//   ≈ 4-5 đọc, 3-4 ghi  →  ×5 máy ≈ 20-25 đọc, 15-20 ghi mỗi phút → còn dư địa kha khá, nhưng
+//   lúc dồn dập (flush tối đa mỗi 5s = 12 lần/phút → ~14 đọc/máy) thì 5 máy vẫn có thể vượt 60.
 //
 // CÁCH XỬ LÝ: thấy 429/quota thì MỞ CẦU DAO — tạm ngưng gọi API tự động một lúc để cửa sổ
 // quota của Google reset, thay vì thử lại liên tục. Dữ liệu KHÔNG mất: lô đang chờ vẫn nằm

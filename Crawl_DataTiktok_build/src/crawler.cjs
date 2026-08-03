@@ -112,7 +112,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
   // ghi là "rất dễ bị nhận diện là dùng proxy". Trước đây app không hề biết, cào tiếp hàng giờ.
   //
   // TẠM DỪNG chứ không dừng hẳn: VPN thường tự kết nối lại sau vài phút, dừng hẳn là mất cả
-  // đêm sản lượng trên 6 máy. Không tra được IP (mạng lỗi tạm) thì KHÔNG chặn.
+  // đêm sản lượng trên cả dàn máy. Không tra được IP (mạng lỗi tạm) thì KHÔNG chặn.
   const wantCountry = fingerprint.countryOf(path.basename(profilePath));
 
   // Trả false nếu bị Dừng trong lúc chờ IP về đúng vùng.

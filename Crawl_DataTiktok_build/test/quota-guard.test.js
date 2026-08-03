@@ -4,7 +4,7 @@
 // Truoc do app KHONG co mot dong nao xu ly 429/quota — gap la nem loi nhu loi mang thuong roi
 // timer 5s lai thu tiep -> cang doi, cang bi chan sau hon.
 // Gioi han Google Sheets API v4: 300 req/phut moi PROJECT va 60 req/phut moi NGUOI DUNG
-// (= moi Service Account). CA 6 VPS dung CHUNG 1 Service Account nen 60/phut ap cho TONG.
+// (= moi Service Account). CA 5 MAY dung CHUNG 1 Service Account nen 60/phut ap cho TONG.
 // Chay: node test/quota-guard.test.js
 'use strict';
 
