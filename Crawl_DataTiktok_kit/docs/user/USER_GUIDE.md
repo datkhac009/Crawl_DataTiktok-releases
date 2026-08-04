@@ -40,7 +40,38 @@ Chọn ở cột **Chế độ** hoặc trong ⚙️ Cài đặt.
 | Không tải ảnh/video | Giảm RAM/CPU đáng kể. Nên bật khi chạy dài |
 | Tải lại feed sau mỗi N lần cuộn | Xả bộ nhớ. Số nhỏ = an toàn hơn nhưng feed hay nhảy về đầu |
 | Số luồng đếm video đồng thời | **Cài đặt chung toàn app.** Khuyến nghị 2 — càng cao càng dễ bị TikTok chặn |
+| Dùng profile Chromium riêng cho mỗi tài khoản | **Cài đặt chung toàn app.** Mặc định **tắt**. Bật khi bị **mất đăng nhập liên tục** — đổi lại tốn thêm ~150–250MB RAM mỗi profile (xem mục dưới) |
 | Thời lượng mỗi pha (chu kỳ) | Quét bao nhiêu giờ, xem bao nhiêu phút, nghỉ giữa 2 pha bao lâu |
+
+### Khi nào bật "Dùng profile Chromium riêng"?
+
+Bình thường app lưu phiên đăng nhập trong **một file cookie** và cho mọi profile **dùng chung
+một Chromium** — cách này tốn ít RAM nhất.
+
+Bật công tắc này thì **mỗi tài khoản có một thư mục Chromium riêng**, giữ được nhiều thứ hơn
+chỉ cookie (localStorage, IndexedDB) nên **giống trình duyệt thật hơn → TikTok ít hủy phiên
+hơn**.
+
+| | Tắt (mặc định) | Bật |
+|---|---|---|
+| RAM (5 profile) | Ít nhất | **+khoảng 1GB** |
+| Đĩa | ~150KB/profile | ~100–200MB/profile |
+| Độ bền phiên đăng nhập | Bình thường | Tốt hơn |
+
+**Nên bật khi:** máy còn dư RAM (≥ 4GB trống) **và** đang bị mất đăng nhập nhiều lần trong
+ngày dù không chạy trùng profile ở máy khác.
+
+**Không nên bật khi:** máy ảo chỉ 2–4GB RAM — hết RAM sẽ sập cả 5 profile, tệ hơn mất phiên.
+
+**Cách làm an toàn:** bật ở **một máy** trước, chạy 1 đêm rồi so số sound thu được và số lần
+mất đăng nhập với các máy còn lại; hơn thật thì mới áp cho các máy khác.
+
+Lưu ý:
+- Lần đầu bật, cookie đang có được **mang sang tự động** → **không mất đăng nhập**.
+- Đổi công tắc chỉ áp cho **lần bật profile tiếp theo**; profile đang chạy giữ nguyên chế độ cũ
+  tới khi dừng.
+- Muốn quay lại: tắt công tắc là xong. Thư mục `ChromiumProfile` trong profile có thể **xóa
+  tay** để lấy lại đĩa, không mất đăng nhập.
 
 ## Chạy và dừng
 

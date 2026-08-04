@@ -329,3 +329,20 @@ sách tab có thật.
 bản kia. Đã gặp: dev đúng tab mà bản đóng gói vẫn sai.
 
 ---
+
+## 14. Bật "profile Chromium riêng" rồi báo lỗi mở trình duyệt / RAM tăng vọt
+
+Chỉ xảy ra khi công tắc **"Dùng profile Chromium riêng cho mỗi tài khoản"** (⚙ Cài đặt crawl)
+đang **BẬT**. Xem [QĐ-27](DECISIONS.md).
+
+| Hiện tượng | Nguyên nhân | Xử lý |
+|---|---|---|
+| `profile is already in use` / `SingletonLock` | Thư mục Chromium đang bị một tiến trình khác giữ. Một `user-data-dir` chỉ cho **một** Chromium mở | App tự xóa file khóa cũ trước mỗi lần mở. Còn lỗi = **vẫn còn Chromium sống**: Task Manager → tắt hết `chrome.exe`/`Crawl_DataTiktok.exe` rồi chạy lại |
+| RAM tăng ~1GB sau khi bật | Đúng như thiết kế: mất lợi ích "1 Chromium dùng chung", mỗi profile 1 Chromium | Máy dưới 4GB trống thì **tắt công tắc đi** — mất phiên còn nhẹ hơn hết RAM |
+| Bật xong 5 profile thành khách hết | Cookie chưa được mang sang (vd `session.state.json` đã hỏng/rỗng từ trước) | Log sẽ ghi *"KHÔNG có cookie để mang sang"*. Bấm 🦊 đăng nhập lại một lần — từ lần sau Chromium tự giữ phiên |
+| Đĩa phình nhanh | Mỗi profile ~100–200MB | Xóa tay thư mục `profiles/<tên>/ChromiumProfile` khi app đã tắt — **an toàn**, lần sau app dựng lại từ `session.state.json` |
+| Chạy chế độ **hiện** thì thấy tab `/music/` nhấp nháy trong cửa sổ profile | Chế độ này bắt tab đếm dùng chung cửa sổ của profile (không mở được Chromium thứ 2 trên cùng thư mục) | Bình thường, không phải lỗi. Muốn không thấy thì chạy **ẩn** |
+
+Đổi công tắc **không** áp cho profile đang chạy — phải **dừng rồi chạy lại** profile đó.
+
+---

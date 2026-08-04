@@ -266,6 +266,8 @@ ipcMain.handle('profile-start', async (_e, params) => {
 
   // Áp số luồng đếm đồng thời toàn app (cài đặt chung, mặc định 2).
   crawler.setCountConcurrency(store.get('count_concurrency') || 2);
+  // Chế độ profile Chromium riêng (persistent) — mặc định TẮT vì tốn thêm RAM (QĐ-27).
+  browser.setPersistentProfiles(!!store.get('chromium_profile'));
 
   // ── CHẶN CHẠY TRÙNG PROFILE GIỮA CÁC MÁY (2026-07-28) ──
   // Đây là nguyên nhân SỐ 1 khiến TikTok hủy phiên đăng nhập (1 phiên phát từ 2 IP). Khác
@@ -500,6 +502,11 @@ ipcMain.handle('store-get', (_e, keys) => {
 ipcMain.handle('store-set', (_e, data) => {
   for (const [k, v] of Object.entries(data)) store.set(k, v);
   // Đổi số luồng đếm → áp dụng NGAY, kể cả đang chạy (không cần chạy lại).
+  if (Object.prototype.hasOwnProperty.call(data, 'chromium_profile')) {
+    // Đổi giữa lúc đang chạy KHÔNG ảnh hưởng profile đang mở (chúng giữ chế độ cũ tới khi
+    // dừng) — chỉ áp cho lần bật profile tiếp theo. Nói rõ ở UI để không tưởng là không ăn.
+    browser.setPersistentProfiles(!!data.chromium_profile);
+  }
   if (Object.prototype.hasOwnProperty.call(data, 'count_concurrency')) {
     crawler.setCountConcurrency(data.count_concurrency || 2);
   }

@@ -574,8 +574,9 @@ function openSettingsModal(ids) {
   $('cfgDelayMin').value = s.delayMin;
   $('cfgDelayMax').value = s.delayMax;
   // Số luồng đếm đồng thời là cài đặt CHUNG (global store), không theo profile.
-  api.storeGet(['count_concurrency']).then(r => {
+  api.storeGet(['count_concurrency', 'chromium_profile']).then(r => {
     $('cfgCountConcurrency').value = (r && r.count_concurrency) || 2;
+    $('cfgChromiumProfile').checked = !!(r && r.chromium_profile);
   });
   updateCfgModeUI();
   updateCfgHeadlessLabel();
@@ -617,7 +618,7 @@ async function saveCrawlSettings() {
   }
   // Lưu cài đặt CHUNG: số luồng đếm đồng thời toàn app (1–10).
   const cc = Math.max(1, Math.min(10, parseInt($('cfgCountConcurrency').value, 10) || 2));
-  await api.storeSet({ count_concurrency: cc });
+  await api.storeSet({ count_concurrency: cc, chromium_profile: $('cfgChromiumProfile').checked });
   await saveProfileSettings();
   renderProfileTable();
   $('crawlSettingsModal').classList.remove('open');

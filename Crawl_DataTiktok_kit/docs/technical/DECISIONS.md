@@ -873,6 +873,54 @@ chữ "Unable to parse range").
 
 ---
 
+## QĐ-27 — Chế độ "profile Chromium riêng" là CÔNG TẮC, mặc định TẮT
+
+**Bối cảnh (2026-08-04):** profile hay bị TikTok hạ xuống chế độ khách. Người dùng đề nghị
+chuyển hẳn sang FirefoxPortable cho đỡ ngốn RAM. Đo thật 3 profile chạy ẩn: **Chromium 8–10
+tiến trình / ~3.2GB / CPU 23–32%** so với **Firefox 13 tiến trình / 4.6GB / CPU 60%** — Firefox
+tốn HƠN, và code hiện tại vốn đã Chromium-only (`FirefoxPortable` chỉ còn là **rác đĩa
+~2.6GB**, không dòng code nào đọc tới). Nên hướng "chuyển sang Firefox" bị loại.
+
+Phương án còn lại để phiên bền hơn: **`chromium.launchPersistentContext`** — mỗi profile một
+thư mục Chromium riêng, giữ được cả `localStorage`/`IndexedDB` chứ không chỉ cookie, nên giống
+trình duyệt thật hơn và TikTok ít hủy phiên hơn.
+
+**Quyết định:** làm nó thành **công tắc trong ⚙ Cài đặt crawl, mặc định TẮT**, chứ không thay
+thế đường cũ. Lý do: `launchPersistentContext` **bắt buộc mỗi profile một Chromium riêng** →
+mất hẳn lợi ích "1 Chromium dùng chung" của QĐ-02 (~+150–250MB/profile, 5 profile ≈ +1GB).
+Máy đo lúc quyết định chỉ còn **2.2GB RAM trống** — bật mặc định là đổi một lỗi (mất phiên)
+thành một lỗi nặng hơn (hết RAM, sập cả 5 profile). Có công tắc thì A/B test được trên **một**
+máy trước khi áp cho cả 5.
+
+**4 cái bẫy của chế độ này, đã xử trong code:**
+
+| Bẫy | Xử lý |
+|---|---|
+| Một `user-data-dir` chỉ cho **MỘT** Chromium mở → mở tab đếm bằng trình duyệt ẩn riêng sẽ lỗi *"profile is already in use"* | `acquireCountContext` **dùng chung context của chính profile** (trả `{shared:true}`); `releaseCountContext` thấy `shared` thì **không đóng** — đóng là sập luôn tab đang quét |
+| Nút 🦊 mở trình duyệt thứ hai trên cùng thư mục → cũng lỗi khóa | `getContext` **dùng lại đúng context đang crawl** nếu profile đang chạy; đăng nhập trong cửa sổ đó ghi thẳng vào profile |
+| App bị giết giữa chừng để lại `SingletonLock`/`SingletonSocket` → lần sau Chromium **không mở nổi** (đúng phản đối của QĐ-03) | `_clearStaleLocks()` xóa các file khóa trước mỗi lần mở |
+| Bật công tắc lần đầu = thư mục Chromium trống = **5 profile thành khách hết** | Lần đầu (chưa có `<dir>/Default`) thì **bơm cookie từ `session.state.json`** vào bằng `addCookies()` |
+
+**Vẫn giữ `session.state.json`** dù Chromium đã tự lưu trạng thái: nó là bản sao **gọn
+(~150KB)** để chép profile sang máy khác không phải mang cả thư mục Chromium, và để cơ chế
+**phiên VÀNG** (`session.good.json`) tiếp tục làm đường cứu phiên. Vì vậy timer lưu 20s được
+giữ ở **cả hai** chế độ.
+
+**Vân tay dùng CHUNG một hàm** cho 2 chế độ (`_profileContextOptions`) — 2 đường tự dựng option
+riêng là sớm muộn lệch vân tay, mà lệch vân tay giữa tab đếm và tab chính đúng bằng "1 phiên
+đăng nhập, 2 thiết bị" → TikTok hủy phiên (QĐ-05).
+
+**Đổi công tắc KHÔNG áp cho profile đang chạy** — chúng giữ chế độ cũ tới khi dừng (cờ chỉ đọc
+lúc mở context). Đã ghi rõ ngay dưới công tắc để không tưởng là không ăn.
+
+**Kiểm chứng:** `test/chromium-profile.test.js` — 26 khẳng định: mặc định TẮT, mở đúng thư mục
+`<profile>/ChromiumProfile`, có `--disk-cache-size`/`--media-cache-size`, dọn `SingletonLock`,
+vân tay khớp `contextOptions(fp)` từng khóa, lần đầu bơm đủ cookie xác thực + định tuyến, lần
+sau **không** bơm lại, tab đếm không mở thêm trình duyệt và không bị đóng oan, tắt công tắc thì
+quay về `chromium.launch()`.
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |
@@ -880,6 +928,9 @@ chữ "Unable to parse range").
 | Tinh chỉnh giảm số tiến trình Firefox (`dom.ipc.processCount=1`…) | Gây crash "Your tab just crashed" — đừng chống lại mô hình đa tiến trình |
 | Tự tính số dòng rồi ghi cứng lên Sheet | 2 máy ghi đè lẫn nhau |
 | Chuyển sang chế độ hiện để tránh bị chặn trang đếm | Đã A/B test: ẩn và hiện giống hệt nhau, không phải nguyên nhân |
+| Chuyển toàn bộ sang FirefoxPortable cho "đỡ ngốn RAM" | Đo thật thì Firefox tốn HƠN: 13 tiến trình / 4.6GB / CPU 60% so với Chromium 8–10 / 3.2GB / 23–32% — xem QĐ-27 |
+| Bật `launchPersistentContext` cho mọi profile thay cho file cookie | Mỗi profile thành 1 Chromium riêng → mất lợi ích "1 Chromium dùng chung" (~+1GB với 5 profile). Phải là công tắc, mặc định tắt — xem QĐ-27 |
+| Mở trình duyệt thứ hai (tab đếm / nút 🦊) trên cùng một `user-data-dir` | Chromium báo "profile is already in use" — phải dùng lại đúng context đang mở, xem QĐ-27 |
 | Gọi `ctx.storageState()` định kỳ | Nhấp nháy cửa sổ liên tục (mở trang tạm cho từng origin) |
 | `scrollIntoView` để thoát kẹt feed | Vô tác dụng — feed For You là băng chuyền CSS, không phải vùng cuộn |
 | Cuộn feed bằng phím mũi tên xuống | **Đã ngừng tác dụng hoàn toàn** — xem QĐ-13, dùng con lăn chuột |

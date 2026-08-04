@@ -20,6 +20,7 @@
         ├── session.good.json       # PHIÊN VÀNG — bản đã xác minh đăng nhập thật
         ├── fingerprint.json        # dấu vân tay cố định của profile
         ├── profile.lock            # máy nào đang dùng + nhịp tim (cảnh báo chạy trùng)
+        ├── ChromiumProfile/        # CHỈ khi bật "profile Chromium riêng" (QĐ-27) — 100–200MB
         └── Data/profile/           # profile Firefox gốc (nếu import từ Firefox Portable)
 ```
 
@@ -32,6 +33,7 @@ Lưu trong thư mục dữ liệu người dùng của Electron, không nằm c�
 | `profile_settings` | Cài đặt **riêng từng profile**: chế độ, từ khóa, ẩn/hiện, bộ lọc, delay, thời lượng chu kỳ, danh sách link xem… |
 | `sheets_config` | Spreadsheet ID, tên tab, JSON Service Account, chu kỳ đồng bộ lọc trùng |
 | `count_concurrency` | Số luồng đếm video đồng thời (**chung toàn app**, không theo profile) |
+| `chromium_profile` | Bật/tắt chế độ **profile Chromium riêng** (**chung toàn app**). Mặc định tắt — xem [QĐ-27](DECISIONS.md) |
 | `update_repo` | Repo GitHub phát hành (để trống = dùng mặc định) |
 
 ## Các file trong thư mục profile
@@ -85,6 +87,20 @@ Giữ 400 ngày rồi tự dọn ngày cũ nhất. File hỏng thì đọc lại
 
 ⚠️ Số liệu **của riêng từng máy** — không gộp liên máy (gộp sẽ phải ghi thêm lên Google Sheet,
 tăng tải API). Xem QĐ-23.
+
+### `ChromiumProfile/` — chỉ khi bật chế độ profile Chromium riêng
+
+Thư mục `user-data-dir` thật của Chromium (`Default/`, `Cookies`, `Local Storage/`,
+`IndexedDB/`, cache…). Giữ được **nhiều hơn** `session.state.json`: cả localStorage và
+IndexedDB, nên TikTok coi là trình duyệt thật hơn và ít hủy phiên hơn.
+
+- Kích thước ~**100–200MB mỗi profile** (đã giới hạn cache: `--disk-cache-size=60MB`,
+  `--media-cache-size=10MB`).
+- **Chỉ MỘT Chromium được mở một thư mục** tại một thời điểm. App bị giết giữa chừng có thể
+  để lại `SingletonLock`/`SingletonSocket` — app **tự xóa** trước mỗi lần mở.
+- Xóa cả thư mục này là **an toàn**: lần chạy sau app dựng lại từ `session.state.json`.
+- Chép profile sang máy khác thì **không cần** mang thư mục này — chỉ cần
+  `session.state.json` + `fingerprint.json`, app tự dựng lại.
 
 ### `fingerprint.json`
 
