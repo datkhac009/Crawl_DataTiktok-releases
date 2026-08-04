@@ -30,10 +30,9 @@ Lưu trong thư mục dữ liệu người dùng của Electron, không nằm c�
 
 | Khóa | Nội dung |
 |---|---|
-| `profile_settings` | Cài đặt **riêng từng profile**: chế độ, từ khóa, ẩn/hiện, bộ lọc, delay, thời lượng chu kỳ, danh sách link xem… |
+| `profile_settings` | Cài đặt **riêng từng profile**: chế độ, từ khóa, ẩn/hiện, bộ lọc, delay, thời lượng chu kỳ, danh sách link xem, `chromiumProfile` (profile Chromium riêng — [QĐ-28](DECISIONS.md))… |
 | `sheets_config` | Spreadsheet ID, tên tab, JSON Service Account, chu kỳ đồng bộ lọc trùng |
 | `count_concurrency` | Số luồng đếm video đồng thời (**chung toàn app**, không theo profile) |
-| `chromium_profile` | Bật/tắt chế độ **profile Chromium riêng** (**chung toàn app**). Mặc định tắt — xem [QĐ-27](DECISIONS.md) |
 | `update_repo` | Repo GitHub phát hành (để trống = dùng mặc định) |
 
 ## Các file trong thư mục profile
@@ -88,7 +87,7 @@ Giữ 400 ngày rồi tự dọn ngày cũ nhất. File hỏng thì đọc lại
 ⚠️ Số liệu **của riêng từng máy** — không gộp liên máy (gộp sẽ phải ghi thêm lên Google Sheet,
 tăng tải API). Xem QĐ-23.
 
-### `ChromiumProfile/` — chỉ khi bật chế độ profile Chromium riêng
+### `ChromiumProfile/` — chỉ khi profile ĐÓ bật chế độ profile Chromium riêng
 
 Thư mục `user-data-dir` thật của Chromium (`Default/`, `Cookies`, `Local Storage/`,
 `IndexedDB/`, cache…). Giữ được **nhiều hơn** `session.state.json`: cả localStorage và

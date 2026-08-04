@@ -68,7 +68,7 @@ Không nằm trong bản đóng gói. Chạy: `pnpm test`.
 | File | Kiểm gì |
 |---|---|
 | `crawl-modes.test.js` | 13 kịch bản — mock Playwright + `browser.cjs` để chạy engine thật không cần TikTok: tiền tố log từng chế độ, thoát kẹt (trùng sound / không đọc được sound), chế độ khách, `recycle` bật/tắt đúng chế độ, canh IP (lệch → tạm dừng, về đúng vùng → tự chạy tiếp) |
-| `chromium-profile.test.js` | 36 khẳng định cho chế độ **profile Chromium riêng** (QĐ-27): mặc định TẮT, mở đúng `<profile>/ChromiumProfile` + giới hạn cache, dọn `SingletonLock` kẹt, vân tay khớp chế độ thường, lần đầu bơm cookie sang (lần sau không bơm lại), tab đếm dùng chung context và không bị đóng oan, nút 🦊 mở TAB MỚI chứ không chiếm tab feed đang quét |
+| `chromium-profile.test.js` | 49 khẳng định cho chế độ **profile Chromium riêng** (QĐ-27, QĐ-28): mặc định TẮT, mở đúng `<profile>/ChromiumProfile` + giới hạn cache, dọn `SingletonLock` kẹt, vân tay khớp chế độ thường, lần đầu bơm cookie sang (lần sau không bơm lại), tab đếm dùng chung context và không bị đóng oan, nút 🦊 mở TAB MỚI chứ không chiếm tab feed đang quét, và **trộn 2 chế độ trên cùng máy** (profile bật / profile tắt không ăn theo nhau) |
 | `ui-responsive.test.js` | Đo layout ở 5 khổ cửa sổ bằng Chromium, phát hiện nội dung bị cắt, chụp ảnh vào `.ui-shots/` |
 
 ## 5 chế độ crawl
@@ -104,8 +104,12 @@ Cả 2 bước đều thất bại → **bỏ link**, không ghi dòng `?` vào 
 
 ## Kiến trúc trình duyệt
 
-Có **2 chế độ**, chọn bằng công tắc *"Dùng profile Chromium riêng cho mỗi tài khoản"* trong
-⚙ Cài đặt crawl (chung toàn app). Mặc định là chế độ A — xem [QĐ-27](DECISIONS.md).
+Có **2 chế độ**, chọn bằng công tắc *"Dùng profile Chromium riêng cho tài khoản này"* trong
+⚙ Cài đặt crawl — **riêng từng profile**, không phải toàn app ([QĐ-28](DECISIONS.md)). Mặc định
+là chế độ A. Lý do tồn tại chế độ B: [QĐ-27](DECISIONS.md).
+
+**Trộn 2 chế độ trên cùng một máy là an toàn và là cách dùng chính** — bật 1–2 profile để A/B
+test, các profile còn lại vẫn dùng chung một Chromium như cũ.
 
 **A. Chromium dùng chung (mặc định, tiết kiệm RAM nhất)**
 
@@ -124,6 +128,8 @@ Có **2 chế độ**, chọn bằng công tắc *"Dùng profile Chromium riêng
 - Nút 🦊 **dùng lại** context đang crawl nếu profile đang chạy.
 - Lần đầu bật: cookie trong `session.state.json` được bơm sang nên **không mất đăng nhập**.
 - Đổi công tắc chỉ áp cho **lần bật profile tiếp theo**.
+- Cờ được truyền **theo từng lời gọi** (`acquireProfileContext(path, {persistent})`), không có
+  cờ module toàn cục. Tab đếm tra `_profileCtx` của profile đang chạy nên không thể lệch chế độ.
 
 Cả 2 chế độ dùng **chung một hàm dựng option vân tay** nên không bao giờ lệch vân tay.
 

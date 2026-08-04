@@ -367,6 +367,20 @@
           </label>
         </div>
 
+        <div class="section" id="cfgProfileModeSection">
+          <div class="section-title">Cách lưu phiên đăng nhập</div>
+          <label class="toggle-row" title="Bật: profile NÀY có một thư mục Chromium riêng (giữ cookie + localStorage + IndexedDB như trình duyệt thật) và một Chromium riêng. Tắt: dùng file cookie session.state.json + Chromium dùng chung với các profile khác.">
+            <input type="checkbox" id="cfgChromiumProfile" />
+            <span>Dùng profile Chromium riêng cho tài khoản này</span>
+          </label>
+          <div class="section-desc">
+            Cài đặt <b>riêng từng profile</b> — bật ở profile này không ảnh hưởng các profile khác. Bật vài profile, để vài profile tắt để so sánh là được.<br />
+            <b>Tắt (mặc định)</b> — dùng chung 1 Chromium với các profile khác, phiên lưu trong file cookie. <b>Tiết kiệm RAM nhất</b>.<br />
+            <b>Bật</b> — profile này có Chromium + thư mục riêng, giữ được cả localStorage/IndexedDB nên <b>TikTok ít hủy phiên hơn</b>, nhưng <b>tốn thêm ~150–250MB RAM</b> và ~100–200MB đĩa cho profile này.<br />
+            Đổi công tắc chỉ áp dụng cho <b>lần bật profile tiếp theo</b> — profile đang chạy vẫn giữ chế độ cũ tới khi dừng. Lần đầu bật, cookie trong <code>session.state.json</code> được mang sang tự động nên <b>không mất đăng nhập</b>.
+          </div>
+        </div>
+
         <div class="section" id="cfgCountSection">
           <div class="section-title">Số luồng đếm video đồng thời (toàn app)</div>
           <label class="toggle-row" title="Số trang /music/ được tải cùng lúc trên TOÀN app, dù chạy bao nhiêu profile.">
@@ -377,18 +391,6 @@
           <div class="section-desc">Đây là cài đặt <b>chung toàn app</b> (không riêng từng profile). Càng nhỏ càng ít bị TikTok chặn trang đếm; khuyến nghị <b>2</b>. Chạy nhiều profile mà để cao dễ bị chặn (nghỉ 300s liên tục).</div>
         </div>
 
-        <div class="section" id="cfgProfileModeSection">
-          <div class="section-title">Cách lưu phiên đăng nhập (toàn app)</div>
-          <label class="toggle-row" title="Bật: mỗi profile có một thư mục Chromium riêng (giữ cookie + localStorage + IndexedDB như trình duyệt thật) và một Chromium riêng. Tắt: dùng file cookie session.state.json + 1 Chromium dùng chung cho mọi profile.">
-            <input type="checkbox" id="cfgChromiumProfile" />
-            <span>Dùng profile Chromium riêng cho mỗi tài khoản</span>
-          </label>
-          <div class="section-desc">
-            <b>Tắt (mặc định)</b> — 1 Chromium dùng chung cho mọi profile, phiên lưu trong file cookie. <b>Tiết kiệm RAM nhất</b>.<br />
-            <b>Bật</b> — mỗi profile 1 Chromium + 1 thư mục riêng, giữ được cả localStorage/IndexedDB nên <b>TikTok ít hủy phiên hơn</b>, nhưng <b>tốn thêm ~150–250MB RAM mỗi profile</b> (5 profile ≈ +1GB) và mỗi profile chiếm ~100–200MB đĩa.<br />
-            Đổi công tắc này chỉ áp dụng cho <b>lần bật profile tiếp theo</b> — profile đang chạy vẫn giữ chế độ cũ tới khi dừng. Lần đầu bật, cookie trong <code>session.state.json</code> được mang sang tự động nên <b>không mất đăng nhập</b>.
-          </div>
-        </div>
       </div>
 
       <div class="modal-foot">

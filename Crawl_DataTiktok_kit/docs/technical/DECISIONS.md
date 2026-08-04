@@ -921,6 +921,61 @@ quay về `chromium.launch()`.
 
 ---
 
+## QĐ-28 — "Profile Chromium riêng" là cài đặt RIÊNG TỪNG PROFILE, không phải toàn app
+
+**Sự cố báo cáo (2026-08-04, ngay sau khi QĐ-27 ra bản v0.1.58):** người dùng mở ⚙ ở **một**
+profile, tick công tắc, rồi mở ⚙ ở profile khác thì **thấy đã tick sẵn** → báo *"đang lỗi à?
+tại sao tôi click bật riêng cho 1 profile mà các profile khác lại tick theo"*.
+
+Không phải lỗi kỹ thuật — QĐ-27 cố tình làm nó **chung toàn app** (`store.chromium_profile`,
+theo mẫu `count_concurrency`) vì cho rằng đây là quyết định cấp máy. Nhưng modal
+"⚙ Cài đặt crawl" mở ra **từ hàng của một profile cụ thể**, nên đặt một công tắc toàn app vào
+đó là **sai ngữ cảnh giao diện**: người dùng hiểu đúng theo cái họ thấy, và họ đúng.
+
+**Quyết định:** chuyển thành cài đặt **riêng từng profile** (`profileSettings[id].chromiumProfile`).
+
+Ngoài chuyện giao diện, riêng-từng-profile còn **tốt hơn về bản chất**:
+
+1. **A/B test được trên MỘT máy.** QĐ-27 đề nghị "bật 1 máy, giữ 4 máy tắt" — nhưng 5 máy khác
+   nhau còn khác cả IP/VPN/tài khoản nên so sánh không sạch. Bật 2 profile / tắt 3 profile trên
+   **cùng một máy** thì cùng IP, cùng giờ, cùng phiên bản → so sánh mới có nghĩa.
+2. **Chia được RAM theo mức quan trọng.** Máy 4GB không phải chọn "tất cả hoặc không gì": bật
+   cho 1–2 profile hay mất phiên nhất, còn lại giữ chế độ nhẹ.
+
+**Trộn 2 chế độ trên cùng máy là an toàn** — đã kiểm: profile bật có Chromium riêng, các profile
+tắt vẫn dùng chung một Chromium (refs của browser dùng chung chỉ đếm nhóm tắt), và **tab đếm của
+profile tắt vẫn mở trình duyệt ẩn riêng** chứ không ăn theo context của profile bật.
+
+**Cách truyền cờ:** bỏ hẳn `browser.setPersistentProfiles()` (cờ module toàn cục), thay bằng
+**option mỗi lần mở**: `acquireProfileContext(path, { headless, persistent })`,
+`getContext(path, { persistent })`, `openForLogin(path, { persistent })`. Tab đếm không cần
+truyền — nó tra `_profileCtx.get(profilePath).persistent` của profile đang chạy, nên **không thể
+lệch** với chế độ mà profile đó thực sự đang mở.
+
+⚠ **Nút 🦊 phải nhận cùng cờ với lúc crawl.** Nếu 🦊 mở ở chế độ khác thì đăng nhập xong lại
+"không ăn" sang lượt chạy (đăng nhập vào thư mục Chromium mà lượt chạy lại đọc file cookie, hoặc
+ngược lại). Renderer gửi kèm `chromiumProfile` của đúng profile đó; main.js còn tra lại
+`profile_settings` trong store để phòng lời gọi cũ không gửi cờ.
+
+**Bài học chung:** vị trí của một điều khiển trên giao diện **là một lời hứa về phạm vi của nó**.
+Đặt cài đặt toàn app vào modal mở-từ-một-profile thì dù có ghi chữ "(toàn app)" ngay cạnh, người
+dùng vẫn hiểu là của profile đó — và đó là cách hiểu hợp lý hơn.
+
+⚠ **Nút 🔑 "Kiểm tra đăng nhập" vẫn kiểm bằng bản sao cookie**, không mở thư mục Chromium — cố ý:
+mở thư mục sẽ đụng khóa khi 🦊 đang mở profile đó, làm hỏng cả lượt kiểm 25 profile. Hệ quả: với
+profile bật chế độ này, 🔑 và 🦊 **có thể nói khác nhau** nếu `session.state.json` cũ hơn phiên
+thật. Tin 🦊 (nó đọc cookie thẳng trong context, `_setSessionInfo(..., 'chromium-profile', ...)`).
+Xem TROUBLESHOOTING.md mục 14.
+
+**Kiểm chứng:** `test/chromium-profile.test.js` — 49 khẳng định (QĐ-27 có 36, thêm 13):
+`setPersistentProfiles` phải **không còn tồn tại**; không truyền `persistent` thì đi đường cũ;
+mục 9 dựng lại đúng cảnh **trộn 2 chế độ trên cùng máy** (profile bật mở Chromium riêng + tab đếm
+dùng chung context, profile tắt vẫn mở trình duyệt ẩn riêng, không ăn theo nhau); mục 10 chốt việc
+🦊 **vẫn báo được "đã đăng nhập / là khách"** ở chế độ này (từ lần chạy thứ 2 không còn đọc
+`session.state.json` nên phải đọc cookie thẳng trong context, không thì mất hẳn chẩn đoán).
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |
@@ -931,6 +986,9 @@ quay về `chromium.launch()`.
 | Chuyển toàn bộ sang FirefoxPortable cho "đỡ ngốn RAM" | Đo thật thì Firefox tốn HƠN: 13 tiến trình / 4.6GB / CPU 60% so với Chromium 8–10 / 3.2GB / 23–32% — xem QĐ-27 |
 | Bật `launchPersistentContext` cho mọi profile thay cho file cookie | Mỗi profile thành 1 Chromium riêng → mất lợi ích "1 Chromium dùng chung" (~+1GB với 5 profile). Phải là công tắc, mặc định tắt — xem QĐ-27 |
 | Mở trình duyệt thứ hai (tab đếm / nút 🦊) trên cùng một `user-data-dir` | Chromium báo "profile is already in use" — phải dùng lại đúng context đang mở, xem QĐ-27 |
+| Đặt cài đặt **toàn app** vào modal mở ra **từ một profile** | Người dùng hiểu theo vị trí điều khiển, không theo chữ "(toàn app)" ghi cạnh → báo là bug ngay hôm phát hành. Vị trí là lời hứa về phạm vi — xem QĐ-28 |
+| Giữ chế độ profile bằng **cờ module toàn cục** (`setPersistentProfiles`) | Không thể trộn 2 chế độ trên cùng máy → mất khả năng A/B test cùng IP/cùng giờ, mà đó mới là so sánh sạch. Phải truyền option mỗi lần mở — xem QĐ-28 |
+| Cho nút 🦊 mở bằng chế độ khác với lúc crawl | Đăng nhập xong "không ăn": ghi vào thư mục Chromium mà lượt chạy đọc file cookie (hoặc ngược lại) — xem QĐ-28 |
 | Kiểm quyền phát hành bằng `.permissions.push` của repo | Đó là quyền của **tài khoản**, không phải scope của **token**. Repo chuyển public → luôn `true` dù token không có scope nào → gate BÁO PASS SAI, build xong 8 phút mới lãnh 404. Phải đọc header `X-Oauth-Scopes` |
 | Gọi `ctx.storageState()` định kỳ | Nhấp nháy cửa sổ liên tục (mở trang tạm cho từng origin) |
 | `scrollIntoView` để thoát kẹt feed | Vô tác dụng — feed For You là băng chuyền CSS, không phải vùng cuộn |

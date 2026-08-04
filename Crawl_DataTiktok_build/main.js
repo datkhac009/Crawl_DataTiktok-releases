@@ -22,6 +22,16 @@ const { getLogsDir } = require('./src/paths.cjs');
 app.setName(app.isPackaged ? 'TikTokCrawler' : 'TikTokCrawler-Dev');
 const store = new Store();
 
+// Dọn khóa CHẾT của v0.1.58: hồi đó "profile Chromium riêng" là cài đặt chung toàn app
+// (`chromium_profile`). Từ v0.1.59 nó là cài đặt riêng từng profile (`profile_settings[id]
+// .chromiumProfile` — QĐ-28) nên khóa cũ không còn ai đọc. Xóa để lần sau đọc file config
+// chẩn đoán không bị nhiễu bởi một khóa vô nghĩa. KHÔNG tự bật cho cả 5 profile theo khóa cũ:
+// làm vậy đúng là lặp lại chính cái đã bị báo lỗi ("tick 1 profile mà cả 5 bật theo").
+if (store.has('chromium_profile')) {
+  store.delete('chromium_profile');
+  console.log('[config] Đã xóa khóa cũ "chromium_profile" (v0.1.58). Giờ bật/tắt riêng từng profile trong ⚙ Cài đặt crawl.');
+}
+
 // ── File logger (chỉ production) ──
 if (app.isPackaged) {
   const logDir = getLogsDir();
@@ -188,13 +198,19 @@ ipcMain.handle('profiles-get-path', (_e, id) => profiles.getProfilePath(id));
 // ─────────────────────────────────────────
 ipcMain.handle('open-browser', async (_e, arg) => {
   try {
-    // arg = profileId (cũ) hoặc { profileId, blockImages }
+    // arg = profileId (cũ) hoặc { profileId, blockImages, chromiumProfile }
     const profileId = typeof arg === 'object' && arg ? arg.profileId : arg;
     const blockImages = typeof arg === 'object' && arg ? !!arg.blockImages : false;
     if (!profileId) return { ok: false, msg: 'Vui lòng chọn profile trước.' };
     const profilePath = profiles.getProfilePath(profileId);
     if (!profilePath) return { ok: false, msg: 'Profile không tồn tại.' };
-    await browser.openForLogin(profilePath, { blockImages });
+    // Chế độ profile Chromium riêng là cài đặt RIÊNG TỪNG PROFILE (QĐ-28) → phải đọc đúng
+    // của profile này, không dùng cờ chung. Renderer gửi kèm; thiếu thì tra lại trong store
+    // (vd bản UI cũ hoặc gọi từ nơi khác) để 🦊 không mở sai chế độ với lúc crawl.
+    let persistent = typeof arg === 'object' && arg && 'chromiumProfile' in arg
+      ? !!arg.chromiumProfile
+      : !!(((store.get('profile_settings') || {})[profileId] || {}).chromiumProfile);
+    await browser.openForLogin(profilePath, { blockImages, persistent });
     // Kèm chẩn đoán phiên (nguồn cookie, đã đăng nhập chưa, lỗi trích Firefox nếu có)
     // để UI hiện rõ — trước đây lỗi migration chỉ nằm trong console ẩn của bản đóng gói.
     return { ok: true, session: browser.getSessionInfo(profilePath) };
@@ -266,8 +282,6 @@ ipcMain.handle('profile-start', async (_e, params) => {
 
   // Áp số luồng đếm đồng thời toàn app (cài đặt chung, mặc định 2).
   crawler.setCountConcurrency(store.get('count_concurrency') || 2);
-  // Chế độ profile Chromium riêng (persistent) — mặc định TẮT vì tốn thêm RAM (QĐ-27).
-  browser.setPersistentProfiles(!!store.get('chromium_profile'));
 
   // ── CHẶN CHẠY TRÙNG PROFILE GIỮA CÁC MÁY (2026-07-28) ──
   // Đây là nguyên nhân SỐ 1 khiến TikTok hủy phiên đăng nhập (1 phiên phát từ 2 IP). Khác
@@ -502,11 +516,6 @@ ipcMain.handle('store-get', (_e, keys) => {
 ipcMain.handle('store-set', (_e, data) => {
   for (const [k, v] of Object.entries(data)) store.set(k, v);
   // Đổi số luồng đếm → áp dụng NGAY, kể cả đang chạy (không cần chạy lại).
-  if (Object.prototype.hasOwnProperty.call(data, 'chromium_profile')) {
-    // Đổi giữa lúc đang chạy KHÔNG ảnh hưởng profile đang mở (chúng giữ chế độ cũ tới khi
-    // dừng) — chỉ áp cho lần bật profile tiếp theo. Nói rõ ở UI để không tưởng là không ăn.
-    browser.setPersistentProfiles(!!data.chromium_profile);
-  }
   if (Object.prototype.hasOwnProperty.call(data, 'count_concurrency')) {
     crawler.setCountConcurrency(data.count_concurrency || 2);
   }

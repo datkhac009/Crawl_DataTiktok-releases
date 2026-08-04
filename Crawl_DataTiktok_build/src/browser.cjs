@@ -461,7 +461,7 @@ async function _saveSession(profilePath, ctx) {
 // ════════ 🦊 LOGIN / CHẾ ĐỘ 'current' — 1 browser riêng + context tiêm session ════════
 // Mở Chromium non-persistent (hiện) cho profile, tiêm storageState từ file; tự lưu lại
 // định kỳ + khi đóng (đề phòng đóng cửa sổ làm context chết trước khi kịp lưu).
-async function getContext(profilePath, { headless = false } = {}) {
+async function getContext(profilePath, { headless = false, persistent = false } = {}) {
   if (!profilePath) throw new Error('Thiếu profilePath');
 
   const existing = _contexts.get(profilePath);
@@ -482,7 +482,7 @@ async function getContext(profilePath, { headless = false } = {}) {
   // Thư mục profile chỉ cho MỘT Chromium mở. Nếu profile đang crawl thì PHẢI dùng lại đúng
   // context đó cho nút 🦊 (mở thêm sẽ lỗi "already in use"); đăng nhập trong cửa sổ đó cũng
   // ghi thẳng vào profile nên không cần trích cookie gì nữa.
-  if (_persistentProfiles) {
+  if (persistent) {
     const running = _profileCtx.get(profilePath);
     if (running && running.persistent) {
       try {
@@ -551,14 +551,13 @@ async function getContext(profilePath, { headless = false } = {}) {
 }
 
 // Mở profile để đăng nhập/điều hướng thủ công: bật CHROMIUM (hiện) và vào TikTok.
-async function openForLogin(profilePath, { blockImages = false } = {}) {
+async function openForLogin(profilePath, { blockImages = false, persistent = false } = {}) {
   // Persistent + profile ĐANG CRAWL: getContext() trả về CHÍNH context đang quét. Khi đó
   // TUYỆT ĐỐI không được (a) lấy pages()[0] — đó là tab feed, goto() lên nó là phá vòng quét,
   // (b) chặn ảnh ở mức CONTEXT — sẽ đè lên cả tab quét và cộng dồn mỗi lần bấm 🦊.
-  const running = _persistentProfiles ? _profileCtx.get(profilePath) : null;
-  const shareWithCrawl = !!(running && running.persistent);
+  const shareWithCrawl = _isPersistentRunning(profilePath);
 
-  const ctx = await getContext(profilePath);
+  const ctx = await getContext(profilePath, { persistent });
   if (blockImages && !shareWithCrawl) await attachResourceBlocker(ctx);
   const page = shareWithCrawl ? await ctx.newPage() : (ctx.pages()[0] || await ctx.newPage());
   if (blockImages && shareWithCrawl) await attachResourceBlocker(page);
@@ -623,15 +622,19 @@ async function getActivePage(ctx) {
 // profilePath → Page. Nhớ lại để ❌ đóng đúng tab, không đóng cả context đang quét.
 const _sharedLoginPage = new Map();
 
-let _persistentProfiles = false;
-function setPersistentProfiles(on) {
-  const next = !!on;
-  if (next !== _persistentProfiles) {
-    console.log(`[browser] Chế độ profile: ${next ? 'CHROMIUM PROFILE RIÊNG (persistent)' : 'file cookie + Chromium dùng chung'}.`);
-  }
-  _persistentProfiles = next;
+// Chế độ profile Chromium riêng là cài đặt RIÊNG TỪNG PROFILE (không phải toàn app) —
+// truyền vào qua option `persistent` mỗi lần mở. Trước đây để một cờ chung toàn app: mở ⚙ ở
+// profile nào cũng thấy tick sẵn nên tưởng app hỏng, và không thể để 1 profile bật / 4 profile
+// tắt trên cùng máy để so sánh (QĐ-28).
+//
+// Trộn 2 chế độ trên CÙNG một máy là an toàn: profile bật có Chromium riêng, các profile tắt
+// vẫn dùng chung một Chromium như cũ (refs của browser dùng chung chỉ đếm nhóm tắt).
+
+// Profile này có ĐANG chạy ở chế độ persistent không (dùng cho tab đếm và nút 🦊).
+function _isPersistentRunning(profilePath) {
+  const h = _profileCtx.get(profilePath);
+  return !!(h && h.persistent);
 }
-function isPersistentProfiles() { return _persistentProfiles; }
 
 // Thư mục Chromium profile đặt BÊN TRONG thư mục profile → chép profile sang máy khác là mang
 // theo cả trạng thái đăng nhập (cùng triết lý với fingerprint.json, QĐ-05).
@@ -685,6 +688,16 @@ async function _launchPersistent(profilePath, headless) {
       console.warn('[browser] Di cư cookie sang Chromium profile lỗi:', e.message);
     }
   }
+
+  // Chẩn đoán phiên cho nút 🦊 — ĐỌC THẲNG COOKIE TRONG CONTEXT VỪA MỞ. Chính xác hơn hẳn
+  // cách đoán qua file, vì ở chế độ này nguồn sự thật của phiên là THƯ MỤC CHROMIUM chứ không
+  // phải session.state.json. Không đọc thì từ lần chạy thứ 2 trở đi `_sessionInfo` rỗng → 🦊
+  // chỉ báo "Đã mở trình duyệt." chung chung, mất hẳn chẩn đoán "đã đăng nhập / là khách".
+  try {
+    const live = await ctx.cookies();
+    _setSessionInfo(profilePath, 'chromium-profile', null, { cookies: live });
+  } catch (_) { /* không đọc được thì bỏ, chỉ mất phần chẩn đoán */ }
+
   return ctx;
 }
 
@@ -716,11 +729,11 @@ function _ensureSharedBrowser(headless) {
 }
 
 // Lấy 1 context cho profile trên browser dùng chung (foryou/search). Tiêm session từ file.
-async function acquireProfileContext(profilePath, { headless = false } = {}) {
+async function acquireProfileContext(profilePath, { headless = false, persistent = false } = {}) {
   if (!profilePath) throw new Error('Thiếu profilePath');
 
   // ── Chế độ CHROMIUM PROFILE RIÊNG: mỗi profile một Chromium + thư mục riêng ──
-  if (_persistentProfiles) {
+  if (persistent) {
     const ctx = await _launchPersistent(profilePath, headless);
     _lockAcquire(profilePath);
     // VẪN lưu session.state.json định kỳ dù Chromium đã tự giữ trạng thái: giữ một bản sao
@@ -820,7 +833,7 @@ async function acquireCountContext(seedContext, profilePath) {
   // dùng CHUNG context của profile. Lợi thêm: không phải mở 1 instance riêng để đếm, bù lại
   // một phần RAM mà chế độ này tốn thêm. Đánh đổi: nếu chạy CHẾ ĐỘ HIỆN thì tab đếm sẽ hiện
   // trong chính cửa sổ của profile (chạy ẩn thì không thấy gì).
-  if (_persistentProfiles && seedContext) {
+  if (seedContext && _isPersistentRunning(profilePath)) {
     return { ctx: seedContext, shared: true };
   }
   const shared = await _ensureSharedHeadless();
@@ -937,8 +950,6 @@ async function verifyProfileLogin(profilePath) {
 }
 
 module.exports = {
-  setPersistentProfiles,
-  isPersistentProfiles,
   persistDir,
   getContext,
   verifyProfileLogin,

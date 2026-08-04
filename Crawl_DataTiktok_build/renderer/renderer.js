@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS = {
   viewLinks: '', viewPctMin: 40, viewPctMax: 70, viewLikePct: 15,
   viewScrollMin: 20, viewScrollMax: 30,
   cycleScanHours: 5, cycleViewMinutes: 30, cycleBreakMin: 5, cycleBreakMax: 10,
+  chromiumProfile: false,
 };
 
 const MODE_LABEL = {
@@ -344,6 +345,7 @@ async function startProfileById(id) {
     minDelay: Math.round(dMin * 1000),
     maxDelay: Math.round(dMax * 1000),
     blockImages: !!s.blockImages,
+    chromiumProfile: !!s.chromiumProfile,
     recycleEvery: s.recycleEvery === 0 ? 0 : Math.max(0, parseInt(s.recycleEvery, 10) || 80),
     viewLinks,
     viewPctMin: Math.max(1, Math.min(100, parseInt(s.viewPctMin, 10) || 40)),
@@ -573,10 +575,13 @@ function openSettingsModal(ids) {
   $('cfgMaxVideos').value = s.maxVideos;
   $('cfgDelayMin').value = s.delayMin;
   $('cfgDelayMax').value = s.delayMax;
+  // Chế độ profile Chromium riêng: RIÊNG TỪNG PROFILE (QĐ-28) — đọc từ cài đặt của profile
+  // đang mở, KHÔNG phải store chung. Trước đây để chung nên mở ⚙ ở profile nào cũng thấy tick
+  // sẵn → tưởng app tự bật hết.
+  $('cfgChromiumProfile').checked = !!s.chromiumProfile;
   // Số luồng đếm đồng thời là cài đặt CHUNG (global store), không theo profile.
-  api.storeGet(['count_concurrency', 'chromium_profile']).then(r => {
+  api.storeGet(['count_concurrency']).then(r => {
     $('cfgCountConcurrency').value = (r && r.count_concurrency) || 2;
-    $('cfgChromiumProfile').checked = !!(r && r.chromium_profile);
   });
   updateCfgModeUI();
   updateCfgHeadlessLabel();
@@ -612,13 +617,14 @@ async function saveCrawlSettings() {
     // parseFloat||0 giữ được giá trị 0 (0 = không nghỉ); max tự nâng lên >= min khi chạy.
     cycleBreakMin: Math.max(0, parseFloat($('cfgCycleBreakMin').value) || 0),
     cycleBreakMax: Math.max(0, parseFloat($('cfgCycleBreakMax').value) || 0),
+    chromiumProfile: $('cfgChromiumProfile').checked,
   };
   for (const id of crawlSettingsTargetIds) {
     profileSettings[id] = Object.assign({}, getSettings(id), s);
   }
   // Lưu cài đặt CHUNG: số luồng đếm đồng thời toàn app (1–10).
   const cc = Math.max(1, Math.min(10, parseInt($('cfgCountConcurrency').value, 10) || 2));
-  await api.storeSet({ count_concurrency: cc, chromium_profile: $('cfgChromiumProfile').checked });
+  await api.storeSet({ count_concurrency: cc });
   await saveProfileSettings();
   renderProfileTable();
   $('crawlSettingsModal').classList.remove('open');
@@ -1315,15 +1321,19 @@ async function init() {
 
 // ── Mở trình duyệt cho 1 profile ──
 async function openBrowserFor(id) {
-  const block = !!getSettings(id).blockImages;
+  const st = getSettings(id);
+  const block = !!st.blockImages;
   toast('Đang mở trình duyệt...' + (block ? ' (chặn ảnh/video)' : ''));
-  const res = await api.openBrowser(id, block);
+  // Gửi kèm chế độ profile Chromium riêng của CHÍNH profile này (QĐ-28) — nếu không, 🦊 mở
+  // bằng chế độ khác với lúc crawl thì đăng nhập xong lại "không ăn" sang lượt chạy.
+  const res = await api.openBrowser(id, block, !!st.chromiumProfile);
   if (!res.ok) { appendLog(id, 'Lỗi mở trình duyệt: ' + (res.msg || '')); return toast(res.msg || 'Lỗi mở trình duyệt.', 'err'); }
   // Chẩn đoán phiên từ backend: đăng nhập hay khách, cookie lấy từ nguồn nào, lỗi trích gì.
   const si = res.session;
   if (si && si.loggedIn) {
     const srcTxt = { file: 'session đã lưu', bak: 'bản backup session', firefox: 'trích từ Firefox',
-      'firefox-retry': 'trích lại từ Firefox (file cũ là phiên khách)', 'chromium-data': 'chromium-data cũ' }[si.source] || si.source;
+      'firefox-retry': 'trích lại từ Firefox (file cũ là phiên khách)', 'chromium-data': 'chromium-data cũ',
+      'chromium-profile': 'profile Chromium riêng' }[si.source] || si.source;
     appendLog(id, `Đã mở trình duyệt — ĐÃ đăng nhập TikTok (${srcTxt}, ${si.tiktokCookies} cookie).`);
     toast('Đã mở trình duyệt — đã đăng nhập TikTok.', 'ok');
   } else if (si) {

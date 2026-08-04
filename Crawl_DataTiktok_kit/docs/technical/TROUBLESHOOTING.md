@@ -332,15 +332,20 @@ bản kia. Đã gặp: dev đúng tab mà bản đóng gói vẫn sai.
 
 ## 14. Bật "profile Chromium riêng" rồi báo lỗi mở trình duyệt / RAM tăng vọt
 
-Chỉ xảy ra khi công tắc **"Dùng profile Chromium riêng cho mỗi tài khoản"** (⚙ Cài đặt crawl)
-đang **BẬT**. Xem [QĐ-27](DECISIONS.md).
+Chỉ xảy ra với profile đang **BẬT** công tắc **"Dùng profile Chromium riêng cho tài khoản này"**
+(⚙ Cài đặt crawl). Công tắc là **riêng từng profile** — xem [QĐ-27](DECISIONS.md),
+[QĐ-28](DECISIONS.md).
+
+**Mở ⚙ ở profile khác thấy đã tick sẵn?** Đó là bản **v0.1.58** (công tắc còn để chung toàn app).
+Từ v0.1.59 đã sửa thành riêng từng profile. Cập nhật app là hết.
 
 | Hiện tượng | Nguyên nhân | Xử lý |
 |---|---|---|
 | `profile is already in use` / `SingletonLock` | Thư mục Chromium đang bị một tiến trình khác giữ. Một `user-data-dir` chỉ cho **một** Chromium mở | App tự xóa file khóa cũ trước mỗi lần mở. Còn lỗi = **vẫn còn Chromium sống**: Task Manager → tắt hết `chrome.exe`/`Crawl_DataTiktok.exe` rồi chạy lại |
-| RAM tăng ~1GB sau khi bật | Đúng như thiết kế: mất lợi ích "1 Chromium dùng chung", mỗi profile 1 Chromium | Máy dưới 4GB trống thì **tắt công tắc đi** — mất phiên còn nhẹ hơn hết RAM |
+| RAM tăng ~1GB sau khi bật | Đúng như thiết kế: mỗi profile bật là 1 Chromium riêng | Máy dưới 4GB trống thì **giảm số profile bật** (vd chỉ bật 1–2 profile hay mất phiên nhất) chứ không cần tắt hết |
 | Bật xong 5 profile thành khách hết | Cookie chưa được mang sang (vd `session.state.json` đã hỏng/rỗng từ trước) | Log sẽ ghi *"KHÔNG có cookie để mang sang"*. Bấm 🦊 đăng nhập lại một lần — từ lần sau Chromium tự giữ phiên |
 | Đĩa phình nhanh | Mỗi profile ~100–200MB | Xóa tay thư mục `profiles/<tên>/ChromiumProfile` khi app đã tắt — **an toàn**, lần sau app dựng lại từ `session.state.json` |
+| Nút **🔑 Kiểm tra đăng nhập** báo KHÁCH mà 🦊 mở ra vẫn đăng nhập | 🔑 kiểm bằng **bản sao cookie** (`session.state.json`), không mở thư mục Chromium — nếu bản sao đó cũ hơn phiên thật thì 2 nút nói khác nhau. Cố ý làm vậy: 🔑 mà mở thư mục Chromium sẽ đụng khóa khi 🦊 đang mở, hỏng cả 25 lượt kiểm | Tin **🦊** (nó đọc cookie thẳng trong profile, log ghi `profile Chromium riêng`). Muốn 🔑 khớp lại thì chạy profile đó vài chục giây — timer 20s sẽ ghi phiên mới xuống `session.state.json` |
 | Chạy chế độ **hiện** thì thấy tab `/music/` nhấp nháy trong cửa sổ profile | Chế độ này bắt tab đếm dùng chung cửa sổ của profile (không mở được Chromium thứ 2 trên cùng thư mục) | Bình thường, không phải lỗi. Muốn không thấy thì chạy **ẩn** |
 
 Đổi công tắc **không** áp cho profile đang chạy — phải **dừng rồi chạy lại** profile đó.

@@ -86,7 +86,7 @@ const IP_PAUSE_RETRY_MS = Number(process.env.TTC_IP_RETRY_MS) || 60000;
 
 // ── Vòng lặp crawl cho 1 profile (nhận cờ `stop` riêng) ──
 async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
-  const { minDelay, maxDelay, headless, minVideos, maxVideos, mode, keyword, originalOnly, blockImages } = opts;
+  const { minDelay, maxDelay, headless, minVideos, maxVideos, mode, keyword, originalOnly, blockImages, chromiumProfile } = opts;
   // 0 = tắt hẳn tự tải lại feed (người dùng chấp nhận rủi ro RAM để đổi lấy không gián đoạn).
   const recycleEvery = opts.recycleEvery === 0 ? 0 : (opts.recycleEvery || RECYCLE_EVERY_DEFAULT);
   const profilePath = getProfilePath(profile.id);
@@ -160,7 +160,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
     // foryou/search: dùng 1 Firefox CHUNG + 1 context riêng cho profile (tiêm cookie qua
     // storage_state). Nhẹ hơn nhiều so với mỗi profile 1 Firefox persistent.
     try {
-      ctx = await browser.acquireProfileContext(profilePath, { headless });
+      ctx = await browser.acquireProfileContext(profilePath, { headless, persistent: chromiumProfile });
       page = ctx.pages()[0] || await ctx.newPage();
     } catch (e) {
       const locked = /already|use|lock|profile|temporary/i.test(e.message || '');
@@ -1077,7 +1077,8 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
 }
 
 // ── Bắt đầu 1 profile (độc lập). Trả {ok,msg}. ──
-// params: { profileId, mode, keyword, minDelay, maxDelay, headless, minVideos, originalOnly, seedUrls }
+// params: { profileId, mode, keyword, minDelay, maxDelay, headless, minVideos, originalOnly,
+//           chromiumProfile, seedUrls }
 function startProfile(params, onData, onStatus) {
   const profileId = params.profileId;
   if (!profileId) return { ok: false, msg: 'Thiếu profileId.' };
@@ -1133,6 +1134,8 @@ function startProfile(params, onData, onStatus) {
     keyword,
     originalOnly: !!params.originalOnly,
     blockImages: !!params.blockImages,
+    // Chế độ profile Chromium riêng — RIÊNG TỪNG PROFILE (QĐ-28), không phải cài đặt chung.
+    chromiumProfile: !!params.chromiumProfile,
     recycleEvery: params.recycleEvery === 0 ? 0 : Math.max(0, parseInt(params.recycleEvery, 10) || RECYCLE_EVERY_DEFAULT),
     viewLinks,
     viewPctMin: params.viewPctMin ?? 40,

@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('api', {
   profilesGetPath: (id) => ipcRenderer.invoke('profiles-get-path', id),
 
   // Browser control
-  openBrowser: (profileId, blockImages) => ipcRenderer.invoke('open-browser', { profileId, blockImages }),
+  openBrowser: (profileId, blockImages, chromiumProfile) => ipcRenderer.invoke('open-browser', { profileId, blockImages, chromiumProfile }),
   closeBrowser: (profileId) => ipcRenderer.invoke('close-browser', profileId),
   onBrowserClosed: (cb) => ipcRenderer.on('browser-closed', (_e, p) => cb(p)),
 
