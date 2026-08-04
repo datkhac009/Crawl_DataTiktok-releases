@@ -189,6 +189,9 @@ sound với 2 kiểu slug khác nhau không còn bị tính là 2 sound.
 - `build.bat`: kiểm quyền phát hành (fail nhanh) → dừng app đang chạy → tăng version → build
   electron-builder → copy Chromium **và Firefox** vào `lib/ms-playwright` → tạo GitHub Release
   chỉ kèm `.exe`.
+  Bước kiểm quyền đọc **`X-Oauth-Scopes`** của token (cần `repo`), **không** dùng
+  `.permissions.push` — repo đã public nên trường đó luôn `true` dù token không có scope nào,
+  gate sẽ báo pass sai rồi hỏng ở bước cuối sau 8 phút build (gặp thật 2026-08-04).
 - **Tự cập nhật đang TẮT** vì repo phát hành để private (app gọi GitHub API ẩn danh → 404).
   Đang **cập nhật thủ công**: copy `.exe` mới sang từng máy. Lý do và các cách bật lại:
   [QĐ-18](DECISIONS.md).

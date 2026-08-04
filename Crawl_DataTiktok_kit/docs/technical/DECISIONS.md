@@ -931,6 +931,7 @@ quay về `chromium.launch()`.
 | Chuyển toàn bộ sang FirefoxPortable cho "đỡ ngốn RAM" | Đo thật thì Firefox tốn HƠN: 13 tiến trình / 4.6GB / CPU 60% so với Chromium 8–10 / 3.2GB / 23–32% — xem QĐ-27 |
 | Bật `launchPersistentContext` cho mọi profile thay cho file cookie | Mỗi profile thành 1 Chromium riêng → mất lợi ích "1 Chromium dùng chung" (~+1GB với 5 profile). Phải là công tắc, mặc định tắt — xem QĐ-27 |
 | Mở trình duyệt thứ hai (tab đếm / nút 🦊) trên cùng một `user-data-dir` | Chromium báo "profile is already in use" — phải dùng lại đúng context đang mở, xem QĐ-27 |
+| Kiểm quyền phát hành bằng `.permissions.push` của repo | Đó là quyền của **tài khoản**, không phải scope của **token**. Repo chuyển public → luôn `true` dù token không có scope nào → gate BÁO PASS SAI, build xong 8 phút mới lãnh 404. Phải đọc header `X-Oauth-Scopes` |
 | Gọi `ctx.storageState()` định kỳ | Nhấp nháy cửa sổ liên tục (mở trang tạm cho từng origin) |
 | `scrollIntoView` để thoát kẹt feed | Vô tác dụng — feed For You là băng chuyền CSS, không phải vùng cuộn |
 | Cuộn feed bằng phím mũi tên xuống | **Đã ngừng tác dụng hoàn toàn** — xem QĐ-13, dùng con lăn chuột |

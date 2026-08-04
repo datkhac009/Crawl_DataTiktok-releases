@@ -31,12 +31,18 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-REM Hoi thang GitHub: token hien tai co quyen GHI tren repo phat hanh khong.
-REM Repo private + token khong du quyen se tra 404 (khong phai 403) -^> khong co chu "true".
-gh api repos/%REPO% -q ".permissions.push" 2>nul | findstr /i /c:"true" >nul
+REM Hoi thang GitHub xem TOKEN co SCOPE ghi khong (khong phai quyen cua TAI KHOAN).
+REM 2026-08-04: cach cu dung ".permissions.push" da BAO PASS SAI. Do la quyen cua TAI KHOAN
+REM tren repo, ma repo da chuyen PUBLIC nen luon tra "true" du token khong co scope nao ->
+REM build xong 8 phut moi lanh 404 o buoc 4. Gate nay viet cho thoi repo con private.
+REM Cach dung: doc header X-Oauth-Scopes, phai co "repo" hoac "public_repo".
+set "SCOPES="
+for /f "usebackq tokens=1,* delims=:" %%a in (`gh api user -i 2^>nul ^| findstr /i /b /c:"X-Oauth-Scopes:"`) do set "SCOPES=%%b"
+echo %SCOPES% | findstr /i /r /c:"\<repo\>" /c:"public_repo" >nul
 if errorlevel 1 (
   echo.
-  echo *** TOKEN HIEN TAI KHONG CO QUYEN GHI TREN %REPO% ***
+  echo *** TOKEN HIEN TAI KHONG CO SCOPE DE PHAT HANH ***
+  echo Scope token dang co:%SCOPES%   ^(can: repo^)
   echo Kiem tra:  gh auth status
   echo Chon 1 trong 2 cach sua:
   echo   1^) gh auth login       -- token can scope: repo VA read:org ^(luu trong keyring, an toan hon^)
