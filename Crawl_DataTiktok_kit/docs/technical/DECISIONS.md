@@ -976,6 +976,82 @@ dùng chung context, profile tắt vẫn mở trình duyệt ẩn riêng, không
 
 ---
 
+## QĐ-29 — Số dòng Sheet phải có Ô RIÊNG, không dùng chung với dòng thông báo
+
+**QĐ-25 đã sai một nửa và nó hỏng ĐÚNG HAI LẦN theo cùng một kiểu.**
+
+QĐ-25 cho số dòng Sheet ghi vào **cùng** `#crawlStatusMsg` với thông báo/lỗi, rồi phải thêm luật
+"chỉ ghi khi dòng đang rảnh" để không xoá mất lỗi trước khi người dùng đọc. Luật đó đúng ý định
+nhưng tạo ra một cái bẫy: **không có gì xoá câu đang đậu ở đó**, nên chỉ cần một câu bất kỳ ghi
+vào là con số **không bao giờ hiện lại** cho tới khi khởi động lại app.
+
+| Lần | Câu kẹt lại | Người dùng thấy |
+|---|---|---|
+| 1 (2026-08-04) | `Không đọc được Sheet để lọc trùng: Không có tab tên "Data"…` | Sửa đúng tên tab, log đọc được 161.045 dòng, mà dòng trạng thái vẫn nguyên câu lỗi → tưởng chưa ăn |
+| 2 (2026-08-04) | `Đã bật đẩy Sheet giữa phiên — nạp 161040 link cũ để lọc trùng (4 link mới thêm).` | Không còn thấy số dòng nữa, dù mọi thứ chạy tốt |
+
+Lần 1 tôi định vá bằng cách cho "số mới được ghi đè lên **lỗi đọc Sheet**". Người dùng bác ngay:
+*"tôi vẫn thích kiểu cũ là auto hiện data Sheet ở dòng đó và cứ mỗi 1 lúc là nó sẽ update lại"* —
+tức là **con số phải LUÔN hiện**, không có điều kiện gì cả. Đúng: đây là số liệu theo dõi liên
+tục (5 máy cùng đẩy lên), không phải thông báo nhất thời.
+
+**Quyết định:** tách `#sheetRowsInfo` thành **ô riêng**, đặt ngay sau 2 badge đếm →
+`[ 716 sound ] [ Bỏ qua trùng: 644 ] Sheet: 161.067 dòng data   <thông báo>`.
+
+Bỏ hẳn `_statusIsIdle()`. Được **cả hai** thứ mà QĐ-25 phải đánh đổi:
+
+- số dòng **luôn hiện**, tự cập nhật, không ai chặn được;
+- thông báo/lỗi nằm nguyên chỗ của nó, **không bị số dòng xoá** — mối lo của QĐ-25 vẫn được giữ,
+  chỉ là giải bằng **tách chỗ** thay vì bằng **luật nhường nhau**.
+
+CSS `flex: 0 0 auto` để câu thông báo dài bị cắt trước, **không bao giờ cắt mất con số**;
+`.sheet-rows:empty { display: none }` để lúc chưa đọc được Sheet thì không chiếm khoảng trắng.
+
+**Bài học:** khi hai thứ **khác bản chất** (số liệu theo dõi liên tục vs thông báo nhất thời)
+tranh nhau một chỗ, đừng viết luật ưu tiên cho chúng nhường nhau — luật đó sẽ luôn có kẽ hở.
+**Cho mỗi thứ một chỗ.**
+
+**Kiểm chứng:** `test/sheet-rows-status.test.js` — 15 khẳng định, trong đó mục 3 và 4 dựng lại
+**đúng 2 câu đã gây lỗi thật** rồi đòi số dòng vẫn phải hiện *và* câu đó vẫn phải còn nguyên.
+Mục 7 đọc thẳng `renderer.js`/`index.html`/`styles.css` để bản sao logic trong test không lệch
+âm thầm khỏi bản gốc (test dùng bản sao vì `renderer.js` chạy trong DOM, không `require` được).
+
+---
+
+## QĐ-30 — Lời gọi IPC có gọi mạng thì nút bấm phải khoá + báo trạng thái, và IPC phải có trần
+
+**Sự cố thật (2026-08-04):** người dùng sửa tên tab trong ☁ Google Sheet rồi bấm **Lưu** —
+*"click vào k thấy phản hồi gì"*. Thực tế **đã lưu thành công**, chỉ là giao diện không nói gì.
+
+Hai lỗi cộng lại:
+
+1. `saveSheetsConfig()` `await api.sheetsSetConfig(...)` mà **không khoá nút, không đổi chữ**.
+   Chờ vài chục giây mà nút vẫn sáng như chưa bấm → không thể phân biệt "đang làm" với "nút chết",
+   và người dùng bấm lại nhiều lần.
+2. Handler `sheets-set-config` gọi `await sheets.flushAll()` **không có trần**. Bước đó gọi mạng
+   (đọc lại Sheet + append); với Sheet 161k dòng thì trần đọc là **120s × 2 lần thử** — renderer
+   đứng hàng **phút**.
+
+**Đã sửa (chỉ phần giao diện, theo yêu cầu *"chỉ fix lỗi hiện thị UI thôi, đừng sửa gì logic"*):**
+khoá nút + đổi chữ thành `Đang lưu...` + `try/finally` mở lại (kể cả khi lỗi). Người dùng thấy
+ngay là app đang làm việc, không bấm lại nhiều lần nữa.
+
+**CHƯA sửa — đề xuất, chờ quyết:** bọc `withDeadline(sheets.flushAll(), 8000, null)` trong handler
+`sheets-set-config`. Tôi đã làm rồi **hoàn lại** vì đó là thay đổi logic backend, không phải UI.
+Lý do vẫn nên làm sau này:
+
+- Bước `flushAll()` chạy bằng cấu hình **CŨ**. Khi người dùng bấm Lưu để **sửa cấu hình sai**
+  thì lần xả đó chắc chắn thất bại → chờ nó xong là **chờ vô ích** hàng phút.
+- Quá hạn **không mất dòng nào**: lô vẫn nằm trong bộ đệm và được đẩy ở nhịp flush kế tiếp bằng
+  cấu hình **MỚI** — đúng cái người dùng muốn.
+
+**Nguyên tắc rút ra:** mọi nút `await` một IPC có gọi mạng đều phải khoá + báo trạng thái; và mọi
+`ipcMain.handle` gọi mạng nên có trần thời gian (`withDeadline`). Đã có tiền lệ y hệt ở
+`profile-start` (trần 8s cho `sheetLock.check` — QĐ-19) và ở nút 🔌 Test kết nối / 🧹 Dọn trùng
+(đều đã khoá nút sẵn); nút **Lưu** bị bỏ sót vì "chỉ là lưu cấu hình", không ai nghĩ nó gọi mạng.
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |
@@ -1018,7 +1094,9 @@ dùng chung context, profile tắt vẫn mở trình duyệt ẩn riêng, không
 | Dựng ID dài trong test bằng phép CỘNG số (`76000000000000000 + n`) | Vượt `Number.MAX_SAFE_INTEGER` → mọi `n` ra CÙNG một số → mọi link test giống nhau → test pass VÔ NGHĨA, che mất bug thật. Phải ghép CHUỖI — xem QĐ-09 |
 | Gọi Google API mà không xử lý riêng 429/quota | Gặp là ném lỗi như lỗi mạng thường rồi timer 5s thử lại → càng dội, càng bị chặn sâu. Phải có cầu dao tạm ngưng — xem QĐ-24 |
 | Để nguyên thông báo lỗi thô của Google cho người dùng đọc | `Unable to parse range: Data!B:B` nghe như lỗi cú pháp, thực ra là THIẾU TAB — người dùng mất thời gian tưởng bug code. Phải dịch thành câu chỉ đúng chỗ sửa — xem QĐ-26 |
-| Ghi số liệu định kỳ vào dòng trạng thái dùng chung với thông báo lỗi | Lỗi bị xóa trước khi người dùng kịp đọc. Chỉ ghi khi dòng đang "rảnh" — xem QĐ-25 |
+| Ghi số liệu định kỳ vào dòng trạng thái dùng chung với thông báo lỗi | Lỗi bị xóa trước khi người dùng kịp đọc (QĐ-25). Nhưng luật "chỉ ghi khi rảnh" lại làm SỐ LIỆU biến mất vĩnh viễn khi có câu nào đậu ở đó — hỏng 2 lần. Phải cho mỗi thứ MỘT Ô RIÊNG — xem QĐ-29 |
+| Để nút bấm `await` một IPC có gọi mạng mà không khoá nút / không đổi chữ | Nút trông như chết, người dùng bấm lại nhiều lần và tưởng chưa lưu được (đã lưu rồi) — xem QĐ-30 |
+| Gọi mạng trong `ipcMain.handle` mà không có `withDeadline` | Trần đọc Sheet là 120s × 2 lần thử → renderer đứng hàng PHÚT. Mà chờ xong thường vô ích vì đang chạy bằng cấu hình sai — xem QĐ-30 (**chưa sửa**, chỉ là đề xuất) |
 | Sửa cấu hình ở app dev rồi tưởng bản đóng gói cũng đúng | 2 app dùng 2 electron-store KHÁC NHAU (`TikTokCrawler` vs `TikTokCrawler-Dev`) — xem QĐ-26 |
 | Coi MỌI lỗi 403 là vượt quota | 403 còn nghĩa "chưa chia sẻ Sheet cho service account" — báo nhầm sẽ che mất lỗi thiếu quyền, cực khó đoán. Phải soi nội dung — xem QĐ-24 |
 | Để mốc đọc tăng dần ở 2 nơi (main.js + sheets.cjs) | 2 mốc lệch nhau (bẫy QĐ-10) và 2 nơi cùng đọc sẽ cùng đẩy mốc → nhảy qua mất dòng chưa đọc. Phải để MỘT nơi + gộp lời gọi trùng — xem QĐ-09 |

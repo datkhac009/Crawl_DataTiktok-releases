@@ -155,6 +155,54 @@ function freshHistory() {
     check('ngay HOM NAY khong bi don mat', !!j2.days[hist2.todayKey()]);
   }
 
+  // ── Qua 00:00 phai SANG NGAY MOI, dem lai tu 1 ──
+  // Nguoi dung yeu cau chot dieu nay (2026-08-04): "23:00 ngay 3/8 thi den 1:00 se la ngay
+  // 4/8, sound thu duoc bat dau tu 1 o ngay moi nhat". Bay de-vo: neu ngay duoc tinh MOT LAN
+  // (luc nap module hoac luc bat dau phien) thi treo may qua dem se don het sound cua ngay
+  // moi vao ngay cu -> con so ca hai ngay deu sai. Phai tinh lai o TUNG lan ghi.
+  console.log('\n=== 9. Qua 00:00 -> sang ngay MOI, dem lai tu 1 ===');
+  {
+    const { hist, file } = freshHistory();
+    const RealDate = Date;
+    // Gia lap dong ho: 23:00 ngay 03/08/2026 -> 01:00 ngay 04/08/2026 (GIO MAY, khong phai UTC).
+    let now = new RealDate(2026, 7, 3, 23, 0, 0);
+    global.Date = class extends RealDate {
+      constructor(...a) { super(); return a.length ? new RealDate(...a) : new RealDate(now.getTime()); }
+      static now() { return now.getTime(); }
+    };
+    try {
+      hist.recordSound('profileA');
+      hist.recordSound('profileA');
+      hist.recordSound('profileB');
+      check('truoc nua dem: khoa ngay la 2026-08-03', hist.todayKey() === '2026-08-03', hist.todayKey());
+
+      now = new RealDate(2026, 7, 4, 1, 0, 0);          // 01:00 hom sau
+      check('sau nua dem: khoa ngay tu doi sang 2026-08-04',
+        hist.todayKey() === '2026-08-04', hist.todayKey());
+
+      hist.recordSound('profileA');
+      await hist.flush();
+      const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+      check('ngay CU giu nguyen 3 sound',
+        !!j.days['2026-08-03'] && j.days['2026-08-03'].valid === 3, JSON.stringify(j.days['2026-08-03']));
+      check('ngay MOI bat dau lai tu 1',
+        !!j.days['2026-08-04'] && j.days['2026-08-04'].valid === 1, JSON.stringify(j.days['2026-08-04']));
+      check('ngay moi tach rieng theo profile, khong cong don ngay cu',
+        j.days['2026-08-04'].byProfile.profileA === 1 && !j.days['2026-08-04'].byProfile.profileB,
+        JSON.stringify(j.days['2026-08-04'].byProfile));
+      check('la 2 ngay RIENG BIET trong file', Object.keys(j.days).length === 2,
+        Object.keys(j.days).join(','));
+
+      // 23:59:59 -> 00:00:00 : ranh gioi sat nhat, de sai nhat.
+      now = new RealDate(2026, 7, 4, 23, 59, 59);
+      check('23:59:59 van la ngay 04', hist.todayKey() === '2026-08-04', hist.todayKey());
+      now = new RealDate(2026, 7, 5, 0, 0, 0);
+      check('00:00:00 da sang ngay 05', hist.todayKey() === '2026-08-05', hist.todayKey());
+    } finally {
+      global.Date = RealDate;
+    }
+  }
+
   console.log('\n' + '='.repeat(60));
   console.log(`KET QUA: ${pass} pass, ${fail} fail`);
   process.exit(fail > 0 ? 1 : 0);

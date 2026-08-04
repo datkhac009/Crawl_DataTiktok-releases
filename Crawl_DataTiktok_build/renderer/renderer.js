@@ -172,7 +172,7 @@ function setRowRunning(id, running) {
   updateRunSelectedBtnState();
 }
 
-// Khóa nút "▶ Chạy đã chọn" khi bấm cũng không có tác dụng gì — tránh nhấn nhầm khi phần
+// Khóa nút "▶ Chạy ô đã chọn" khi bấm cũng không có tác dụng gì — tránh nhấn nhầm khi phần
 // mềm đang chạy. Chỉ khóa khi CHƯA tick gì HOẶC mọi profile đã tick đều đang chạy rồi; tick
 // thêm 1 profile chưa chạy là tự mở khóa ngay (vẫn thêm được vào giữa phiên như bình thường).
 function updateRunSelectedBtnState() {
@@ -256,29 +256,28 @@ function updateProfileCounts(id, scanned, checked) {
   }
 }
 
-// ── SỐ DÒNG DATA TRÊN SHEET, hiện ở dòng trạng thái (2026-08-03, người dùng chốt chỗ này) ──
+// ── SỐ DÒNG DATA TRÊN SHEET (2026-08-03, người dùng chốt chỗ này) ──
 // Người dùng muốn thay chữ "Đang chạy N profile." (vô ích — bảng phía trên đã cho biết profile
-// nào đang chạy) bằng số dòng data thật đang có trên Sheet, và luôn tự cập nhật.
-//
-// ⚠ Dòng trạng thái này DÙNG CHUNG với thông báo lỗi/cảnh báo (vd "Không đọc được Sheet...",
-// "Google Sheet: ..."). Nếu cứ 5 giây lại ghi đè số dòng lên đó thì THÔNG BÁO LỖI SẼ BỊ XÓA
-// mất trước khi người dùng kịp đọc. Nên chỉ ghi khi dòng đang ở trạng thái "rảnh": trống, hoặc
-// đang là chính số dòng Sheet, hoặc mấy câu placeholder/thông tin đầu phiên. Gặp lỗi thì để
-// nguyên lỗi trên đó.
+// nào đang chạy) bằng số dòng data thật đang có trên Sheet, LUÔN HIỆN và luôn tự cập nhật (5
+// máy cùng đẩy lên nên con số này thay đổi liên tục).
 let _lastSheetRows = 0;
-function _statusIsIdle(t) {
-  const s = String(t || '').trim();
-  return s === '' || s === 'Chưa chạy'
-    || s.startsWith('Sheet: ')          // chính số dòng mình đã ghi
-    || s.startsWith('Đang chạy ')       // câu cũ, cho phép thay
-    || s.startsWith('Đã nạp ');         // thông báo nạp link đầu phiên
-}
+// Số dòng Sheet có Ô RIÊNG (#sheetRowsInfo), KHÔNG dùng chung với dòng thông báo nữa.
+//
+// Trước đây nó ghi vào #crawlStatusMsg nên phải nhường mọi thông báo (QĐ-25: không được xoá
+// lỗi trước khi người dùng kịp đọc). Hậu quả: chỉ cần một câu thông tin bất kỳ đậu ở đó —
+// "Đã bật đẩy Sheet giữa phiên — nạp 161040 link cũ..." — là số dòng KHÔNG BAO GIỜ hiện lại,
+// vì không có gì xoá câu đó đi. Người dùng cần con số này luôn thấy được để biết Sheet đang
+// có bao nhiêu data (5 máy cùng đẩy lên).
+//
+// Tách ô là giải pháp đúng cho CẢ HAI: số dòng luôn hiện và tự cập nhật, thông báo/lỗi vẫn
+// nằm nguyên chỗ của nó không bị ai xoá. Không còn phải đánh đổi.
 function setSheetRowsStatus(rows) {
   if (typeof rows === 'number') _lastSheetRows = rows;
-  const el = $('crawlStatusMsg');
-  if (!el || !_lastSheetRows) return;
-  if (!_statusIsIdle(el.textContent)) return;   // đang hiện lỗi/cảnh báo → không ghi đè
-  el.textContent = `Sheet: ${_lastSheetRows.toLocaleString('vi-VN')} dòng data`;
+  const el = $('sheetRowsInfo');
+  if (!el) return;
+  el.textContent = _lastSheetRows
+    ? `Sheet: ${_lastSheetRows.toLocaleString('vi-VN')} dòng data`
+    : '';   // chưa đọc được lần nào → để trống, không hiện số bịa
 }
 
 // Số đếm SỐNG "Bỏ qua trùng" — dùng CHUNG cho cả phiên (không riêng 1 profile), để người
@@ -459,10 +458,10 @@ async function runSelected() {
     // "Đang bật lần lượt 2/5..." dù cả 5 profile đã chạy từ lâu — vừa sai vừa CHIẾM CHỖ của
     // thông tin hữu ích hơn (đồng bộ Sheet, nạp link lọc trùng) trên cùng dòng trạng thái đó.
     const msg = $('crawlStatusMsg');
-    if (msg && msg.textContent.startsWith('Đang bật lần lượt')) {
-      msg.textContent = '';        // để trống rồi nhường chỗ cho số dòng Sheet
-      setSheetRowsStatus();
-    }
+    // Xoá câu "Đang bật lần lượt N/M" còn kẹt lại — nó chỉ đúng TRONG LÚC đang bật lần lượt,
+    // để nguyên thì trông như app vẫn đang chờ (bug 2026-08-03). Số dòng Sheet có ô riêng nên
+    // không liên quan gì tới việc xoá này nữa.
+    if (msg && msg.textContent.startsWith('Đang bật lần lượt')) msg.textContent = '';
   }
 }
 
@@ -841,9 +840,24 @@ function readSheetsForm() {
 }
 
 async function saveSheetsConfig() {
-  await api.sheetsSetConfig(readSheetsForm());
-  toast('Đã lưu cài đặt Google Sheet.', 'ok');
-  $('sheetsModal').classList.remove('open');
+  // Nút này CÓ THỂ chờ lâu: khi đang chạy, backend xả nốt buffer + đọc lại Sheet trước khi
+  // đổi cấu hình — với Sheet 161k dòng và Google API đang chậm thì mất hàng chục giây. Trước
+  // đây không có phản hồi nào nên bấm xong tưởng nút chết (người dùng báo "click không thấy
+  // phản hồi gì"), rồi bấm lại nhiều lần. Phải khoá nút + nói đang làm gì NGAY.
+  const btn = $('sheetsSaveBtn');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Đang lưu...';
+  try {
+    await api.sheetsSetConfig(readSheetsForm());
+    toast('Đã lưu cài đặt Google Sheet.', 'ok');
+    $('sheetsModal').classList.remove('open');
+  } catch (e) {
+    toast('Lưu cài đặt Sheet lỗi: ' + (e && e.message ? e.message : e), 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
 }
 
 async function testSheets() {
@@ -1198,7 +1212,7 @@ async function init() {
 
   // ĐỒNG BỘ TRẠNG THÁI CHẠY VỚI BACKEND (2026-07-28): backend là nguồn sự thật duy nhất
   // về profile nào đang crawl. Trước đây renderer chỉ dựa vào sự kiện nhận được, nên hễ
-  // lệch một lần là kẹt luôn (nút "■ Dừng" bấm không có tác dụng, "Chạy đã chọn" bị vô
+  // lệch một lần là kẹt luôn (nút "■ Dừng" bấm không có tác dụng, "Chạy ô đã chọn" bị vô
   // hiệu) và cách duy nhất để thoát là khởi động lại app. Reload giao diện (F5 ở bản dev)
   // cũng từng làm mất hết trạng thái đang chạy.
   try {

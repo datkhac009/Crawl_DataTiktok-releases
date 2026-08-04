@@ -139,6 +139,11 @@ body {
   cursor: pointer;
   transition: all .15s;
   white-space: nowrap;
+  /* PHẢI đặt line-height rõ ràng: mặc định `normal` (~1.2) không đủ chỗ cho dấu tiếng Việt
+     nằm DƯỚI baseline (ạ ẹ ị ọ ụ ậ ặ) — nút bị cắt mất dấu nặng nên "Chạy" hiện ra thành
+     "Chay", người dùng báo là "text UI sai" (2026-08-04). Chữ Latin không có dấu dưới nên
+     lỗi này không bao giờ lộ ra khi thử bằng tiếng Anh. */
+  line-height: 1.45;
 }
 .btn:hover { background: #262c34; }
 .btn:disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
@@ -205,6 +210,17 @@ body {
   min-width: 0; flex: 1 1 120px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* Số dòng data trên Sheet — ô RIÊNG, luôn hiện. flex-shrink: 0 để câu thông báo dài bên cạnh
+   bị cắt trước, không bao giờ cắt mất con số này. */
+.sheet-rows {
+  color: var(--text); font-size: 12px; font-weight: 600;
+  white-space: nowrap; flex: 0 0 auto;
+}
+.sheet-rows:empty { display: none; }   /* chưa đọc được Sheet → không chiếm khoảng trắng */
+
+/* Cùng lý do như .btn: chừa chỗ cho dấu tiếng Việt dưới baseline, không để bị cắt. */
+.badge, .status-msg, .sheet-rows { line-height: 1.45; }
 
 /* overflow: auto (CẢ 2 CHIỀU) — trước đây chỉ có overflow-y nên bảng rộng hơn khung bị
    CẮT MẤT chứ không cuộn được, người dùng không có cách nào xem các cột bên phải. */

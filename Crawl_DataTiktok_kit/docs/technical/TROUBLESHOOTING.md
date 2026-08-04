@@ -305,6 +305,42 @@ Xóa tab thừa (`_locks 2`), giữ lại đúng 1 tab `_locks`. Cập nhật b�
 
 ---
 
+## 15. Không thấy dòng "Sheet: N dòng data" / bấm Lưu trong ☁ Google Sheet không phản hồi
+
+### Không thấy số dòng Sheet
+
+Nó chỉ hiện khi app **đọc Sheet thành công ít nhất 1 lần**. Chưa đọc được lần nào thì để trống
+(thà không hiện gì còn hơn hiện số bịa). Kiểm bằng log:
+
+```bash
+grep "reseed] Đọc" logs/crawler_<mới nhất>.log | tail -3
+```
+
+- Thấy `Đọc TOÀN BỘ Sheet (N dòng)` → đọc được, số sẽ hiện trong ~1 phút.
+- Thấy `Không có tab tên "X"` → **sai tên tab trong app** (mục 13). Đây là nguyên nhân số 1.
+- Không thấy dòng `reseed` nào → chưa bật "đẩy lên Google Sheet", hoặc chưa có Service Account.
+
+⚠️ **Trước v0.1.60** còn một nguyên nhân nữa: số dòng ghi chung ô với dòng thông báo, nên chỉ cần
+một câu bất kỳ đậu ở đó (`Không đọc được Sheet…`, `Đã bật đẩy Sheet giữa phiên…`) là con số
+**không bao giờ hiện lại** cho tới khi khởi động lại app. Từ v0.1.60 nó có ô riêng — xem
+[QĐ-29](DECISIONS.md). Đang chạy bản cũ thì **khởi động lại app** là thấy.
+
+### Bấm Lưu không phản hồi
+
+**Trước v0.1.60:** nút không khoá, không đổi chữ, mà backend có thể chờ mạng hàng **phút** (xả
+buffer + đọc lại Sheet 161k dòng). Nhìn như nút chết, nhưng **cấu hình ĐÃ được lưu** ngay dòng
+đầu của handler. Kiểm chứng:
+
+```bash
+node -e "const c=require(process.env.APPDATA+'/TikTokCrawler/config.json');console.log(c.sheets_config.tab)"
+```
+
+Ra đúng tên tab mới = đã lưu, khỏi bấm lại. Từ v0.1.60 nút đổi thành `Đang lưu...` nên biết ngay
+là app đang làm việc. Backend **vẫn** có thể chờ mạng lâu (chưa đặt trần — xem
+[QĐ-30](DECISIONS.md)), nên cứ để nút chạy, đừng bấm lại.
+
+---
+
 ## Nguyên tắc chẩn đoán chung
 
 1. **Log 📄 của từng profile trước** — hầu hết sự cố đã có dòng chẩn đoán sẵn.
