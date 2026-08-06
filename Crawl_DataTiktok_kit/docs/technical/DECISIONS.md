@@ -1501,6 +1501,33 @@ Hệ quả: tab chờ đúng ra sẽ **rất ít link** — chỉ khi API *lẫn
 Người dùng chốt lại phạm vi sau khi biết số đo: **chỉ** link không đọc được số video vào tab chờ,
 **không** đưa link bị lọc vì ngoài ngưỡng vào (ngưỡng là bộ lọc có chủ đích của họ).
 
+**Bổ sung (2026-08-06) — công tắc HIỆN TAB ĐẾM phải dùng CHUNG context, không mở browser thứ hai.**
+
+Để người dùng soi được trang `/music/` bằng mắt, tôi thêm công tắc *"Hiện tab đếm"*. Cách làm đầu
+tiên: mở `_ensureSharedHeadless()` ở chế độ **hiện**. **Sai hướng** — Playwright mở mỗi
+browser/context thành **cửa sổ riêng**, nên nó sinh ra **CỬA SỔ THỨ HAI** cạnh cửa sổ profile,
+tốn thêm cả một instance Chromium. Người dùng gửi ảnh 2 cửa sổ và bác ngay: *"nên hiện chung
+trong 1 browser thôi, đừng để 2 browser thế kia rất tốn RAM"*.
+
+Cách đúng: khi bật công tắc thì **dùng chính context của profile** (`{ ctx: seedContext, shared:
+true }`) — tab đếm thành **một TAB trong cùng cửa sổ**. Đây chính là đường mà chế độ persistent đã
+đi sẵn, chỉ là dùng lại cho mục đích chẩn đoán. Được thêm 2 thứ miễn phí: **không** thêm instance
+nào, và cookie/vân tay **tự khớp** (khỏi copy).
+
+Đo thật bằng CDP `Browser.getWindowForTarget` trên đúng cấu hình người dùng (`persistent:false`,
+`headless:false`):
+```
+trang FEED : windowId = 499155786
+trang ĐẾM  : windowId = 499155786   → CÙNG cửa sổ = 2 TAB
+log        : chỉ "Đã mở Chromium dùng chung (hiện)", không có instance thứ hai
+```
+
+`_ensureSharedHeadless()` được trả về **luôn ẩn** — nó cũng được `verifyProfileLogin` (nút 🔑)
+dùng, mà nút đó không có lý do gì phải hiện cửa sổ ra.
+
+⚠ Giới hạn: chỉ **thấy** được nếu profile đang chạy ở chế độ **hiện**; profile chạy ẩn thì cửa sổ
+chung cũng ẩn. Đã ghi rõ trong UI.
+
 ⚠ **Bài học:** đừng tin việc "người dùng thấy trang lỗi" là đủ để kết luận nguyên nhân — mở đúng
 link đó bằng đúng đường code đi mới biết. Ở đây suy luận hợp lý ("trang lỗi ⇒ không đọc được số")
 lại sai, vì phần lỗi và phần app cần đọc là **hai phần khác nhau của trang**.
@@ -1583,5 +1610,6 @@ chữ số thật** — hiện đang dùng đúng 2 ID lấy từ ảnh người
 | BỎ HẲN link khi không đọc được số video, coi mọi ca như nhau | Ca "Something went wrong" là sound VẪN CÒN (header còn tên + số video), TikTok chỉ lỗi lúc dựng trang — bỏ là mất dữ liệu thật, và người dùng thấy mất RẤT NHIỀU. Chỉ bỏ hẳn khi sound CHẾT thật (`statusCode 10201`); còn sống thì sang tab chờ — xem QĐ-33 |
 | Nạp link ở tab chờ vào bộ lọc quét (`_collected`) hoặc `_knownLinks` của tab chính | Sẽ KHÔNG BAO GIỜ thử lại được, mà "Something went wrong" thường chỉ là lỗi tạm thời — đọc được ở phiên sau thì sound vào tab CHÍNH với dữ liệu đầy đủ. Chỉ nạp vào `_pendingKnown` để chặn ghi trùng — xem QĐ-33 |
 | Kết luận nguyên nhân từ "người dùng thấy trang lỗi", không mở đúng link bằng đúng đường code đi | Trang `/music/` hiện "Something went wrong" ở phần LƯỚI VIDEO, nhưng app đọc số từ API + HEADER — hai phần khác nhau. Đo thật: link "lỗi" đọc ra `videoCount=16` hoàn hảo, bị bỏ vì `16 < minVideos 1000`. Suy luận "trang lỗi ⇒ không đọc được số" nghe hợp lý nhưng SAI — xem QĐ-33 |
+| Mở trình duyệt đếm ở chế độ HIỆN để "xem tab đếm" | Playwright mở mỗi browser/context thành CỬA SỔ RIÊNG → sinh ra cửa sổ thứ hai + tốn thêm cả một instance Chromium (người dùng gửi ảnh 2 cửa sổ và bác ngay). Phải dùng CHUNG context của profile để nó thành 1 TAB trong cùng cửa sổ — xem QĐ-33 |
 | Chạy lại cả nhóm profile NGAY sau khi đổi IP | 5 phiên đăng nhập cũ đồng loạt xuất hiện trên một IP vừa mới đổi trong vài giây = đúng khuôn "tài khoản bị chiếm" (QĐ-15, nguyên nhân số 1 khiến TikTok hủy phiên). Phải chờ ~1 phút cho IP nguội — xem QĐ-32 |
 | Dùng ID sound NGẮN làm dữ liệu test khi kiểm lọc trùng | `_extractMusicId` đòi tối thiểu 8 chữ số; ID ngắn không trích được ID nên `normalizeKey` lùi về so nguyên văn URL → 2 slug khác ngôn ngữ của CÙNG sound thành 2 key khác nhau → khẳng định lọc trùng VÔ NGHĨA. Phải dùng ID 19 chữ số thật (lặp lại đúng bẫy QĐ-09) — xem QĐ-33 |

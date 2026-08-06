@@ -829,13 +829,17 @@ function _ensureSharedHeadless() {
   if (!_sharedHeadlessLaunching) {
     _configureBrowsersPath();
     const { chromium } = require('playwright');
-    const showTab = _showCountTab;   // chốt cờ ở thời điểm mở, không đọc lại giữa đường
-    _sharedHeadlessLaunching = chromium.launch({ headless: !showTab, args: _CHROMIUM_ARGS })
+    // ⚠ LUÔN ẩn. Muốn THẤY tab đếm thì KHÔNG mở trình duyệt này ở chế độ hiện — làm vậy sinh ra
+    // CỬA SỔ THỨ HAI, tốn thêm cả một instance Chromium (người dùng báo đúng: "rất tốn RAM").
+    // Cách đúng là dùng CHÍNH context của profile để tab đếm thành MỘT TAB trong cùng cửa sổ —
+    // xem acquireCountContext. Trình duyệt này cũng được `verifyProfileLogin` dùng, và nút 🔑
+    // thì không có lý do gì phải hiện ra.
+    _sharedHeadlessLaunching = chromium.launch({ headless: true, args: _CHROMIUM_ARGS })
       .then(b => {
         _sharedHeadless = { browser: b, refs: 0 };
         _sharedHeadlessLaunching = null;
         b.on('disconnected', () => { _sharedHeadless = null; });
-        console.log(`[browser] Đã mở trình duyệt dùng chung để đếm video (${showTab ? 'HIỆN — chế độ chẩn đoán' : 'ẩn'}).`);
+        console.log('[browser] Đã mở trình duyệt headless dùng chung để đếm video.');
         return _sharedHeadless;
       })
       .catch(err => { _sharedHeadlessLaunching = null; throw err; });
@@ -871,6 +875,22 @@ async function acquireCountContext(seedContext, profilePath) {
   // cùng thiết bị với tab chính — bắt buộc, vì hai bên xài chung cookie (QĐ-05).
   const running = _profileCtx.get(profilePath);
   if (seedContext && running && running.persistent && running.headless) {
+    return { ctx: seedContext, shared: true };
+  }
+
+  // ── Bật "HIỆN tab đếm" (chẩn đoán): dùng CHUNG context của profile (sửa 2026-08-06) ──
+  // Cách làm đầu tiên của tôi là mở `_sharedHeadless` ở chế độ HIỆN — sai hướng: Playwright mở
+  // mỗi browser/context thành CỬA SỔ RIÊNG, nên nó sinh ra CỬA SỔ THỨ HAI và tốn thêm cả một
+  // instance Chromium. Người dùng báo đúng: *"nên hiện chung trong 1 browser thôi, đừng để 2
+  // browser thế kia rất tốn RAM"*.
+  //
+  // Dùng context của chính profile thì tab đếm thành **MỘT TAB trong cùng cửa sổ** — đúng cái
+  // người dùng muốn, KHÔNG thêm instance nào, và còn tự khớp cookie + vân tay (khỏi copy).
+  // Đây chính là đường mà chế độ persistent đã đi sẵn, chỉ là giờ dùng lại cho mục đích chẩn đoán.
+  //
+  // ⚠ Chỉ THẤY được nếu profile đang chạy ở chế độ HIỆN. Profile chạy ẩn thì cửa sổ chung cũng
+  // ẩn nên chẳng thấy gì — muốn soi thì bỏ tick "Chạy ẩn" của profile đó.
+  if (seedContext && _showCountTab) {
     return { ctx: seedContext, shared: true };
   }
   const shared = await _ensureSharedHeadless();

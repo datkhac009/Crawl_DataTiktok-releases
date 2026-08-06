@@ -292,14 +292,17 @@ Nếu bạn thấy nhiều sound bị bỏ, **xem đúng dòng log** để biế
 Nếu phần lớn là dòng đầu (`< 1000 video`) thì không phải lỗi — chỉ là **ngưỡng lọc đang chặt**.
 Muốn lấy cả sound ít video thì hạ **"Số video từ"** trong ⚙ Cài đặt crawl.
 
-### Muốn xem tận mắt trang sound thì bật cửa sổ tab đếm
+### Muốn xem tận mắt trang sound thì bật tab đếm
 
-⚙ Cài đặt crawl → **"Hiện cửa sổ tab đếm số video (chẩn đoán)"**. Bình thường app đếm trong
-cửa sổ **ẩn** nên bạn không thấy gì; bật cái này lên sẽ thấy đúng trang `/music/` mà app đang mở.
+⚙ Cài đặt crawl → **"Hiện tab đếm số video trong cùng cửa sổ profile (chẩn đoán)"**.
 
-⚠️ **Chỉ bật khi cần soi lỗi.** Mỗi lần đếm là một lần mở trang nên cửa sổ **nhấp nháy liên tục**
-và tốn thêm RAM/CPU. Đổi công tắc chỉ áp cho **lần mở tiếp theo** — đang chạy thì phải dừng hết
-profile rồi chạy lại.
+Bình thường app đếm trong cửa sổ **ẩn** nên bạn không thấy gì. Bật cái này lên, tab `/music/` sẽ
+hiện thành **một tab ngay trong cửa sổ của profile** — **không mở thêm browser thứ hai**, nên
+không tốn thêm RAM (đo thật: cả 2 tab cùng `windowId`, chỉ 1 Chromium).
+
+⚠️ **Chỉ bật khi cần soi lỗi.** Mỗi lần đếm là một lần mở trang nên tab đó **nhấp nháy liên tục**.
+Chỉ thấy được khi profile chạy ở chế độ **hiện** (bỏ tick "Chạy ẩn") — profile chạy ẩn thì cửa sổ
+chung cũng ẩn. Đổi công tắc chỉ áp cho **lần chạy profile tiếp theo**.
 
 ✅ **Link ở tab chờ vẫn được thử lại** những lần chạy sau. Lỗi *"Something went wrong"* thường chỉ
 là tạm thời — lần sau đọc được số video thì sound vào **tab chính với dữ liệu đầy đủ**. Lúc đó nó

@@ -35,7 +35,7 @@ Lưu trong thư mục dữ liệu người dùng của Electron, không nằm c�
 | `count_concurrency` | Số luồng đếm video đồng thời (**chung toàn app**, không theo profile) |
 | `update_repo` | Repo GitHub phát hành (để trống = dùng mặc định) |
 | `vpn_auto_cycle` | Tự tắt/bật lại HMA VPN khi feed cạn rồi tự chạy lại profile (**chung toàn app**). Mặc định `false` — [QĐ-32](DECISIONS.md) |
-| `show_count_tab` | **Chỉ để chẩn đoán**: hiện cửa sổ trình duyệt đếm số video để soi tận mắt trang `/music/`. Mặc định `false`. Đừng bật khi chạy dài — cửa sổ nhấp nháy liên tục và tốn thêm RAM/CPU |
+| `show_count_tab` | **Chỉ để chẩn đoán**: cho tab đếm `/music/` hiện thành **một tab trong CÙNG cửa sổ profile** (dùng chung context nên **không mở browser thứ hai**, không tốn thêm RAM). Mặc định `false`. Đừng bật khi chạy dài — tab đó nhấp nháy liên tục. Chỉ thấy khi profile chạy ở chế độ **hiện** — [QĐ-33](DECISIONS.md) |
 
 ## Các file trong thư mục profile
 

@@ -495,7 +495,9 @@ Nên phân biệt bằng log, đừng đoán từ việc mở trang thấy lỗi
 | `⏳ "..." → tab CHỜ kiểm tay` | **Không đọc được số** — ca thật cần kiểm | ✅ |
 
 Phần lớn là dòng đầu ⇒ **ngưỡng lọc đang chặt**, không phải lỗi. Muốn soi tận mắt thì bật
-⚙ → **"Hiện cửa sổ tab đếm số video (chẩn đoán)"** (mặc định tắt; đừng để bật khi chạy dài).
+⚙ → **"Hiện tab đếm số video trong cùng cửa sổ profile (chẩn đoán)"** — tab `/music/` hiện thành **một tab
+ngay trong cửa sổ profile**, không mở browser thứ hai. Mặc định tắt; đừng để bật khi chạy dài, và chỉ
+thấy được khi profile chạy ở chế độ **hiện**.
 
 **Cách xử — đừng để mất dữ liệu:** bật **tab CHỜ KIỂM TAY**.
 

@@ -326,6 +326,47 @@ console.log('\n=== Che do profile Chromium rieng ===\n');
   await browser.releaseProfileContext(dirHid);
   ok(ctxVis.closed && ctxHid.closed, 'da dong het context cua muc 11');
 
+  // ── 12. Cong tac "HIEN tab dem" -> dung CHUNG context profile, KHONG mo browser thu 2 ──
+  // Nguoi dung bao: "nen hien chung trong 1 browser thoi dung nen de 2 browser the kia rat ton
+  // RAM". Cach lam dau tien (mo _sharedHeadless o che do HIEN) sinh ra CUA SO THU HAI + ton them
+  // ca mot instance Chromium. Cach dung: dung context cua chinh profile -> tab dem thanh MOT TAB
+  // trong cung cua so. Fake nem loi o chromium.launch() nen "KHONG nem loi" chinh la bang chung
+  // khong he mo them trinh duyet nao.
+  console.log('\n12. Bat "HIEN tab dem": dung chung context profile, KHONG mo browser thu 2');
+  const dirShow = path.join(tmp, 'soi@hotmail.com(US)');
+  fs.mkdirSync(dirShow, { recursive: true });
+  fs.writeFileSync(path.join(dirShow, 'session.state.json'),
+    JSON.stringify({ cookies: SESSION_COOKIES, origins: [] }), 'utf8');
+
+  // Profile chay HIEN + che do thuong (persistent:false) — dung ca nguoi dung dang dung.
+  eq(browser.isShowCountTab(), false, 'mac dinh cong tac la TAT');
+  const ctxShow = await browser.acquireProfileContext(dirShow, { headless: false, persistent: true });
+
+  // TAT cong tac -> tab dem phai di trinh duyet an RIENG (fake nem loi o chromium.launch)
+  let offErr = '';
+  try { await browser.acquireCountContext(ctxShow, dirShow); } catch (e) { offErr = e.message; }
+  ok(offErr.includes('KHONG duoc goi chromium.launch'),
+    'TAT: tab dem di trinh duyet an rieng (nhu cu)');
+
+  // BAT cong tac -> phai dung CHUNG context, khong goi chromium.launch()
+  browser.setShowCountTab(true);
+  eq(browser.isShowCountTab(), true, 'da bat cong tac');
+  launches.length = 0;
+  let showRes = null, showErr = '';
+  try { showRes = await browser.acquireCountContext(ctxShow, dirShow); } catch (e) { showErr = e.message; }
+  eq(showErr, '', 'BAT: KHONG nem loi -> khong he mo trinh duyet thu hai');
+  eq(showRes && showRes.shared, true, 'BAT: tra ve handle shared (tab nam trong cua so profile)');
+  eq(showRes && showRes.ctx, ctxShow, 'BAT: dung DUNG context cua profile');
+  eq(launches.length, 0, 'BAT: khong mo them persistent context nao');
+
+  // Va releaseCountContext KHONG duoc dong context dung chung — dong la sap tab dang quet.
+  await browser.releaseCountContext(showRes);
+  eq(ctxShow.closed, false, 'khong dong oan context cua profile');
+
+  browser.setShowCountTab(false);   // tra lai mac dinh cho cac muc sau
+  eq(browser.isShowCountTab(), false, 'da tat lai cong tac');
+  await browser.releaseProfileContext(dirShow);
+
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
 
   console.log(`\n${fail === 0 ? '✅' : '❌'} ${pass} dat, ${fail} truot\n`);
