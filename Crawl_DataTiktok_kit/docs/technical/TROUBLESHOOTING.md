@@ -471,6 +471,32 @@ lưới video hiện đầy đủ.
 QĐ-06) và cả hai đều không ra số. Nó cũng **không phải sound chết**: sound chết thì API trả
 `statusCode 10201` và log ghi rõ *"sound đã bị xóa/không tồn tại"*.
 
+### ⚠️ TRƯỚC HẾT: đọc đúng dòng log, "Something went wrong" thường KHÔNG phải lý do
+
+Đo thật 2026-08-06 trên chính link người dùng báo (`/music/original-sound-7654496108030675725`):
+
+```
+API api/music/detail/ : HTTP 200 · statusCode=0 · videoCount=16
+DOM readVideoCount()  : "16"   (<h2 data-e2e="music-video-count">16 videos</h2>)
+Trang                 : BINH THUONG, khong co "Something went wrong"
+→ App doc duoc so = 16, roi BO vi 16 < minVideos (1000)
+```
+
+"Something went wrong" làm hỏng **lưới video**, còn **header (chứa số) vẫn dựng** — app đọc số từ
+API + header nên lỗi đó **vô hại**. Ảnh người dùng gửi chứng minh: hiện `19 videos` **cùng lúc**
+với dòng lỗi.
+
+Nên phân biệt bằng log, đừng đoán từ việc mở trang thấy lỗi:
+
+| Log | Nghĩa | Vào tab chờ? |
+|---|---|---|
+| `Bỏ "..." (N < 1000 video)` / `(N > 100000 video)` | Đọc số OK, **không đạt bộ lọc** trong ⚙ | ❌ |
+| `Bỏ "..." (sound đã bị xóa/không tồn tại)` | Sound chết thật (`statusCode 10201`) | ❌ |
+| `⏳ "..." → tab CHỜ kiểm tay` | **Không đọc được số** — ca thật cần kiểm | ✅ |
+
+Phần lớn là dòng đầu ⇒ **ngưỡng lọc đang chặt**, không phải lỗi. Muốn soi tận mắt thì bật
+⚙ → **"Hiện cửa sổ tab đếm số video (chẩn đoán)"** (mặc định tắt; đừng để bật khi chạy dài).
+
 **Cách xử — đừng để mất dữ liệu:** bật **tab CHỜ KIỂM TAY**.
 
 1. Tạo tab mới trên Sheet, ví dụ `Total_Link_Voice_Pending`, dòng 1 đặt 5 tiêu đề:

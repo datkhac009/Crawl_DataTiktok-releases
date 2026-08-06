@@ -1367,6 +1367,18 @@ dòng lệnh thì script là thừa: để lệnh trong tài liệu, người d�
 trước khi cho phép chạm vào VPN — không tin renderer đã dừng hết thật (nó có thể lỗi/bị reload
 giữa dòng). Cùng tinh thần phòng thủ 2 lớp với `withDeadline` ở `profile-start` (QĐ-19).
 
+**Bổ sung (2026-08-06) — CHỜ ~1 PHÚT cho IP mới "nguội" trước khi chạy lại profile.**
+Người dùng chốt: *"khi bật lại HMA thì set khoảng 1 phút, hết 1 phút thì profile mới được chạy —
+để tránh TikTok chặn profile vì spam đăng nhập liên tục"*. Đúng: sau khi đổi IP, 5 profile khởi
+động lại gần như cùng lúc trên **một IP vừa mới xuất hiện** — với TikTok đó là 5 phiên đăng nhập
+cũ bỗng chuyển sang IP mới trong vài giây, đúng khuôn "tài khoản bị chiếm" mà QĐ-15 gọi là
+nguyên nhân số 1 khiến nó hủy phiên. Mất 1 phút sản lượng rẻ hơn mất phiên cả nhóm.
+
+Việc chờ này **độc lập** với `startProfilesStaggered` (QĐ-21): cái đó giãn **từng profile** ra để
+không tranh CPU, cái này giãn **cả nhóm** ra khỏi thời điểm IP vừa đổi. Có đếm ngược hiện trên
+dòng trạng thái — vòng chờ im lặng từng bị báo là bug (QĐ-21). Bấm **Dừng** trong lúc chờ thì
+**huỷ luôn** việc tự chạy lại, nếu không app sẽ tự bật lại ngay sau khi người dùng vừa chủ động dừng.
+
 **Giới hạn nhịp đổi IP** (chặn ở backend, không phải chỉ renderer): tối thiểu **10 phút** giữa
 2 lần, tối đa **6 lần/ngày**. Lý do: đổi IP quá dày tự nó là tín hiệu bất thường với TikTok, và
 mỗi lượt đã tốn thời gian dừng + bật lại cả dàn profile — không có lý do gì để chạy liên tục.
@@ -1463,6 +1475,36 @@ tab chính, không ghi trùng (link đã có trên Sheet / vừa ghi / **cùng I
 để trống tên tab = tắt hoàn toàn (không gọi API nào), đổi tên tab thì quên danh sách tab cũ,
 và lỗi ghi thì **giữ lại lô rồi ghi lại được** (không mất dữ liệu).
 
+**Bổ sung (2026-08-06) — ĐO LẠI: "Something went wrong" KHÔNG ngăn app đọc số video.**
+
+Người dùng báo *"sao tôi không thấy link nào trên tab Total_Link_Voice_Pending"* và cho rằng các
+link bị bỏ là do trang lỗi. Đo thẳng chính link trong ảnh họ gửi
+(`/music/original-sound-7654496108030675725`) bằng đúng cách `countLoop` làm:
+
+```
+API api/music/detail/ : HTTP 200 · statusCode=0 · videoCount=16
+DOM readVideoCount()  : "16"   (thẻ <h2 data-e2e="music-video-count">16 videos</h2>)
+Trang                 : BÌNH THƯỜNG, không có "Something went wrong"
+→ App đọc được số = 16
+```
+
+Sound đó bị bỏ vì **chính bộ lọc của người dùng** (`minVideos=1000` → `16 < 1000`), **không phải**
+vì lỗi trang. Và chính ảnh họ gửi là bằng chứng: nó hiện `19 videos` **cùng lúc** với dòng
+"Something went wrong" — tức **header (chứa số) vẫn dựng bình thường**, chỉ **lưới video** bị lỗi.
+App đọc số từ API + header, **không** đọc từ lưới, nên lỗi đó **vô hại** với việc đếm.
+
+Hệ quả: tab chờ đúng ra sẽ **rất ít link** — chỉ khi API *lẫn* header đều lỗi thật. Đó là hành vi
+đúng, không phải tính năng hỏng. Nguyên nhân thật của "không thấy link nào" là
+**`pendingTab` chưa được điền** trong ☁ Google Sheet (đọc thẳng `config.json` mới ra:
+`pendingTab: undefined`) → tính năng đang TẮT.
+
+Người dùng chốt lại phạm vi sau khi biết số đo: **chỉ** link không đọc được số video vào tab chờ,
+**không** đưa link bị lọc vì ngoài ngưỡng vào (ngưỡng là bộ lọc có chủ đích của họ).
+
+⚠ **Bài học:** đừng tin việc "người dùng thấy trang lỗi" là đủ để kết luận nguyên nhân — mở đúng
+link đó bằng đúng đường code đi mới biết. Ở đây suy luận hợp lý ("trang lỗi ⇒ không đọc được số")
+lại sai, vì phần lỗi và phần app cần đọc là **hai phần khác nhau của trang**.
+
 ⚠ **Bài học lúc viết test (lặp lại đúng bẫy QĐ-09):** ban đầu tôi dùng ID sound giả ngắn (`222`,
 `111`). `_extractMusicId` đòi **tối thiểu 8 chữ số**, nên ID ngắn không trích được ID → `normalizeKey`
 lùi về so **nguyên văn URL** → 2 slug khác ngôn ngữ của cùng một sound bị coi là 2 sound khác
@@ -1540,4 +1582,6 @@ chữ số thật** — hiện đang dùng đúng 2 ID lấy từ ảnh người
 | Đóng gói việc tắt IPv6 thành script `.ps1` trong repo | Windows Defender chặn hẳn ("file contains a virus or potentially unwanted software") vì sửa binding mạng — chặn cả chạy LẪN xoá file. Để lệnh trong tài liệu cho copy-paste — xem QĐ-32 |
 | BỎ HẲN link khi không đọc được số video, coi mọi ca như nhau | Ca "Something went wrong" là sound VẪN CÒN (header còn tên + số video), TikTok chỉ lỗi lúc dựng trang — bỏ là mất dữ liệu thật, và người dùng thấy mất RẤT NHIỀU. Chỉ bỏ hẳn khi sound CHẾT thật (`statusCode 10201`); còn sống thì sang tab chờ — xem QĐ-33 |
 | Nạp link ở tab chờ vào bộ lọc quét (`_collected`) hoặc `_knownLinks` của tab chính | Sẽ KHÔNG BAO GIỜ thử lại được, mà "Something went wrong" thường chỉ là lỗi tạm thời — đọc được ở phiên sau thì sound vào tab CHÍNH với dữ liệu đầy đủ. Chỉ nạp vào `_pendingKnown` để chặn ghi trùng — xem QĐ-33 |
+| Kết luận nguyên nhân từ "người dùng thấy trang lỗi", không mở đúng link bằng đúng đường code đi | Trang `/music/` hiện "Something went wrong" ở phần LƯỚI VIDEO, nhưng app đọc số từ API + HEADER — hai phần khác nhau. Đo thật: link "lỗi" đọc ra `videoCount=16` hoàn hảo, bị bỏ vì `16 < minVideos 1000`. Suy luận "trang lỗi ⇒ không đọc được số" nghe hợp lý nhưng SAI — xem QĐ-33 |
+| Chạy lại cả nhóm profile NGAY sau khi đổi IP | 5 phiên đăng nhập cũ đồng loạt xuất hiện trên một IP vừa mới đổi trong vài giây = đúng khuôn "tài khoản bị chiếm" (QĐ-15, nguyên nhân số 1 khiến TikTok hủy phiên). Phải chờ ~1 phút cho IP nguội — xem QĐ-32 |
 | Dùng ID sound NGẮN làm dữ liệu test khi kiểm lọc trùng | `_extractMusicId` đòi tối thiểu 8 chữ số; ID ngắn không trích được ID nên `normalizeKey` lùi về so nguyên văn URL → 2 slug khác ngôn ngữ của CÙNG sound thành 2 key khác nhau → khẳng định lọc trùng VÔ NGHĨA. Phải dùng ID 19 chữ số thật (lặp lại đúng bẫy QĐ-09) — xem QĐ-33 |

@@ -275,6 +275,32 @@ báo lỗi rõ (*"Không có tab tên X"*) chứ không im lặng.
 
 **Để trống ô này = tắt** — link lỗi lại bị bỏ như trước.
 
+### ⚠️ "Something went wrong" thường KHÔNG phải lý do sound bị bỏ
+
+Đo thật (2026-08-06): trang `/music/` hiện "Something went wrong" ở phần **lưới video**, nhưng
+phần **đầu trang vẫn có số video** — và app đọc số từ đó, **không** đọc từ lưới. Nên lỗi đó
+thường **vô hại**, app vẫn đếm được bình thường.
+
+Nếu bạn thấy nhiều sound bị bỏ, **xem đúng dòng log** để biết lý do thật:
+
+| Log ghi | Nghĩa | Có vào tab chờ? |
+|---|---|---|
+| `Bỏ "..." (16 < 1000 video)` | Đọc số OK, nhưng **không đạt bộ lọc** của bạn trong ⚙ | ❌ Không — đây là bộ lọc bạn tự đặt |
+| `Bỏ "..." (sound đã bị xóa/không tồn tại)` | Sound chết thật | ❌ Không — không có gì để kiểm |
+| `⏳ "..." → tab CHỜ kiểm tay` | **Không đọc được số** — đây mới là ca cần kiểm | ✅ Có |
+
+Nếu phần lớn là dòng đầu (`< 1000 video`) thì không phải lỗi — chỉ là **ngưỡng lọc đang chặt**.
+Muốn lấy cả sound ít video thì hạ **"Số video từ"** trong ⚙ Cài đặt crawl.
+
+### Muốn xem tận mắt trang sound thì bật cửa sổ tab đếm
+
+⚙ Cài đặt crawl → **"Hiện cửa sổ tab đếm số video (chẩn đoán)"**. Bình thường app đếm trong
+cửa sổ **ẩn** nên bạn không thấy gì; bật cái này lên sẽ thấy đúng trang `/music/` mà app đang mở.
+
+⚠️ **Chỉ bật khi cần soi lỗi.** Mỗi lần đếm là một lần mở trang nên cửa sổ **nhấp nháy liên tục**
+và tốn thêm RAM/CPU. Đổi công tắc chỉ áp cho **lần mở tiếp theo** — đang chạy thì phải dừng hết
+profile rồi chạy lại.
+
 ✅ **Link ở tab chờ vẫn được thử lại** những lần chạy sau. Lỗi *"Something went wrong"* thường chỉ
 là tạm thời — lần sau đọc được số video thì sound vào **tab chính với dữ liệu đầy đủ**. Lúc đó nó
 sẽ **có ở cả hai tab** (tab chờ từ lần lỗi, tab chính từ lần đọc được) — bạn dọn dòng ở tab chờ
