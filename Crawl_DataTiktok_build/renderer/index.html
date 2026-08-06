@@ -199,14 +199,17 @@
         </div>
 
         <div class="section">
-          <div class="section-title">Tên tab CHỜ KIỂM TAY (tuỳ chọn)</div>
-          <input type="text" id="sheetsPendingTab" class="input" placeholder="Total_Link_Voice_Pending" />
+          <div class="section-title">Tên tab CHỜ KIỂM TAY</div>
+          <input type="text" id="sheetsPendingTab" class="input" placeholder="Total_Link_Voice_Pending (mặc định — để trống là dùng tên này)" />
           <div class="section-desc">
-            Link mà TikTok trả <b>"Something went wrong"</b> (sound vẫn còn nhưng app không đọc được số video)
-            sẽ được ghi sang tab này thay vì <b>bỏ mất</b>. Ghi 4 cột <b>A:D</b> như tab chính; cột
-            <b>Tình trạng (E)</b> để <b>TRỐNG</b> cho bạn tự điền.<br />
-            ⚠️ <b>Bạn phải tự tạo tab này trên Sheet trước</b> (app không tự tạo tab lạ). Để trống ô này = tắt,
-            link lỗi sẽ bị bỏ như cũ.<br />
+            Link mà TikTok trả <b>"Something went wrong"</b> / <b>không hiện được giao diện</b> (sound vẫn còn
+            nhưng app không đọc được số video) sẽ được ghi sang tab này thay vì <b>bỏ mất</b>. Ghi 4 cột
+            <b>A:D</b> — <b>Tên Sound | Link | Số Video | Profile</b>; cột <b>Tình trạng (E)</b> để
+            <b>TRỐNG</b> cho bạn tự điền.<br />
+            ✅ <b>Bật sẵn</b>: để trống ô này thì app dùng luôn tab <b>Total_Link_Voice_Pending</b> — không phải
+            điền tay trên từng máy nữa.<br />
+            ⚠️ <b>Bạn phải tự tạo tab đó trên Sheet trước</b> (app không tự tạo tab lạ). Chưa có tab thì app báo
+            rõ ngay lúc bắt đầu chạy và link lỗi vẫn bị bỏ.<br />
             Link ở tab chờ <b>vẫn được thử lại</b> ở phiên sau — đọc được số video thì nó vào tab chính với
             dữ liệu đầy đủ, và không bị ghi trùng sang tab chờ lần nữa.
           </div>

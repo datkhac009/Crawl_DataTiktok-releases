@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('api', {
   vpnCycle: (params) => ipcRenderer.invoke('vpn-cycle', params),
   // Máy có rò rỉ IPv6 khi VPN tắt hay không → quyết định dừng RIÊNG 1 profile hay dừng HẾT.
   vpnIpv6Risk: () => ipcRenderer.invoke('vpn-ipv6-risk'),
+  vpnTunnel: () => ipcRenderer.invoke('vpn-tunnel'),
 
   // Lịch sử thu thập theo ngày
   historyGet: (limit) => ipcRenderer.invoke('history-get', limit),

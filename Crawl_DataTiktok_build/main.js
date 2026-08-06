@@ -361,13 +361,21 @@ ipcMain.handle('profile-start', async (_e, params) => {
     // là tính năng phụ, không được làm hỏng cả lượt chạy. Chưa nạp được thì tệ nhất là ghi
     // trùng vài dòng trên tab chờ, không ảnh hưởng dữ liệu chính.
     if (sheets.isPendingEnabled()) {
+      const tab = sheets.pendingTabName();
       const p = await sheets.seedPendingLinks();
       if (p.ok) {
         send('crawl-status', { profileId: null, status: 'info',
-          msg: `Tab chờ "${sheets.pendingTabName()}": đã nạp ${p.count} link để lọc trùng.` });
+          msg: `Tab chờ "${tab}": đã nạp ${p.count} link để lọc trùng.` });
+      } else if (p.missingTab) {
+        // TAB KHÔNG TỒN TẠI → nói thẳng HẬU QUẢ (link sẽ bị BỎ) và chỉ đúng chỗ sửa. Không để
+        // người dùng phải suy ra từ câu lỗi của Google — cùng nguyên tắc QĐ-26.
+        send('crawl-status', { profileId: null, status: 'sheet-error',
+          msg: `Chưa có tab "${tab}" trên Sheet → link không đọc được số video sẽ bị BỎ. `
+            + `Tạo tab đó với 5 tiêu đề: Tên Sound | Link | Số Video | Profile | Tình trạng `
+            + `(hoặc điền tên tab khác vào ô "Tên tab CHỜ KIỂM TAY" trong ☁).` });
       } else if (p.msg) {
         send('crawl-status', { profileId: null, status: 'sheet-error',
-          msg: `Không đọc được tab chờ "${sheets.pendingTabName()}": ${p.msg}` });
+          msg: `Không đọc được tab chờ "${tab}": ${p.msg}` });
       }
     }
   }
@@ -500,6 +508,15 @@ ipcMain.handle('vpn-ipv6-risk', () => {
   catch (e) { return { risky: true, addresses: [], unknown: true, msg: e.message }; }
 });
 
+// Đường hầm HMA đang lên/xuống — renderer poll kênh này 2 giây/lần để biết NGƯỜI DÙNG tự tắt/bật
+// HMA bằng tay (app không điều khiển). CỐ Ý không dùng `vpn-status`: kênh đó spawn VpnNM.exe + chờ
+// 600ms nên poll dày là quá tốn; kênh này chỉ đọc `os.networkInterfaces()`, đồng bộ và gần như
+// miễn phí. Xem `tunnelState()` trong vpn-hma.cjs.
+ipcMain.handle('vpn-tunnel', () => {
+  try { return vpn.tunnelState(); }
+  catch (e) { return { up: false, address: null, iface: null, unknown: true, msg: e.message }; }
+});
+
 // Giới hạn nhịp đổi IP. Đổi quá dày cũng là tín hiệu bất thường với TikTok, và mỗi lượt đã
 // tốn thời gian dừng+bật lại cả dàn profile — không có lý do gì để nó chạy liên tục.
 const VPN_MIN_GAP_MS = 10 * 60 * 1000;
@@ -614,14 +631,18 @@ ipcMain.handle('sheets-set-config', async (_e, cfg) => {
       },
       (msg) => send('crawl-status', { profileId: null, status: 'sheet-error', msg: 'Google Sheet: ' + msg })
     );
-    // Bật tab chờ giữa phiên → nạp link đã có trên đó để không ghi trùng (QĐ-33).
+    // Đổi cấu hình Sheet giữa phiên → nạp lại link đã có trên tab chờ để không ghi trùng (QĐ-33).
     if (sheets.isPendingEnabled()) {
+      const tab = sheets.pendingTabName();
       const p = await sheets.seedPendingLinks();
       send('crawl-status', {
         profileId: null, status: p.ok ? 'info' : 'sheet-error',
         msg: p.ok
-          ? `Tab chờ "${sheets.pendingTabName()}": đã nạp ${p.count} link để lọc trùng.`
-          : `Không đọc được tab chờ "${sheets.pendingTabName()}": ${p.msg || 'lỗi không rõ'}`,
+          ? `Tab chờ "${tab}": đã nạp ${p.count} link để lọc trùng.`
+          : p.missingTab
+            ? `Chưa có tab "${tab}" trên Sheet → link không đọc được số video sẽ bị BỎ. `
+              + `Tạo tab đó với 5 tiêu đề: Tên Sound | Link | Số Video | Profile | Tình trạng.`
+            : `Không đọc được tab chờ "${tab}": ${p.msg || 'lỗi không rõ'}`,
       });
     }
 

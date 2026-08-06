@@ -150,6 +150,53 @@ function ipv6LeakRisk() {
   return { risky: found.length > 0, addresses: found };
 }
 
+// ── Đường hầm HMA đang lên hay xuống (2026-08-06) ──
+//
+// VÌ SAO CẦN: `status()` là cách đọc chính xác nhưng phải **spawn VpnNM.exe + chờ 600ms** mỗi lần
+// gọi — poll 5 giây/lần là 720 tiến trình/giờ, quá tốn cho VPS yếu. Hàm này chỉ đọc
+// `os.networkInterfaces()`: **đồng bộ, không spawn gì, không gọi mạng**, nên poll 2 giây/lần cũng
+// vô hại. Đo trên máy thật: HMA bật → có adapter `"HMA VPN WireGuard"` với IPv4 `10.252.32.18`.
+//
+// Trả về `address` (không chỉ `up`) là CỐ Ý: nếu HMA nối lại mà adapter **không** biến mất, IP
+// trong đường hầm vẫn đổi (`10.252.32.18` → `10.252.40.7`) nên vẫn nhận ra được lượt nối lại.
+// Nhờ vậy hàm đúng ở cả hai kiểu hành vi của adapter, không phải đoán.
+//
+// ⚠ Giới hạn thành thật: đây là suy luận từ adapter, KHÔNG phải hỏi HMA. Nếu HMA đổi tên adapter
+// thì hàm trả `up:false` mãi. Hậu quả khi sai là **không khoá nút** (mất tính năng), KHÔNG phải
+// khoá oan — nơi gọi chỉ hành động khi thấy TRẠNG THÁI ĐỔI, nên `up:false` bất biến thì không
+// sinh ra chuyển tiếp nào. Máy không cài HMA cũng rơi vào nhánh vô hại này.
+// Tên adapter của HMA. Máy chính đo được `"HMA VPN WireGuard"`.
+const _HMA_IFACE = /hma|privax/i;
+// DỰ PHÒNG cho máy ảo có bản HMA khác (bản cũ đi qua OpenVPN/TAP thì adapter không có chữ "HMA").
+// Chỉ dùng khi KHÔNG tìm thấy adapter tên HMA nào.
+const _TUNNEL_FALLBACK = /wireguard|tap-?windows|openvpn/i;
+// ⛔ TUYỆT ĐỐI loại Tailscale: đó là **đường vào máy ảo**. Coi nó là "VPN của TikTok" thì mỗi lần
+// Tailscale nhấp nháy là khoá nút Chạy oan trên cả 4 VPS — và đúng lúc mạng đang có vấn đề thì
+// người dùng lại càng cần bấm được.
+const _NEVER_TUNNEL = /tailscale|loopback/i;
+
+function tunnelState() {
+  let ifaces = {};
+  try { ifaces = os.networkInterfaces() || {}; } catch (_) { return { up: false, address: null, iface: null, unknown: true }; }
+  let fallback = null;
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    if (_NEVER_TUNNEL.test(name)) continue;
+    const isHma = _HMA_IFACE.test(name);
+    if (!isHma && !_TUNNEL_FALLBACK.test(name)) continue;
+    for (const a of addrs || []) {
+      const fam = a && (a.family === 'IPv4' || a.family === 4);
+      if (!fam || a.internal) continue;
+      // Adapter tên HMA thắng TUYỆT ĐỐI, không phụ thuộc thứ tự liệt kê của Windows — máy có cả
+      // HMA lẫn một adapter hầm khác thì kết quả phải tất định, không đổi giữa 2 lần đọc (đổi là
+      // sinh chuyển tiếp GIẢ → khoá nút oan).
+      if (isHma) return { up: true, address: a.address, iface: name };
+      if (!fallback) fallback = { up: true, address: a.address, iface: name, viaFallback: true };
+      break;
+    }
+  }
+  return fallback || { up: false, address: null, iface: null };
+}
+
 // ── Một phiên nói chuyện với host ──
 // Mỗi phiên spawn một tiến trình host riêng rồi đóng — giống hệt cách Chrome làm với extension.
 // Không giữ tiến trình sống lâu: host chết giữa chừng thì lần sau tự có tiến trình mới, không
@@ -396,4 +443,4 @@ async function cycle({ expectCountry = null, rotate = false } = {}) {
   }
 }
 
-module.exports = { isAvailable, hostPath, status, cycle, pickGateway, ipv6LeakRisk, ORIGIN, ACT };
+module.exports = { isAvailable, hostPath, status, cycle, pickGateway, ipv6LeakRisk, tunnelState, ORIGIN, ACT };

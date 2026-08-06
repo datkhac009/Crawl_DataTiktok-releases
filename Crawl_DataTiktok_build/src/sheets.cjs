@@ -483,15 +483,18 @@ function configure(cfg, onError) {
           enabled: true,
           spreadsheetId: extractSpreadsheetId(cfg.spreadsheetId),
           tab: cfg.tab || "Data",
-          // Tab CHỜ KIỂM TAY (QĐ-33) — để trống = tắt tính năng, link lỗi lại bị bỏ như trước.
+          // Tab CHỜ KIỂM TAY (QĐ-33). Để trống KHÔNG còn nghĩa là tắt — dùng
+          // PENDING_TAB_DEFAULT, xem lý do ở chỗ khai hằng số đó.
           pendingTab: (cfg.pendingTab || "").trim(),
           sa: cfg.sa,
         }
       : null;
   // Đổi tab chờ → quên danh sách link chờ đã nạp, nếu không thì lọc trùng theo tab CŨ.
+  // Cũng xoá cờ "tab không tồn tại": người dùng vừa sửa tên tab thì phải cho thử lại.
   if ((next && next.pendingTab) !== (_cfg && _cfg.pendingTab)) {
     _pendingKnown.clear();
     _pendingSeeded = false;
+    _pendingTabMissing = false;
   }
   // Đổi sang Sheet/tab KHÁC thì mốc dòng cũ vô nghĩa → phải quên đi để lần sau đọc lại toàn bộ.
   // ⚠ CHỈ khi thực sự đổi: configure() được gọi lại ở MỖI lần bấm Chạy, reset vô điều kiện là
@@ -706,11 +709,32 @@ let _pendingTimer = null;
 let _pendingChain = Promise.resolve();
 let _pendingWritten = 0; // số dòng đã ghi sang tab chờ trong phiên (hiện ra UI)
 
+// Tên tab chờ MẶC ĐỊNH khi người dùng chưa điền ô nào (2026-08-06).
+//
+// VÌ SAO CÓ MẶC ĐỊNH — đây là sửa GỐC RỄ một lỗi vận hành lặp lại 3 lần:
+// Ban đầu ô trống = tắt hoàn toàn. Nhưng cấu hình nằm ở `%APPDATA%` **riêng từng máy, không đồng
+// bộ qua Sheet**, mà người dùng chạy 5 máy (1 chính + 4 VPS). Kết quả thật: họ hỏi 3 lần "sao
+// không thấy link nào ở tab Total_Link_Voice_Pending" — mỗi lần đều vì ô trống ở đúng cái máy
+// đang chạy. Tính năng cứu dữ liệu mà mặc định TẮT và phải bật tay trên 5 máy thì thực tế là
+// KHÔNG TỒN TẠI. Thiệt hại đo được: một sound 262K video bị bỏ ở VPS (2026-08-06).
+//
+// Đây KHÔNG phải đoán ý: người dùng đã nêu đúng tên tab này 3 lần trong lúc chốt yêu cầu, và nó
+// cũng chính là chuỗi gợi ý sẵn trong ô nhập.
+//
+// CÁCH TẮT: ô trống không còn nghĩa là tắt. Muốn tắt thì đổi tên/xoá tab trên Sheet — app tự phát
+// hiện tab không tồn tại rồi TỰ NGƯNG cho cả phiên (xem `_pendingTabMissing`), có log rõ ràng.
+const PENDING_TAB_DEFAULT = "Total_Link_Voice_Pending";
+
+// Tab chờ không tồn tại trên Sheet → ngưng cho CẢ PHIÊN, không thử ghi lại mỗi lô (sẽ thành
+// hàng chục lần gọi API thất bại). Đặt lại khi đổi cấu hình.
+let _pendingTabMissing = false;
+
 function pendingTabName() {
-  return (_cfg && _cfg.pendingTab) || "";
+  const name = ((_cfg && _cfg.pendingTab) || "").trim();
+  return name || PENDING_TAB_DEFAULT;
 }
 function isPendingEnabled() {
-  return !!(_cfg && _cfg.pendingTab);
+  return !!(_cfg && _cfg.spreadsheetId) && !_pendingTabMissing;
 }
 function pendingCount() {
   return _pendingWritten;
@@ -723,20 +747,23 @@ function pendingCount() {
 // Ghi trùng vẫn không xảy ra vì `_pendingKnown` chặn ở cửa ghi.
 async function seedPendingLinks() {
   if (!isPendingEnabled()) return { ok: false, skipped: "off" };
+  const tab = pendingTabName();
   try {
-    const { links } = await readLinkColumn(
-      _cfg.spreadsheetId,
-      _cfg.pendingTab,
-      _cfg.sa,
-      { startRow: 1 },
-    );
+    const { links } = await readLinkColumn(_cfg.spreadsheetId, tab, _cfg.sa, { startRow: 1 });
     for (const u of links) {
       const k = normalizeKey(u);
       if (k) _pendingKnown.add(k);
     }
     _pendingSeeded = true;
-    return { ok: true, count: _pendingKnown.size };
+    return { ok: true, count: _pendingKnown.size, tab };
   } catch (e) {
+    // TAB KHÔNG TỒN TẠI → ngưng tính năng cho cả phiên. Phát hiện NGAY ở đầu phiên (rẻ, 1 lần
+    // gọi API) thay vì để mỗi lô ghi tự thất bại rồi ngập log. `readLinkColumn` đã dịch lỗi khó
+    // hiểu của Google thành câu chỉ đúng chỗ sửa (QĐ-26), nên chỉ cần nhận đúng câu đó.
+    if (/Không có tab tên/i.test(e.message || "")) {
+      _pendingTabMissing = true;
+      return { ok: false, missingTab: tab, msg: e.message };
+    }
     return { ok: false, msg: e.message };
   }
 }
@@ -786,20 +813,36 @@ function flushPending() {
   const rows = _pendingBuffer;
   _pendingBuffer = [];
   const cfg = _cfg;
+  const tab = pendingTabName();
   _pendingChain = _pendingChain
     .then(async () => {
-      await appendRows(cfg.spreadsheetId, cfg.pendingTab, rows, cfg.sa);
+      await appendRows(cfg.spreadsheetId, tab, rows, cfg.sa);
       for (const r of rows) {
         const k = normalizeKey(r && r[1]);
         if (k) _pendingKnown.add(k);
       }
       _pendingWritten += rows.length;
       console.log(
-        `[pending] Đã ghi ${rows.length} link lỗi sang tab "${cfg.pendingTab}" (tổng phiên: ${_pendingWritten}).`,
+        `[pending] Đã ghi ${rows.length} link lỗi sang tab "${tab}" (tổng phiên: ${_pendingWritten}).`,
       );
     })
     .catch((e) => {
-      // KHÔNG bỏ rơi lô lỗi — trả về đầu buffer để thử lại (cùng nguyên tắc với flush() chính).
+      // TAB KHÔNG TỒN TẠI → ngưng cả phiên, KHÔNG hẹn thử lại: thử lại vô ích và mỗi 5 giây một
+      // lần gọi API thất bại sẽ ngập log. Báo đúng một lần rồi thôi.
+      if (/Không có tab tên/i.test(e.message || "")) {
+        _pendingTabMissing = true;
+        _pendingBuffer = [];
+        console.error(`[pending] NGƯNG tab chờ cả phiên: ${e.message}`);
+        if (_onError) {
+          _onError(
+            `Tab chờ "${tab}" không tồn tại trên Sheet — các link không đọc được số video sẽ bị BỎ.` +
+              ` Tạo tab đó (hoặc điền tên tab khác vào ô "Tên tab CHỜ KIỂM TAY" trong ☁) rồi chạy lại.`,
+          );
+        }
+        return;
+      }
+      // Lỗi khác (mạng, quota…) → KHÔNG bỏ rơi lô: trả về đầu buffer để thử lại (cùng nguyên tắc
+      // với flush() chính).
       console.error("[pending] Ghi tab chờ lỗi:", e.message);
       _pendingBuffer = rows.concat(_pendingBuffer);
       if (!_pendingTimer) {
@@ -809,7 +852,7 @@ function flushPending() {
         }, PENDING_FLUSH_MS);
         if (_pendingTimer.unref) _pendingTimer.unref();
       }
-      if (_onError) _onError(`Tab chờ "${cfg.pendingTab}": ${e.message}`);
+      if (_onError) _onError(`Tab chờ "${tab}": ${e.message}`);
     });
   return _pendingChain;
 }

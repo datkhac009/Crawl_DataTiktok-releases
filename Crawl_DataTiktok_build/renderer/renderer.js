@@ -20,6 +20,18 @@ let crawlSettingsTargetIds = [];     // id(s) đang chỉnh trong modal cài đ�
 // runSelected phía dưới: updateRunSelectedBtnState() đọc biến này và được gọi rất sớm
 // trong lúc dựng bảng → nếu `let` nằm dưới sẽ vướng vùng chết (TDZ) → ReferenceError.
 let _runningSelectedBatch = false;
+// Mốc hết hạn "chờ IP mới nguội" sau khi đổi VPN (0 = không chờ). Khai báo ở đây vì cùng lý do
+// TDZ như trên: applyVpnCooldown() được gọi từ renderProfiles()/updateRunSelectedBtnState().
+let _vpnCooldownUntil = 0;
+// Khóa nút Chạy trong SUỐT giai đoạn nguy hiểm của việc đổi IP: từ lúc phát hiện feed cạn, qua
+// lúc VPN bị tắt, tới hết đếm ngược. Tách riêng khỏi `_vpnCycling` vì `_vpnCycling` còn kéo dài
+// qua cả lúc app bật lại từng profile — lúc đó VPN đã ổn định nên PHẢI mở nút lại (người dùng
+// chốt: *"hết 59s thì hiện Chạy để cho chạy lại"*).
+let _vpnRunLock = false;
+// Vì sao đang khoá — chỉ để chọn nhãn hiện trên nút. 'cycling' = app đang tắt/bật lại VPN;
+// 'vpn-off' = VPN đang TẮT (người dùng tự tắt / VPN tụt). Hai ca này người dùng phải xử khác nhau
+// nên nhãn phải khác nhau, gộp thành một chữ là bắt họ đoán.
+let _vpnLockReason = 'cycling';
 
 const DEFAULT_SETTINGS = {
   mode: 'foryou', keyword: '', headless: false, originalOnly: false,
@@ -175,9 +187,72 @@ function setRowRunning(id, running) {
 // Khóa nút "▶ Chạy ô đã chọn" khi bấm cũng không có tác dụng gì — tránh nhấn nhầm khi phần
 // mềm đang chạy. Chỉ khóa khi CHƯA tick gì HOẶC mọi profile đã tick đều đang chạy rồi; tick
 // thêm 1 profile chưa chạy là tự mở khóa ngay (vẫn thêm được vào giữa phiên như bình thường).
+// ── KHÓA NÚT CHẠY TRONG LÚC CHỜ IP MỚI NGUỘI (người dùng chốt 2026-08-06) ──
+// Bản đầu của việc chờ 1 phút chỉ GHI ĐẾM NGƯỢC vào dòng trạng thái. Người dùng thử ở máy mình
+// và phát hiện đúng lỗ hổng: *"khi bật lại HMA thì tôi ấn Chạy nó vẫn chạy được luôn"* — tức
+// việc chờ chẳng ngăn được gì, đúng cái nó sinh ra để ngăn. Nên phải khóa NÚT thật.
+//
+// MỌI chỗ ghi chữ lên nút Chạy đều phải gọi applyVpnCooldown() sau đó: renderProfiles() vẽ lại
+// cả bảng và setRowRunning() ghi lại nhãn nút — chúng không biết về cooldown thì chỉ cần một
+// lần vẽ lại giữa lúc chờ là nút mở khóa trở lại (bài học QĐ-10: 2 chỗ cùng ghi một thứ thì
+// chúng SẼ lệch nhau). Đó cũng là lý do hàm này tự truy vấn lại nút chứ không giữ tham chiếu.
+// Số giây còn lại của pha CHỜ IP NGUỘI (0 = không ở pha đó).
+function vpnCooldownLeft() {
+  if (!_vpnCooldownUntil) return 0;
+  const left = Math.ceil((_vpnCooldownUntil - Date.now()) / 1000);
+  if (left <= 0) { _vpnCooldownUntil = 0; return 0; }
+  return left;
+}
+
+// Có được phép bật profile lúc này không. KHÓA CẢ HAI PHA của việc đổi IP, không chỉ pha chờ:
+//   • pha ĐANG ĐỔI: HMA vừa bị tắt → bật profile lúc này là chạy bằng IP THẬT, nguy hiểm hơn
+//     hẳn pha chờ. Chỉ khóa pha chờ thì vẫn hở đúng khoảng nguy hiểm nhất.
+//   • pha CHỜ NGUỘI: tránh 5 phiên cũ đồng loạt xuất hiện trên IP vừa đổi.
+function vpnRunLocked() { return vpnCooldownLeft() > 0 || _vpnRunLock; }
+
+function applyVpnCooldown() {
+  const left = vpnCooldownLeft();
+  const locked = vpnRunLocked();
+  // Khoá mà KHÔNG có đếm ngược = chưa biết bao lâu → không có số để đếm, chỉ báo trạng thái.
+  const vpnOff = _vpnLockReason === 'vpn-off';
+  const label = left ? `⏳ ${left}s` : (vpnOff ? '⛔ VPN tắt' : '⏳ đổi IP');
+  const tip = !locked ? ''
+    : left
+      ? `Vừa đổi IP — chờ ${left}s cho IP mới ổn định rồi mới được chạy lại`
+        + ' (tránh TikTok coi là đăng nhập dồn dập trên IP vừa đổi).'
+      : vpnOff
+        ? 'HMA VPN đang TẮT — bật profile lúc này sẽ chạy bằng IP THẬT. Bật lại HMA rồi chờ hết đếm ngược.'
+        : 'Đang tắt/bật lại VPN — bật profile lúc này sẽ chạy bằng IP THẬT.';
+  // Nút từng hàng. CHỈ khóa nút đang ở trạng thái "▶ Chạy" — nút "■ Dừng" phải luôn bấm được,
+  // kể cả trong lúc chờ (người dùng còn phải dừng được profile khác nếu muốn).
+  document.querySelectorAll('#profileTableBody button[data-act="run"]').forEach(btn => {
+    if (runningSet.has(btn.dataset.id)) return;
+    btn.disabled = locked;
+    btn.textContent = locked ? label : '▶ Chạy';
+    btn.title = tip;
+  });
+  const g = $('runSelectedBtn');
+  if (g) {
+    if (locked) { g.disabled = true; g.textContent = label; g.title = tip; }
+    else if (g.textContent.startsWith('⏳')) { g.textContent = '▶ Chạy ô đã chọn'; g.title = ''; }
+  }
+  return left;
+}
+
+// Câu giải thích khi người dùng vẫn bấm được (bàn phím, hoặc lọt qua giữa 2 lần vẽ lại).
+function vpnLockedMsg() {
+  const left = vpnCooldownLeft();
+  if (left) return `Vừa đổi IP — chờ ${left}s nữa mới được chạy lại.`;
+  return _vpnLockReason === 'vpn-off'
+    ? 'HMA VPN đang TẮT — chạy lúc này sẽ dùng IP THẬT. Bật lại HMA rồi chờ hết đếm ngược.'
+    : 'Đang tắt/bật lại VPN — chạy lúc này sẽ dùng IP THẬT. App sẽ tự chạy lại khi xong.';
+}
+
 function updateRunSelectedBtnState() {
   const btn = $('runSelectedBtn');
   if (!btn) return;
+  // Đang đổi IP / chờ IP nguội → khóa hết, applyVpnCooldown() lo nhãn + tooltip.
+  if (vpnRunLocked()) { applyVpnCooldown(); return; }
   // Đang bật LẦN LƯỢT nhiều profile → khóa nút, không cho bấm chồng (xem runSelected).
   if (_runningSelectedBatch) {
     btn.disabled = true;
@@ -371,6 +446,15 @@ async function startProfileById(id) {
 
 async function stopProfileById(id) {
   if (!runningSet.has(id)) return;
+  // Người dùng chủ động dừng trong lúc app đang đổi IP → HUỶ việc tự chạy lại, nếu không app sẽ
+  // tự bật lại đúng profile họ vừa tắt. Đặt ở ĐÂY (không ở stopSelected) để cả nút "■ Dừng" trên
+  // từng hàng và nút "Dừng đã chọn" đều được che — trước đây chỉ stopSelected làm việc này nên
+  // dừng bằng nút hàng vẫn bị bật lại. handleFeedStarved gọi api.profileStop TRỰC TIẾP nên
+  // không tự huỷ lượt của chính nó.
+  if (_vpnCycling) {
+    _vpnCancelRestart = true;
+    toast('Đã huỷ việc tự chạy lại sau đổi IP.', 'ok');
+  }
   appendLog(id, 'Đang dừng...');
   // Đặt badge TRƯỚC await: backend phát 'stopped' gần như tức thì, nếu đặt sau await thì
   // dòng này GHI ĐÈ mất thông báo "Đã dừng." vừa nhận được → badge kẹt ở "Đang dừng..."
@@ -389,7 +473,16 @@ async function stopProfileById(id) {
 
 async function toggleProfile(id) {
   if (runningSet.has(id)) await stopProfileById(id);
-  else await startProfileById(id);
+  else {
+    // Chặn ở ĐÂY nữa, không chỉ dựa vào `disabled` của nút: một lần vẽ lại bảng đúng vào lúc
+    // này, hay bàn phím/khả năng truy cập, đều có thể lọt qua nút đã khóa. Đây là cửa duy nhất
+    // để người dùng bật 1 profile từ bảng nên khóa ở đây là kín.
+    if (vpnRunLocked()) {
+      applyVpnCooldown();
+      return toast(vpnLockedMsg(), 'err');
+    }
+    await startProfileById(id);
+  }
 }
 
 // ── Hành động hàng loạt ──
@@ -448,6 +541,11 @@ async function startProfilesStaggered(ids, { btn = null } = {}) {
 
 async function runSelected() {
   if (_runningSelectedBatch) return;   // đang bật lần lượt — chặn bấm chồng
+  // Đang đổi IP / chờ IP nguội → không cho bật (xem applyVpnCooldown).
+  if (vpnRunLocked()) {
+    applyVpnCooldown();
+    return toast(vpnLockedMsg(), 'err');
+  }
   const ids = getCheckedIds();
   if (!ids.length) return toast('Tick chọn ít nhất 1 profile.', 'err');
   // Cảnh báo chạy dài: nhiều profile ở chế độ HIỆN render video liên tục → ngốn RAM/CPU
@@ -508,16 +606,27 @@ function scanStopRequested() { return _vpnCancelRestart; }
 // Đếm ngược có hiển thị, huỷ được. Ghi vào dòng trạng thái mỗi giây để người dùng thấy rõ app
 // đang CHỜ CÓ CHỦ ĐÍCH, không phải treo (đúng bài học QĐ-21: vòng chờ im lặng bị báo là bug).
 async function waitBeforeRestart(ids) {
-  const until = Date.now() + VPN_COOLDOWN_MS;
-  while (Date.now() < until) {
-    if (_vpnCancelRestart) return;
-    const left = Math.ceil((until - Date.now()) / 1000);
-    const m = `⏳ Chờ ${left}s cho IP mới ổn định rồi mới chạy lại ${ids.length} profile`
-      + ' (tránh TikTok coi là đăng nhập dồn dập trên IP vừa đổi)...';
-    $('crawlStatusMsg').textContent = m;
-    // Chỉ ghi log mỗi 15s cho khỏi ngập log 📄.
-    if (left % 15 === 0) for (const id of ids) appendLog(id, m);
-    await new Promise(r => setTimeout(r, 1000));
+  // Mốc dùng CHUNG cho dòng trạng thái và cho nút Chạy — một nguồn sự thật, không thể lệch nhau
+  // (nút hiện 0s mà vẫn khóa, hoặc hết chờ mà nút vẫn khóa).
+  _vpnCooldownUntil = Date.now() + VPN_COOLDOWN_MS;
+  try {
+    for (;;) {
+      if (_vpnCancelRestart) return;
+      const left = applyVpnCooldown();   // vừa cập nhật nút, vừa trả số giây còn lại
+      if (!left) return;
+      const m = `⏳ Chờ ${left}s cho IP mới ổn định rồi mới chạy lại ${ids.length} profile`
+        + ' (tránh TikTok coi là đăng nhập dồn dập trên IP vừa đổi)...';
+      $('crawlStatusMsg').textContent = m;
+      // Chỉ ghi log mỗi 15s cho khỏi ngập log 📄.
+      if (left % 15 === 0) for (const id of ids) appendLog(id, m);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  } finally {
+    // Mở khóa nút kể cả khi bị huỷ giữa chừng hoặc ném lỗi — bỏ sót chỗ này là nút Chạy
+    // KẸT KHÓA VĨNH VIỄN cho tới lần vẽ lại bảng kế tiếp.
+    _vpnCooldownUntil = 0;
+    applyVpnCooldown();
+    updateRunSelectedBtnState();   // trả nút tổng về đúng trạng thái theo ô đang tick
   }
 }
 
@@ -525,6 +634,9 @@ async function handleFeedStarved(profileId) {
   if (!_vpnAutoCycle || _vpnCycling) return;
   _vpnCycling = true;
   _vpnCancelRestart = false;   // bắt đầu lượt mới → xoá cờ huỷ của lượt trước
+  _vpnRunLock = true;          // khóa nút Chạy NGAY — từ đây VPN sắp bị tắt
+  _vpnLockReason = 'cycling';
+  applyVpnCooldown();
   // Nhớ ĐÚNG nhóm đang chạy để bật lại y như cũ (không bật thừa profile người dùng đã tắt tay).
   const wasAll = [...runningSet];
 
@@ -610,6 +722,12 @@ async function handleFeedStarved(profileId) {
     if (!scanStopRequested()) await waitBeforeRestart(was);
     if (scanStopRequested()) { say('Đã hủy chạy lại (người dùng bấm dừng trong lúc chờ).'); return; }
 
+    // HẾT GIỜ CHỜ → MỞ KHÓA nút Chạy ngay, trước khi app tự bật lại. VPN đã ổn định nên bấm tay
+    // lúc này là an toàn, và người dùng chốt đúng hành vi này.
+    _vpnRunLock = false;
+    applyVpnCooldown();
+    updateRunSelectedBtnState();
+
     // Bật lại đúng nhóm vừa dừng, lần lượt. Mỗi profile khi khởi động sẽ TỰ chờ ip-guard xác
     // nhận IP đúng nhãn quốc gia trước khi mở trình duyệt (waitForCorrectCountry) — nên nếu VPN
     // chưa kịp ổn định thì nó đứng chờ chứ không chạy sai vùng.
@@ -617,19 +735,109 @@ async function handleFeedStarved(profileId) {
   } catch (e) {
     say('⚠ Lỗi trong lúc đổi IP: ' + e.message);
   } finally {
+    // MỞ KHÓA nút Chạy ở đây là bắt buộc, kể cả trên mọi đường `return` sớm phía trên (bị giới
+    // hạn nhịp, đổi IP thất bại, hủy giữa chừng). Thiếu 2 dòng dưới thì nút kẹt "⏳ đổi IP" mãi
+    // và người dùng không còn cách nào bật profile bằng tay.
     _vpnCycling = false;
+    _vpnRunLock = false;
+    _vpnCooldownUntil = 0;
+    applyVpnCooldown();
+    updateRunSelectedBtnState();
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// CANH HMA DO NGƯỜI DÙNG TỰ TẮT/BẬT (2026-08-06)
+// ══════════════════════════════════════════════════════════════════════════
+// LỖI ĐÃ GẶP: đếm ngược + khoá nút chỉ chạy trong `handleFeedStarved()`, tức CHỈ khi APP tự đổi
+// IP. Người dùng tự tay tắt/bật HMA thì app không hề biết → nút "▶ Chạy" vẫn sáng, bấm là vào
+// ngay trên IP vừa đổi. Họ gửi ảnh: HMA vừa `ON 00:00:02`, 5 profile đã dừng, mà cả 5 nút Chạy
+// lẫn nút "Chạy ô đã chọn" đều sáng bình thường.
+//
+// Lý do phải CANH thay vì chờ HMA thông báo: HMA không có kênh nào bắn sự kiện ra ngoài cho
+// app khác. Nhưng trạng thái đường hầm đọc được MIỄN PHÍ từ `os.networkInterfaces()` — xem
+// `tunnelState()` trong vpn-hma.cjs (đo thật: bật → adapter "HMA VPN WireGuard" có IPv4
+// 10.252.32.18). So sánh cả ĐỊA CHỈ nên nối lại mà adapter không mất vẫn nhận ra được.
+const VPN_WATCH_EVERY_TICK = 2;   // 1 tick = 1 giây → poll đường hầm 2 giây/lần
+let _tunnelPrev = undefined;      // undefined = CHƯA có mốc so sánh (xem dưới)
+let _vpnWasLocked = false;
+
+async function watchVpnTunnel() {
+  let t = null;
+  try { t = await api.vpnTunnel(); } catch (_) { return; }
+  if (!t) return;
+  const now = t.up ? (t.address || 'up') : 'down';
+
+  // LẦN ĐẦU chỉ LẤY MỐC, tuyệt đối không hành động. Nếu không, máy mở app lúc HMA đang tắt (hoặc
+  // máy không cài HMA) sẽ bị coi là "VPN vừa sập" → khoá nút Chạy ngay khi mở app, không bấm được
+  // gì. Chỉ hành động khi thấy trạng thái ĐỔI.
+  if (_tunnelPrev === undefined) { _tunnelPrev = now; return; }
+  if (now === _tunnelPrev) return;
+  const prev = _tunnelPrev;
+  _tunnelPrev = now;
+
+  // App đang tự đổi IP → nó tự lo khoá/mở. Đứng ngoài để việc khoá chỉ có MỘT chủ.
+  if (_vpnCycling) return;
+
+  if (now === 'down') {
+    // VPN vừa SẬP (người dùng tắt, hoặc tụt). Khoá ngay: bật profile lúc này là chạy IP thật.
+    _vpnRunLock = true;
+    _vpnLockReason = 'vpn-off';
+    _vpnCooldownUntil = 0;
+    applyVpnCooldown();
+    const running = runningSet.size;
+    const m = '⛔ HMA VPN vừa TẮT — đã khoá nút Chạy (bật profile lúc này sẽ chạy bằng IP THẬT).'
+      + (running ? ` ⚠ Còn ${running} profile ĐANG CHẠY: nên dừng ngay, chúng đang dùng IP thật.` : '');
+    $('crawlStatusMsg').textContent = m;
+    for (const id of runningSet) appendLog(id, m);
+    toast(running ? `HMA đã tắt — còn ${running} profile đang chạy bằng IP thật!` : 'HMA đã tắt — đã khoá nút Chạy.', 'err');
+    return;
+  }
+
+  // VPN vừa LÊN (bật lại, hoặc nối lại nên IP trong hầm đổi) → đếm ngược cho IP nguội, giống
+  // hệt đường app tự đổi IP. KHÔNG tự chạy lại profile: người dùng tự tắt/bật thì họ đang chủ
+  // động điều khiển, tự bấm ▶ khi hết giờ.
+  _vpnRunLock = false;
+  _vpnLockReason = 'cycling';
+  _vpnCooldownUntil = Date.now() + VPN_COOLDOWN_MS;
+  applyVpnCooldown();
+  const m = `✅ HMA VPN vừa BẬT LẠI (${t.address || 'đường hầm đã lên'}) — chờ`
+    + ` ${Math.round(VPN_COOLDOWN_MS / 1000)}s cho IP mới ổn định rồi mới cho chạy profile`
+    + ' (tránh TikTok coi là đăng nhập dồn dập trên IP vừa đổi).';
+  $('crawlStatusMsg').textContent = m;
+  for (const id of Object.keys(profileLogs)) appendLog(id, m);
+  if (prev === 'down') toast('HMA đã bật lại — chờ 60s rồi mới chạy được.', 'ok');
+}
+
+// MỘT bộ đếm duy nhất lo cả 2 việc: vẽ đếm ngược trên nút (mỗi giây) và canh đường hầm (2 giây).
+// Gộp lại để không có 2 timer cùng ghi vào nút — đúng bài học QĐ-10.
+let _vpnTick = 0;
+let _vpnWatcherOn = false;
+function startVpnWatcher() {
+  // Chặn chạy 2 bộ đếm: init() có thể chạy lại (bản dev bấm 🔄 Reload nạp lại giao diện). Hai
+  // interval cùng poll + cùng ghi nút là đúng bẫy QĐ-10, và tick đôi làm đếm ngược nhảy 2 giây.
+  if (_vpnWatcherOn) return;
+  _vpnWatcherOn = true;
+  setInterval(async () => {
+    _vpnTick++;
+    const locked = vpnRunLocked();
+    if (locked) applyVpnCooldown();
+    else if (_vpnWasLocked) {
+      // Vừa hết giờ → mở khoá đúng MỘT lần. Không gọi vô điều kiện mỗi giây để khỏi ghi đè nhãn
+      // nút của các luồng khác (vd "▶ Đang bật 2/5..." của runSelected).
+      applyVpnCooldown();
+      updateRunSelectedBtnState();
+    }
+    _vpnWasLocked = locked;
+    if (_vpnTick % VPN_WATCH_EVERY_TICK === 0) await watchVpnTunnel();
+  }, 1000);
 }
 
 async function stopSelected() {
   const ids = getCheckedIds();
   if (!ids.length) return toast('Tick chọn profile cần dừng.', 'err');
-  // Bấm Dừng trong lúc đang chờ IP nguội → HUỶ luôn việc tự chạy lại. Nếu không, app sẽ tự bật
-  // lại profile ngay sau khi hết giờ chờ, đúng lúc người dùng vừa chủ động dừng nó.
-  if (_vpnCycling) {
-    _vpnCancelRestart = true;
-    toast('Đã huỷ việc tự chạy lại sau đổi IP.', 'ok');
-  }
+  // Việc HUỶ tự-chạy-lại-sau-đổi-IP nằm trong stopProfileById (một chỗ duy nhất, che cả nút
+  // "■ Dừng" trên từng hàng).
   for (const id of ids) if (runningSet.has(id)) await stopProfileById(id);
 }
 
@@ -1399,6 +1607,14 @@ async function init() {
   } catch {}
   await loadProfiles();
   renderProfileTable();
+
+  // Canh HMA do NGƯỜI DÙNG tự tắt/bật. Chạy KHÔNG phụ thuộc công tắc "Tự đổi IP": công tắc đó chỉ
+  // quyết định app có TỰ đổi IP hay không, còn việc này là phản ánh đúng trạng thái VPN lên nút
+  // bấm — người dùng chốt: *"kể cả app tự động hay là tôi thì đều phải là khi bật lại HMA thì các
+  // nút chạy sẽ bị disable trong vòng 59 giây"*.
+  // Máy không cài HMA thì `tunnelState()` luôn trả `up:false` → không có chuyển tiếp nào → không
+  // khoá gì (xem watchVpnTunnel).
+  startVpnWatcher();
 
   // ĐỒNG BỘ TRẠNG THÁI CHẠY VỚI BACKEND (2026-07-28): backend là nguồn sự thật duy nhất
   // về profile nào đang crawl. Trước đây renderer chỉ dựa vào sự kiện nhận được, nên hễ

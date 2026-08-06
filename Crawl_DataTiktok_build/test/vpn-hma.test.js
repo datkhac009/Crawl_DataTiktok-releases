@@ -278,6 +278,68 @@ console.log('\n=== Dieu khien HMA VPN ===\n');
   fakeNet({ Ethernet: [{ family: 6, address: '2001:db8::1', internal: false }] });
   eq(vpn.ipv6LeakRisk().risky, true, 'nhan ca family dang SO (6), khong chi chuoi "IPv6"');
 
+  // ── 8c. tunnelState(): canh nguoi dung TU tat/bat HMA (QD-32 bo sung 2) ──
+  // Day la tin hieu duy nhat app co de biet NGUOI DUNG tu toggle HMA. Sai o day thi hoac mat
+  // tinh nang (khong khoa nut) hoac te hon: KHOA OAN nut Chay tren ca 4 may ao.
+  console.log('\n8c. tunnelState: nhan dien duong ham HMA len/xuong');
+
+  fakeNet({
+    'HMA VPN WireGuard': [{ family: 'IPv4', address: '10.252.32.18', internal: false }],
+    Ethernet: [{ family: 'IPv4', address: '192.168.1.115', internal: false }],
+  });
+  let ts = vpn.tunnelState();
+  eq(ts.up, true, 'HMA bat -> up');
+  eq(ts.address, '10.252.32.18', 'tra dung IP TRONG DUONG HAM (de nhan ra luot noi lai)');
+  eq(ts.iface, 'HMA VPN WireGuard', 'bao dung ten adapter');
+
+  // Chi con Ethernet -> HMA tat. Neu nham Ethernet la duong ham thi nut Chay khoa vinh vien.
+  fakeNet({ Ethernet: [{ family: 'IPv4', address: '192.168.1.115', internal: false }] });
+  eq(vpn.tunnelState().up, false, 'HMA tat -> up=false (KHONG nham Ethernet la duong ham)');
+
+  // ⛔ Bay LON NHAT: Tailscale la DUONG VAO may ao. Tinh no la VPN thi Tailscale nhap nhay se
+  // khoa nut Chay oan tren ca 4 VPS, dung luc mang co van de lai cang can bam duoc.
+  fakeNet({ Tailscale: [{ family: 'IPv4', address: '100.122.50.50', internal: false }] });
+  eq(vpn.tunnelState().up, false, 'Tailscale TUYET DOI khong duoc tinh la duong ham HMA');
+
+  // May ao co ban HMA cu (di qua OpenVPN/TAP, ten adapter khong co chu "HMA") -> van nhan ra.
+  fakeNet({ 'TAP-Windows Adapter V9': [{ family: 'IPv4', address: '10.8.0.6', internal: false }] });
+  ts = vpn.tunnelState();
+  eq(ts.up, true, 'adapter TAP/OpenVPN -> van nhan la duong ham (du phong cho may ao ban HMA cu)');
+  eq(ts.viaFallback, true, 'co danh dau la nhan qua duong DU PHONG');
+
+  // Co CA HMA lan adapter ham khac: adapter ten HMA phai thang TUYET DOI, khong phu thuoc thu tu
+  // Windows liet ke. Neu phu thuoc thu tu thi 2 lan doc co the khac nhau -> chuyen tiep GIA.
+  const both = {
+    'TAP-Windows Adapter V9': [{ family: 'IPv4', address: '10.8.0.6', internal: false }],
+    'HMA VPN WireGuard': [{ family: 'IPv4', address: '10.252.32.18', internal: false }],
+  };
+  fakeNet(both);
+  eq(vpn.tunnelState().address, '10.252.32.18', 'HMA thang khi adapter HMA liet ke SAU');
+  fakeNet({
+    'HMA VPN WireGuard': both['HMA VPN WireGuard'],
+    'TAP-Windows Adapter V9': both['TAP-Windows Adapter V9'],
+  });
+  eq(vpn.tunnelState().address, '10.252.32.18', 'HMA thang khi adapter HMA liet ke TRUOC (tat dinh)');
+
+  // Adapter con day nhung MAT dia chi IPv4 (HMA tat kieu nay tren mot so may) -> phai la down.
+  fakeNet({ 'HMA VPN WireGuard': [{ family: 'IPv6', address: 'fe80::1', internal: false }] });
+  eq(vpn.tunnelState().up, false, 'adapter con nhung khong con IPv4 -> coi la TAT');
+
+  // family dang SO (4) — cung bay da gap o ipv6LeakRisk.
+  fakeNet({ 'HMA VPN WireGuard': [{ family: 4, address: '10.252.32.18', internal: false }] });
+  eq(vpn.tunnelState().up, true, 'nhan ca family dang SO (4), khong chi chuoi "IPv4"');
+
+  // Khong co adapter nao -> down, khong nem loi (may khong cai HMA).
+  fakeNet({});
+  eq(vpn.tunnelState().up, false, 'may khong cai HMA -> down, khong nem loi');
+
+  // os.networkInterfaces() nem loi -> phai tra unknown, KHONG duoc lam sap renderer (bo canh goi
+  // ham nay 2 giay/lan, nem loi la spam loi lien tuc).
+  osMod.networkInterfaces = () => { throw new Error('gia lap loi he thong'); };
+  ts = vpn.tunnelState();
+  eq(ts.up, false, 'os loi -> up=false');
+  eq(ts.unknown, true, 'os loi -> danh dau unknown, khong nem ra ngoai');
+
   osMod.networkInterfaces = realNetIf;   // tra lai ban that
 
   // ── 9. status() chi doc, khong dung tay vao VPN ──

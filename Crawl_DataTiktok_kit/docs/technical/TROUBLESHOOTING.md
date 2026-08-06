@@ -1,7 +1,7 @@
 # Quy trình chẩn đoán sự cố
 
 > Tra theo triệu chứng. Mọi lệnh chạy trong `Crawl_DataTiktok_build`.
-> Cập nhật: 2026-08-05
+> Cập nhật: 2026-08-06 (mục 17/18)
 
 ---
 
@@ -468,8 +468,39 @@ thì đây đúng là ca này. Để ý: phần **header vẫn có đủ** tên 
 lưới video hiện đầy đủ.
 
 **Đây KHÔNG phải lỗi app** — app đã thử cả 2 đường (API `api/music/detail/` và đọc giao diện,
-QĐ-06) và cả hai đều không ra số. Nó cũng **không phải sound chết**: sound chết thì API trả
-`statusCode 10201` và log ghi rõ *"sound đã bị xóa/không tồn tại"*.
+QĐ-06), **mỗi đường 2 lượt** (bổ sung 2026-08-06), và tất cả đều không ra số. Nó cũng **không phải
+sound chết**: sound chết thì API trả `statusCode 10201` và log ghi rõ *"sound đã bị xóa/không tồn
+tại"*.
+
+### Từ 2026-08-06: app TỰ THỬ LẠI 1 lần trước khi bỏ
+
+Vì trang lỗi ghi thẳng *"Please try again later"* kèm nút **Refresh** — chính TikTok khai đây là
+lỗi **tạm thời**. Log sẽ có dòng:
+
+```
+"<tên sound>": TikTok trả trang lỗi — thử lại lượt 2/2...
+```
+
+Lượt 2 đọc được → sound vào **tab chính** với số đầy đủ, **không** phải kiểm tay. Nếu bạn thấy
+nhiều dòng "thử lại lượt 2/2" mà sau đó vẫn vào tab chờ, tức lỗi không tạm thời — xem mục
+`statusCode lạ` dưới.
+
+**Nếu muốn TẮT việc thử lại** (ví dụ đo thấy nó làm chậm quá): đặt biến môi trường
+`TTC_COUNT_ATTEMPTS=1` rồi mở lại app — không cần build lại.
+
+### `statusCode lạ` trong log — mã TikTok trả mà app chưa biết nghĩa
+
+```
+"<tên sound>": TikTok trả statusCode lạ 10203 (body 205 byte) — không đọc được số video.
+```
+
+Đã đo `10203` (2026-08-06): HTTP 200 nhưng body chỉ ~205 byte, **không có** `musicInfo`. App
+**không** coi là sound chết (chưa biết nghĩa thì không bỏ oan) → vào **tab chờ**.
+
+⚠️ **Kết quả phụ thuộc IP/vùng.** Cùng một link `/music/original-sound-7658028456602361622`: đo từ
+IP **UK** trả `10203` không có số; nhưng trên VPS IP **US** header lại hiện `zxo · 21 videos`. Nên
+**cùng một link có thể vào tab chờ ở máy này mà bị lọc ngưỡng ở máy khác** — muốn biết chuyện gì
+xảy ra thì phải đọc log 📄 của **đúng máy đó**, không suy từ máy khác.
 
 ### ⚠️ TRƯỚC HẾT: đọc đúng dòng log, "Something went wrong" thường KHÔNG phải lý do
 
@@ -493,6 +524,11 @@ Nên phân biệt bằng log, đừng đoán từ việc mở trang thấy lỗi
 | `Bỏ "..." (N < 1000 video)` / `(N > 100000 video)` | Đọc số OK, **không đạt bộ lọc** trong ⚙ | ❌ |
 | `Bỏ "..." (sound đã bị xóa/không tồn tại)` | Sound chết thật (`statusCode 10201`) | ❌ |
 | `⏳ "..." → tab CHỜ kiểm tay` | **Không đọc được số** — ca thật cần kiểm | ✅ |
+| `Bỏ "..." (không lấy được số video...)` | Không đọc được số **mà tab chờ đang ngưng** → mất luôn | — |
+
+⚠️ Gặp dòng cuối nghĩa là **tab chờ không dùng được** — hầu như luôn vì **chưa tạo tab
+`Total_Link_Voice_Pending` trên Sheet**. Cuộn lên dòng thông báo lúc bắt đầu phiên, app đã nói rõ.
+Tính năng **bật sẵn** từ 2026-08-06 nên không còn phải điền ô nào trên từng máy.
 
 Phần lớn là dòng đầu ⇒ **ngưỡng lọc đang chặt**, không phải lỗi. Muốn soi tận mắt thì bật
 ⚙ → **"Hiện tab đếm số video trong cùng cửa sổ profile (chẩn đoán)"** — tab `/music/` hiện thành **một tab
@@ -503,8 +539,21 @@ thấy được khi profile chạy ở chế độ **hiện**.
 
 1. Tạo tab mới trên Sheet, ví dụ `Total_Link_Voice_Pending`, dòng 1 đặt 5 tiêu đề:
    `Tên Sound | Link | Số Video | Profile | Tình trạng`.
-2. Mở **☁ Google Sheet** → điền tên tab đó vào ô **"Tên tab CHỜ KIỂM TAY"** → **Lưu**.
-3. Từ đó, link lỗi được ghi sang tab đó (4 cột A–D, **cột E để trống cho người điền**) thay vì bị bỏ.
+2. **Không cần cấu hình gì thêm.** Từ 2026-08-06 tính năng **bật sẵn** với đúng tên tab
+   `Total_Link_Voice_Pending` — ô "Tên tab CHỜ KIỂM TAY" để trống là dùng tên đó. Chỉ điền ô đó
+   nếu bạn muốn **tên khác**.
+3. Từ đó, link lỗi được ghi sang tab đó (4 cột A–D `Tên Sound | Link | Số Video | Profile`,
+   **cột E để trống cho người điền**) thay vì bị bỏ.
+
+⚠️ **Chưa tạo tab thì app báo ngay** ở dòng thông báo lúc bắt đầu chạy:
+*"Chưa có tab `Total_Link_Voice_Pending` trên Sheet → link không đọc được số video sẽ bị BỎ"* — và
+tính năng **ngưng cả phiên** (không gọi API lặp lại). Tạo tab rồi chạy lại là xong.
+
+**Muốn TẮT hẳn tính năng?** Đổi tên hoặc xoá tab đó trên Sheet. Ô trống **không còn** nghĩa là tắt.
+
+> **Lý do đảo ngược mặc định:** trước đây ô trống = tắt, mà cấu hình nằm ở `%APPDATA%` **riêng từng
+> máy**. Với 5 máy thì tính năng cứu dữ liệu này thực tế không hoạt động — đã mất một sound
+> **262K video** ở VPS vì đúng lỗi đó. Xem [QĐ-33](DECISIONS.md).
 
 Log sẽ đổi từ `Bỏ "..."` thành `⏳ "..." → tab CHỜ kiểm tay`.
 
@@ -537,7 +586,50 @@ Khi một profile bất kỳ báo **feed cạn** (mục 16):
 ✅ HMA đã tắt/bật lại (London) — GB. IP mới: 18.132.40.68 (GB).
 ```
 
-rồi tự chạy lại đúng nhóm profile vừa dừng, **lần lượt** (như nút ▶ Chạy đã chọn, QĐ-21).
+rồi **chờ 1 phút cho IP mới nguội**, sau đó tự chạy lại đúng nhóm profile vừa dừng, **lần lượt**
+(như nút ▶ Chạy đã chọn, QĐ-21).
+
+### Nút "▶ Chạy" bị khóa trong lúc đổi IP — đúng như vậy, không phải app treo
+
+Từ 2026-08-06, nút **"▶ Chạy"** (cả trên từng hàng và nút "▶ Chạy ô đã chọn") **bị khóa** suốt quá
+trình, và nhãn nút cho biết đang ở pha nào:
+
+| Nhãn trên nút | Pha | Vì sao khóa |
+|---|---|---|
+| `⏳ đổi IP` | **App** đang tắt/bật lại HMA | **HMA đang TẮT** — bật profile lúc này là chạy bằng **IP THẬT** |
+| `⛔ VPN tắt` | HMA **đang tắt** (bạn tự tắt, hoặc VPN tụt) | Cùng lý do trên. Cách xử khác: **bật lại HMA** |
+| `⏳ 59s` → `⏳ 1s` | Chờ IP mới nguội | Tránh 5 phiên cũ đồng loạt xuất hiện trên IP vừa đổi (TikTok coi là "tài khoản bị chiếm", QĐ-15) |
+| `▶ Chạy` | Xong | Mở khóa ngay khi hết đếm ngược, **trước** cả lúc app tự bật lại — bấm tay được luôn nếu muốn |
+
+**Khóa cả khi BẠN tự tắt/bật HMA**, không riêng lúc app tự đổi IP. App canh đường hầm HMA
+**2 giây/lần** (đọc `os.networkInterfaces()` — 2.1ms/lần, không spawn tiến trình) nên biết ngay:
+
+- Bạn bấm **OFF** trên HMA → nút đổi thành `⛔ VPN tắt`. Nếu còn profile đang chạy, app cảnh báo rõ
+  *"⚠ Còn N profile ĐANG CHẠY: nên dừng ngay, chúng đang dùng IP thật"* — **app không tự dừng**,
+  bạn đang chủ động điều khiển VPN nên quyền quyết định là của bạn.
+- Bạn bấm **ON** → nút đổi sang `⏳ 59s` đếm ngược, hết giờ mới cho chạy.
+
+**Máy không cài HMA thì không bị ảnh hưởng gì** — bộ canh chỉ hành động khi thấy trạng thái **đổi**;
+không có HMA nghĩa là không bao giờ có chuyển tiếp, nút Chạy hoạt động bình thường.
+
+⚠️ **Nút kẹt ở `⛔ VPN tắt` mà HMA hỏng, không bật lên được?** Đường thoát: **khởi động lại app**.
+Lúc mở lại, lần đọc đầu chỉ lấy mốc (thấy "đang tắt" nhưng không coi là chuyển tiếp) → nút Chạy
+bình thường trở lại. Nhưng nhớ là lúc đó bạn **đang chạy bằng IP thật** — `ip-guard` (QĐ-17) sẽ tạm
+dừng profile nếu IP không khớp nhãn quốc gia, nên phần lớn trường hợp nó vẫn tự chặn giúp bạn.
+
+**Adapter HMA tên khác trên máy ảo?** App nhận `HMA`/`Privax` trước, không có thì thử
+`WireGuard`/`TAP-Windows`/`OpenVPN`. **Tailscale bị loại tuyệt đối** — đó là đường vào máy ảo, tính
+nhầm là Tailscale nhấp nháy sẽ khoá nút Chạy oan trên cả 4 VPS. Kiểm tên adapter trên máy đó bằng:
+
+```bash
+node -e "for(const [n,a] of Object.entries(require('os').networkInterfaces())) console.log(n, a.filter(x=>x.family==='IPv4'||x.family===4).map(x=>x.address).join(','))"
+```
+
+- Nút **"■ Dừng" luôn bấm được** ở mọi pha.
+- Bấm **"■ Dừng"** (nút hàng hoặc "Dừng đã chọn") trong lúc chờ sẽ **hủy** việc tự chạy lại — app
+  báo *"Đã huỷ việc tự chạy lại sau đổi IP"* và không tự bật lại profile bạn vừa tắt.
+- Đổi IP **thất bại** → app **KHÔNG** tự chạy lại (VPN có thể đang tắt) và mở khóa nút để bạn kiểm
+  HMA rồi bấm tay. Nút không bao giờ kẹt khóa vĩnh viễn.
 
 ### Dừng RIÊNG 1 profile hay dừng HẾT — app tự quyết theo máy
 

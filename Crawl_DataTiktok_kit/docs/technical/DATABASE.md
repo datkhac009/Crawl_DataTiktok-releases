@@ -31,7 +31,7 @@ Lưu trong thư mục dữ liệu người dùng của Electron, không nằm c�
 | Khóa | Nội dung |
 |---|---|
 | `profile_settings` | Cài đặt **riêng từng profile**: chế độ, từ khóa, ẩn/hiện, bộ lọc, delay, thời lượng chu kỳ, danh sách link xem, `chromiumProfile` (profile Chromium riêng — [QĐ-28](DECISIONS.md))… |
-| `sheets_config` | Spreadsheet ID, tên tab, **`pendingTab`** (tab chờ kiểm tay — [QĐ-33](DECISIONS.md), để trống = tắt), JSON Service Account, chu kỳ đồng bộ lọc trùng |
+| `sheets_config` | Spreadsheet ID, tên tab, **`pendingTab`** (tab chờ kiểm tay — [QĐ-33](DECISIONS.md); **để trống = dùng mặc định `Total_Link_Voice_Pending`**, không phải tắt), JSON Service Account, chu kỳ đồng bộ lọc trùng |
 | `count_concurrency` | Số luồng đếm video đồng thời (**chung toàn app**, không theo profile) |
 | `update_repo` | Repo GitHub phát hành (để trống = dùng mặc định) |
 | `vpn_auto_cycle` | Tự tắt/bật lại HMA VPN khi feed cạn rồi tự chạy lại profile (**chung toàn app**). Mặc định `false` — [QĐ-32](DECISIONS.md) |

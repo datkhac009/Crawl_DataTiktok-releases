@@ -7,7 +7,9 @@
 //   2. Cot "Tinh trang" (E) TUYET DOI khong duoc ghi — nguoi dung tu dien.
 //   3. Ghi dung TAB CHO, khong bao gio ghi vao tab chinh.
 //   4. Khong ghi TRUNG: link da co tren tab cho (phien truoc / may khac) -> bo qua.
-//   5. De trong ten tab cho = TAT tinh nang (link lai bi bo nhu cu).
+//   5. De trong ten tab cho = DUNG TEN MAC DINH `Total_Link_Voice_Pending` (doi tu "= TAT" sang
+//      "= mac dinh" ngay 2026-08-06 — xem PENDING_TAB_DEFAULT trong sheets.cjs). Duong TAT bay gio
+//      la XOA/DOI TEN tab tren Sheet: app tu ngung ca phien va bao ro link se bi BO.
 //   6. Loi ghi -> KHONG bo roi lo, tra ve buffer de thu lai.
 'use strict';
 
@@ -34,11 +36,19 @@ function installGapiMock() {
     async getToken() { return 'fake-token'; },
     async httpRequest(method, url, opts = {}) {
       requests.push({ method, url, body: opts.body });
+      const tabOf = () => {
+        const m = decodeURIComponent(url).match(/values\/([^!]+)!/);
+        return m ? m[1] : '?';
+      };
+      // TAB KHONG TON TAI: Google tra dung the nay — HTTP 400 + "Unable to parse range".
+      // Dung nguyen van chuoi that de sheets.cjs dich duoc thanh cau de hieu (QD-26); doi chuoi
+      // nay thanh chu khac la test khong con kiem duoc duong that.
+      if (httpScript.missingTab) {
+        return { status: 400, body: `Unable to parse range: ${tabOf()}!B:B` };
+      }
       // Doc cot B (link) cua mot tab
       if (method === 'GET' && url.includes('/values/')) {
-        const m = decodeURIComponent(url).match(/values\/([^!]+)!/);
-        const tab = m ? m[1] : '?';
-        const rows = (httpScript.existing && httpScript.existing[tab]) || [];
+        const rows = (httpScript.existing && httpScript.existing[tabOf()]) || [];
         return { status: 200, body: JSON.stringify({ values: rows.map(l => [l]) }) };
       }
       // Append
@@ -72,6 +82,10 @@ const ID_B = '7602667462760336144';   // anh 3: sound hien binh thuong
 const URL_A = `https://www.tiktok.com/music/original-sound-${ID_A}`;
 const URL_B = `https://www.tiktok.com/music/original-sound-${ID_B}`;
 const URL_B_RU = `https://www.tiktok.com/music/оригинальный-звук-${ID_B}`;   // cung ID, slug tieng Nga
+// Anh 2026-08-06: cung 1 sound, VPS hien "Something went wrong" con may chinh hien 262K video.
+// Dung 2 ID rieng cho muc 4/4b de khong an theo `_pendingKnown` cua cac muc truoc.
+const URL_DEFAULT = 'https://www.tiktok.com/music/original-sound-7385710780424243974';
+const URL_MISSING = 'https://www.tiktok.com/music/original-sound-7658028456602361622';
 
 function cfg(pendingTab = PENDING_TAB) {
   return { enabled: true, spreadsheetId: 'SHEET_ID_1', tab: MAIN_TAB, pendingTab, sa: SA };
@@ -131,15 +145,61 @@ console.log('\n=== Tab CHO KIEM TAY (link "Something went wrong") ===\n');
   eq(sheets.enqueuePending(['x', URL_B_RU, '', 'p']), false,
     'cung ID nhung slug khac ngon ngu -> van la TRUNG (so theo ID, QD-10)');
 
-  // ── 4. De trong ten tab cho = TAT ──
-  console.log('\n4. De trong ten tab cho = TAT tinh nang');
+  // ── 4. De trong ten tab cho = DUNG TEN MAC DINH (doi nguoc lai, 2026-08-06) ──
+  // Truoc day o trong = TAT. Doi vi cau hinh nam o %APPDATA% RIENG TUNG MAY, khong dong bo qua
+  // Sheet, ma nguoi dung chay 5 may: ho hoi 3 lan "sao khong thay link nao o tab Pending", moi
+  // lan deu vi o trong o dung cai may dang chay. Tinh nang cuu du lieu ma phai bat tay tren 5
+  // may thi thuc te la KHONG TON TAI. Thiet hai do duoc: 1 sound 262K video bi bo o VPS.
+  console.log('\n4. De trong ten tab cho = DUNG TEN MAC DINH (khong con la TAT)');
   requests = [];
+  httpScript = { existing: {} };
   sheets.configure(cfg(''), null);
-  eq(sheets.isPendingEnabled(), false, 'khong co ten tab -> tat');
-  eq(sheets.enqueuePending(['x', 'https://www.tiktok.com/music/original-sound-7600000000000000999', '', 'p']), false,
-    'tat thi tu choi xep hang (link se bi bo nhu cu)');
+  eq(sheets.isPendingEnabled(), true, 'o trong -> VAN BAT (khong con tat am tham)');
+  eq(sheets.pendingTabName(), PENDING_TAB, 'o trong -> lay dung ten mac dinh Total_Link_Voice_Pending');
+  eq(sheets.enqueuePending(['x', URL_DEFAULT, '', 'p']), true, 'o trong -> van nhan link');
   await sheets.flushPending();
-  eq(requests.length, 0, 'khong goi API nao khi tat');
+  eq(appendsTo(PENDING_TAB).length, 1, 'ghi sang tab mac dinh');
+  eq(appendsTo(MAIN_TAB).length, 0, 'vao tab mac dinh KHONG lam ban tab chinh');
+
+  // ── 4b. TAB KHONG TON TAI tren Sheet -> NGUNG CA PHIEN, khong ghi lai moi 5 giay ──
+  // O trong khong con nghia la tat, nen phai co duong tat khac: xoa/doi ten tab. Duong do PHAI
+  // im lang ve API (khong thu lai vo ich) nhung PHAI on ve thong bao (noi ro link se bi BO).
+  console.log('\n4b. Tab cho KHONG TON TAI -> ngung ca phien + bao ro hau qua');
+  // (i) Phat hien ngay o buoc NAP dau phien — re nhat, 1 lan goi API.
+  requests = [];
+  httpScript = { existing: {}, missingTab: true };
+  sheets.configure(cfg('KhongCoTabNay'), null);
+  const seedMiss = await sheets.seedPendingLinks();
+  eq(seedMiss.ok, false, 'seed that bai');
+  eq(seedMiss.missingTab, 'KhongCoTabNay', 'bao dung TEN TAB thieu (de UI chi dung cho sua)');
+  eq(sheets.isPendingEnabled(), false, 'sau do TU NGUNG ca phien');
+  requests = [];
+  eq(sheets.enqueuePending(['x', URL_MISSING, '', 'p']), false, 'ngung roi -> tu choi xep hang');
+  await sheets.flushPending();
+  eq(requests.length, 0, 'ngung roi -> KHONG goi API nao nua (khong ngap log moi 5 giay)');
+
+  // (ii) Tab bi xoa GIUA PHIEN (nap dau phien thanh cong, luc GHI moi phat hien). Duong nay khac
+  // duong (i) va cung phai tu ngung — neu khong thi lo bi tra ve buffer roi thu lai mai mai.
+  requests = [];
+  httpScript = { existing: {} };
+  let missErr = '';
+  sheets.configure(cfg('TabSeBiXoa'), (m) => { missErr = m; });
+  ok((await sheets.seedPendingLinks()).ok, 'nap dau phien OK (tab con song)');
+  eq(sheets.enqueuePending(['x', URL_MISSING, '', 'p']), true, 'nhan link binh thuong');
+  httpScript = { existing: {}, missingTab: true };   // <-- tab bi xoa ngay luc nay
+  await sheets.flushPending();
+  await sleep(50);
+  eq(sheets.isPendingEnabled(), false, 'ghi that bai vi mat tab -> TU NGUNG ca phien');
+  ok(/TabSeBiXoa/.test(missErr), 'bao loi co TEN TAB', missErr);
+  ok(/BỎ/.test(missErr), 'bao loi noi thang HAU QUA: link se bi BO', missErr);
+  requests = [];
+  await sheets.flushPending();
+  eq(requests.length, 0, 'KHONG thu ghi lai (lo da bi xoa, khong treo timer moi 5 giay)');
+
+  // Sua ten tab -> phai cho thu lai, khong ket o trang thai ngung.
+  httpScript = { existing: {} };
+  sheets.configure(cfg(PENDING_TAB), null);
+  eq(sheets.isPendingEnabled(), true, 'doi ten tab -> xoa co "ngung", cho thu lai');
 
   // ── 5. Doi ten tab cho -> quen danh sach cu (khong loc theo tab CU) ──
   console.log('\n5. Doi ten tab cho -> quen danh sach link cua tab cu');

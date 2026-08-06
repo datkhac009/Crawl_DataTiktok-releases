@@ -11,6 +11,9 @@ const Module = require('module');
 process.env.TTC_IP_RETRY_MS = '250';
 // Rut ngan backoff khi FEED CAN (that la 5/15/30 phut) de test duong tam dung + thu lai.
 process.env.TTC_STARVE_RETRY_MS = '300';
+// Rut ngan cho giua 2 luot doc so video (that la 2.5s). KHONG rut ngan duoc vong poll giao dien
+// (6 x 500ms co dinh trong crawler) nen cac kich ban DEM ben duoi van can runMs vai giay.
+process.env.TTC_COUNT_RETRY_MS = '100';
 
 const SRC = path.join(__dirname, '..', 'src');
 const browserPath = require.resolve(path.join(SRC, 'browser.cjs'));
@@ -20,10 +23,12 @@ const ipGuardPath = require.resolve(path.join(SRC, 'ip-guard.cjs'));
 // ── Fake page: tra ve chuoi sound do kich ban quy dinh ──
 function makeFakePage(script) {
   let readIdx = 0;
-  const calls = { goto: [], reload: 0, wheel: 0, click: [], waitForSelector: [], keyboard: [] };
+  const calls = { goto: [], musicGoto: 0, reload: 0, wheel: 0, click: [], waitForSelector: [], keyboard: [] };
   const page = {
     _calls: calls,
-    async goto(u) { calls.goto.push(u); },
+    // musicGoto = so LUOT mo trang /music/ = so luot doc so video. La thu duy nhat chung minh
+    // duoc "co thu lai" hay "khong thu lai" — dem log thi khong chac.
+    async goto(u) { calls.goto.push(u); if (String(u).includes('/music/')) calls.musicGoto++; },
     async reload() { calls.reload++; },
     async waitForSelector(s) { calls.waitForSelector.push(s); },
     async bringToFront() {},
@@ -46,7 +51,18 @@ function makeFakePage(script) {
       };
       return { ...leaf, filter: () => ({ first: () => leaf }) };
     },
-    async waitForResponse() { return null; },
+    // ── Kich ban DEM SO VIDEO, theo TUNG LUOT doc (attempt) ──
+    //   countApi[i] = response gia o luot i  ({status, body}; null = khong co response nao)
+    //   countDom[i] = ket qua doc giao dien o luot i (null = khong doc duoc)
+    // ⚠ BAT DOI XUNG ve chi so — nham la test do sai ma tuong dung:
+    //   waitForResponse duoc crawler goi TRUOC goto -> luot hien tai = musicGoto
+    //   readVideoCount  duoc goi SAU  goto          -> luot hien tai = musicGoto - 1
+    async waitForResponse() {
+      if (!script.countApi) return null;
+      const spec = script.countApi[Math.min(calls.musicGoto, script.countApi.length - 1)];
+      if (!spec) return null;
+      return { status: () => (spec.status ?? 200), async text() { return spec.body ?? ''; } };
+    },
     // page.evaluate: phan biet theo cach crawler goi
     async evaluate(fn) {
       const src = String(fn);
@@ -74,7 +90,11 @@ function makeFakePage(script) {
         return { x: 1480, y: 440, label: 'action-item' };
       }
       // readVideoCount / duration / like
-      if (src.includes('videos?')) return null;
+      if (src.includes('videos?')) {
+        if (!script.countDom) return null;
+        const i = Math.min(Math.max(calls.musicGoto - 1, 0), script.countDom.length - 1);
+        return script.countDom[i] ?? null;
+      }
       if (src.includes('duration')) return 10;
       return null;
     },
@@ -147,19 +167,20 @@ function installMocks(page, profileName) {
 
 // ── Chay 1 kich ban ──
 async function run({ name, mode, sounds, loginState, runMs, ipScript = ['ok'], profileName,
-                     links, navButton, extra = {} }) {
+                     links, navButton, countApi, countDom, extra = {} }) {
   // Xoa cache crawler de moi kich ban co trang thai phien sach
   for (const k of Object.keys(require.cache)) {
     if (k.includes('crawler') || k.includes('browser.cjs') || k.includes('profiles.cjs')
         || k.includes('ip-guard.cjs')) delete require.cache[k];
   }
-  const page = makeFakePage({ sounds, loginState, links, navButton });
+  const page = makeFakePage({ sounds, loginState, links, navButton, countApi, countDom });
   installMocks(page, profileName);
   installIpGuardMock(ipScript);
   const crawler = require(path.join(SRC, 'crawler.cjs'));
 
   const msgs = [];
   const data = [];
+  const pending = [];   // cac dong bi day sang TAB CHO (QĐ-33)
   const res = crawler.startProfile(
     {
       profileId: 'p_test', mode,
@@ -172,13 +193,14 @@ async function run({ name, mode, sounds, loginState, runMs, ipScript = ['ok'], p
     },
     (d) => data.push(d),
     (pid, status, msg) => { if (msg) msgs.push(`[${status}] ${msg}`); },
+    (row) => { pending.push(row); return true; },
   );
   if (!res.ok) return { name, error: res.msg, msgs };
 
   await new Promise(r => setTimeout(r, runMs));
   crawler.stopProfile('p_test');
   await new Promise(r => setTimeout(r, 400));
-  return { name, msgs, data, calls: page._calls };
+  return { name, msgs, data, pending, calls: page._calls };
 }
 
 // ── Cac kich ban ──
@@ -307,6 +329,59 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
   });
   results.push(starveCycle);
 
+  // ── DEM SO VIDEO: THU LAI khi TikTok tra trang loi (2026-08-06) ──
+  // Lay tu ca THAT tren VPS: trang /music/ hien "Something went wrong — Please try again later",
+  // API tra statusCode 10203 voi body ~200 byte khong co musicInfo.
+  const API_OK = { status: 200, body: JSON.stringify({ statusCode: 0, musicInfo: { stats: { videoCount: 4321 } } }) };
+  const API_ODD = { status: 200, body: JSON.stringify({ statusCode: 10203 }) };
+  const API_GONE = { status: 400, body: JSON.stringify({ statusCode: 10201 }) };
+
+  const retryWin = await run({
+    name: 'DEM: luot 1 statusCode LA, luot 2 API doc duoc -> phai THU LAI va LAY DUOC sound',
+    mode: 'foryou', sounds: [SOUND_A], runMs: 7000,
+    countApi: [API_ODD, API_OK], countDom: [null, null],
+  });
+  results.push(retryWin);
+
+  const retryDom = await run({
+    name: 'DEM: luot 2 API van la nhung GIAO DIEN doc duoc "4.5K" -> lay duoc 4500',
+    mode: 'foryou', sounds: [SOUND_C], runMs: 8000,
+    countApi: [API_ODD, API_ODD], countDom: [null, '4.5K'],
+  });
+  results.push(retryDom);
+
+  // runMs phai du cho: luot 1 doc DOM 6x500ms=3s + cho 100ms + luot 2 doc DOM 12x500ms=6s.
+  // Luot 2 kien nhan GAP DOI vi VPS yeu co the dung trang cham hon 3s (nguyen nhan that).
+  const retryFail = await run({
+    name: 'DEM: ca 2 luot deu truot -> BO khoi du lieu chinh, log statusCode LA, day sang TAB CHO',
+    mode: 'foryou', sounds: [SOUND_B], runMs: 13000,
+    countApi: [API_ODD, API_ODD], countDom: [null, null],
+  });
+  results.push(retryFail);
+
+  const goneNoRetry = await run({
+    name: 'DEM: sound DA XOA (10201) -> KHONG thu lai, KHONG vao tab cho',
+    mode: 'foryou', sounds: [SOUND_C], runMs: 4000, countApi: [API_GONE],
+  });
+  results.push(goneNoRetry);
+
+  const okNoRetry = await run({
+    name: 'DEM: doc duoc ngay luot 1 -> KHONG thu lai',
+    mode: 'foryou', sounds: [SOUND_A], runMs: 4000, countApi: [API_OK],
+  });
+  results.push(okNoRetry);
+
+  // Cong tac tat: doi bien moi truong roi chay lai — run() xoa cache crawler nen hang so duoc
+  // doc lai. Phai TRA LAI ngay sau do, khong thi cac kich ban sau bi anh huong.
+  process.env.TTC_COUNT_ATTEMPTS = '1';
+  const retryOff = await run({
+    name: 'DEM: TTC_COUNT_ATTEMPTS=1 -> TAT hoan toan viec thu lai (khong can build lai)',
+    mode: 'foryou', sounds: [SOUND_B], runMs: 6000,
+    countApi: [API_ODD, API_OK], countDom: [null, null],
+  });
+  delete process.env.TTC_COUNT_ATTEMPTS;
+  results.push(retryOff);
+
   for (const r of results) {
     console.log('\n' + '='.repeat(78));
     console.log('### ' + r.name);
@@ -355,6 +430,40 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
   ok(has(starveCycle, 'kết thúc pha QUÉT SỚM'), 'cycle: ket thuc pha QUET som');
   ok(has(starveCycle, 'pha XEM'), 'cycle: chuyen sang pha XEM');
   ok(!has(starveCycle, '⏸'), 'cycle: KHONG dung backoff (da co pha Xem de nhay sang)');
+
+  console.log('### KHANG DINH: THU LAI khi TikTok tra trang loi (2026-08-06)');
+  const cnt = (r) => (r.data || []).map(d => d.count);
+  ok(retryWin.calls.musicGoto === 2,
+    `luot 1 truot -> mo lai trang /music/ dung 2 lan (that: ${retryWin.calls.musicGoto})`);
+  ok(has(retryWin, 'thử lại lượt 2/2'), 'co log noi ro dang thu lai luot may tren luot may');
+  ok(retryWin.data.length === 1 && retryWin.data[0].count === 4321,
+    `luot 2 doc duoc -> sound VAO du lieu voi so DUNG 4321 (that: ${JSON.stringify(cnt(retryWin))})`);
+  ok(retryWin.pending.length === 0, 'da doc duoc thi KHONG day sang tab cho nua');
+  ok(retryDom.data.length === 1 && retryDom.data[0].count === 4500,
+    `luot 2 doc bang GIAO DIEN "4.5K" -> 4500 (that: ${JSON.stringify(cnt(retryDom))})`);
+
+  ok(retryFail.calls.musicGoto === 2,
+    `ca 2 luot truot -> dung dung o 2 luot roi bo (that: ${retryFail.calls.musicGoto})`);
+  ok(has(retryFail, 'statusCode lạ 10203'),
+    'log ro statusCode LA — truoc day ca nay bi bo qua trong IM LANG nen 10203 ton tai ma khong ai biet');
+  ok(has(retryFail, 'byte'), 'log kem do dai body, de ve sau phan loai duoc ma la');
+  ok(retryFail.data.length === 0, 'ca 2 luot truot -> KHONG ghi dong nao vao du lieu chinh (QĐ-07)');
+  ok(retryFail.pending.length === 1,
+    `ca 2 luot truot ma sound CON SONG -> day sang TAB CHO (that: ${retryFail.pending.length})`);
+  ok(retryFail.pending[0] && retryFail.pending[0].count === '',
+    'dong tab cho de TRONG o so video (khong bao gio doan so)');
+
+  console.log('### KHANG DINH: KHONG thu lai khi khong can (tu tang tai la tu lam minh bi chan)');
+  ok(goneNoRetry.calls.musicGoto === 1,
+    `sound DA XOA -> chi 1 luot, khong thu lai vo ich (that: ${goneNoRetry.calls.musicGoto})`);
+  ok(!has(goneNoRetry, 'thử lại lượt'), 'sound da xoa -> khong co log thu lai');
+  ok(goneNoRetry.pending.length === 0, 'sound da xoa -> KHONG vao tab cho (khong co gi cho nguoi kiem)');
+  ok(okNoRetry.calls.musicGoto === 1,
+    `doc duoc ngay luot 1 -> chi 1 luot (that: ${okNoRetry.calls.musicGoto})`);
+  ok(okNoRetry.data.length === 1 && okNoRetry.data[0].count === 4321, 'doc duoc luot 1 -> vao du lieu binh thuong');
+  ok(retryOff.calls.musicGoto === 1,
+    `TTC_COUNT_ATTEMPTS=1 -> TAT duoc viec thu lai (that: ${retryOff.calls.musicGoto})`);
+  ok(retryOff.pending.length === 1, 'tat thu lai -> van vao tab cho nhu cu, khong mat link');
 
   console.log(`\n${failed ? '❌' : '✅'} ${failed} khang dinh TRUOT`);
   console.log('\nDONE');

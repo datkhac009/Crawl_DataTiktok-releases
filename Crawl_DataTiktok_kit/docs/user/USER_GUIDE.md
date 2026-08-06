@@ -1,6 +1,6 @@
 # Hướng dẫn sử dụng — TikTok Crawler
 
-> Cập nhật: 2026-08-05 (thêm mục Tự đổi IP bằng HMA VPN)
+> Cập nhật: 2026-08-06 (tab CHỜ bật sẵn; app tự thử lại khi TikTok lỗi trang; đếm ngược trên nút Chạy khi đổi IP)
 
 ## Thêm profile
 
@@ -204,6 +204,28 @@ quyền Administrator. Tắt xong app tự nhận ra, không cần cấu hình g
 - Nếu đổi IP thất bại, app **không tự chạy lại profile** (sợ VPN đang tắt thật, chạy lúc đó là
   lộ IP thật) — mở cửa sổ HMA kiểm tra bằng mắt rồi tự bấm ▶ Chạy lại.
 
+### Nút "▶ Chạy" bị khóa trong lúc đổi IP — bình thường, không phải app treo
+
+Nhãn trên nút cho biết đang ở đâu:
+
+Áp dụng cho **cả hai** trường hợp: app tự đổi IP, **và bạn tự tay tắt/bật HMA**.
+
+| Nút hiện | Nghĩa | Vì sao không cho bấm |
+|---|---|---|
+| `⏳ đổi IP` | **App** đang tắt/bật lại HMA | **HMA đang TẮT** — chạy lúc này là chạy bằng **IP thật của bạn** |
+| `⛔ VPN tắt` | HMA **đang tắt** (bạn tự tắt, hoặc VPN tụt) | Cùng lý do trên → **bật lại HMA** |
+| `⏳ 59s` → `⏳ 1s` | Đang chờ IP mới ổn định | 5 profile cùng đăng nhập trên một IP vừa đổi trong vài giây = TikTok coi là **tài khoản bị chiếm** |
+| `▶ Chạy` | Xong | Mở khóa ngay khi hết đếm ngược — bấm tay được luôn nếu không muốn chờ app tự bật |
+
+- Nút **"■ Dừng" luôn bấm được**, kể cả trong lúc chờ. Cả nút trên **từng hàng** và nút
+  **"■ Dừng ô đã chọn"**.
+- Bấm **"■ Dừng"** lúc đang chờ sẽ **hủy** việc tự chạy lại — app báo *"Đã huỷ việc tự chạy lại sau
+  đổi IP"* và không tự bật lại profile bạn vừa tắt.
+- Bạn bấm **OFF** trên HMA mà **còn profile đang chạy** → app cảnh báo *"⚠ Còn N profile ĐANG CHẠY:
+  nên dừng ngay, chúng đang dùng IP thật"*. App **không tự dừng** — bạn đang chủ động điều khiển VPN
+  nên quyền quyết là của bạn.
+- **Máy không cài HMA** thì nút Chạy hoạt động bình thường, không bị khóa bao giờ.
+
 ## 📊 Lịch sử thu thập theo ngày
 
 Nút **📊 Lịch sử** trên thanh trên cùng mở bảng sản lượng từng ngày:
@@ -260,20 +282,30 @@ Sorry about that! Please try again later.
 Sound đó **vẫn còn** (mở tay vẫn thấy tên tác giả và số video ở phần đầu trang) — chỉ là TikTok
 lỗi lúc dựng trang. Trước đây app **bỏ luôn** những link này, và thực tế bỏ khá nhiều.
 
-Giờ bạn có thể giữ chúng lại: điền **"Tên tab CHỜ KIỂM TAY"** trong modal ☁ Google Sheet (ví dụ
-`Total_Link_Voice_Pending`). Những link đó sẽ được ghi sang tab đó thay vì mất.
+**Máy yếu / VPS lag là nguyên nhân rất hay gặp.** Đã đo thật (2026-08-06): cùng một link
+`/music/original-sound-7385710780424243974`, **VPS** hiện "Something went wrong" nhưng **máy chính**
+mở lên lại hiện đủ `som original · 262K video`. Cùng link, khác máy, khác kết quả — nên sound đó
+hoàn toàn tốt, chỉ là VPS không dựng nổi trang.
+
+**Chỉ cần 1 việc: tạo tab trên Sheet.** Tính năng **bật sẵn**, không phải cấu hình gì trong app.
+
+1. Tạo tab tên **`Total_Link_Voice_Pending`** trên Sheet.
+2. Dòng 1 đặt 5 tiêu đề: `Tên Sound | Link | Số Video | Profile | Tình trạng`.
+3. Xong. Từ đó link lỗi tự vào tab đó.
 
 | | |
 |---|---|
-| App ghi | 4 cột **A–D** như tab chính. Cột **Số video để TRỐNG** (không đọc được thì không bịa) |
+| App ghi | 4 cột **A–D**: `Tên Sound \| Link \| Số Video \| Profile`. Cột **Số video để TRỐNG** (không đọc được thì không bịa) |
 | App **KHÔNG** ghi | Cột **E "Tình trạng"** — để trống cho **bạn tự điền** |
 | Trùng lặp | Không. App đọc tab chờ lúc bắt đầu chạy nên link đã có thì không ghi lại |
 
-⚠️ **Bạn phải tự tạo tab đó trên Sheet trước** — app không tự tạo tab lạ trên Sheet của bạn.
-Đặt 5 tiêu đề ở dòng 1: `Tên Sound | Link | Số Video | Profile | Tình trạng`. Sai tên tab thì app
-báo lỗi rõ (*"Không có tab tên X"*) chứ không im lặng.
+⚠️ **Chưa tạo tab thì app báo ngay** lúc bắt đầu chạy: *"Chưa có tab Total_Link_Voice_Pending trên
+Sheet → link không đọc được số video sẽ bị BỎ"*. Không im lặng. Tạo tab rồi chạy lại là xong.
 
-**Để trống ô này = tắt** — link lỗi lại bị bỏ như trước.
+Muốn dùng **tên tab khác** thì điền vào ô **"Tên tab CHỜ KIỂM TAY"** trong modal ☁ Google Sheet.
+Để trống ô đó = dùng tên mặc định ở trên (**không** phải tắt).
+
+Muốn **tắt hẳn**: đổi tên hoặc xoá tab đó trên Sheet.
 
 ### ⚠️ "Something went wrong" thường KHÔNG phải lý do sound bị bỏ
 
@@ -287,10 +319,17 @@ Nếu bạn thấy nhiều sound bị bỏ, **xem đúng dòng log** để biế
 |---|---|---|
 | `Bỏ "..." (16 < 1000 video)` | Đọc số OK, nhưng **không đạt bộ lọc** của bạn trong ⚙ | ❌ Không — đây là bộ lọc bạn tự đặt |
 | `Bỏ "..." (sound đã bị xóa/không tồn tại)` | Sound chết thật | ❌ Không — không có gì để kiểm |
+| `"...": TikTok trả trang lỗi — thử lại lượt 2/2...` | Lượt 1 không ra số, app **đang thử lại** | Chưa — chờ kết quả lượt 2 |
+| `"...": TikTok trả statusCode lạ 10203 (body 205 byte)` | TikTok trả mã app chưa biết nghĩa | ✅ Có |
 | `⏳ "..." → tab CHỜ kiểm tay` | **Không đọc được số** — đây mới là ca cần kiểm | ✅ Có |
 
 Nếu phần lớn là dòng đầu (`< 1000 video`) thì không phải lỗi — chỉ là **ngưỡng lọc đang chặt**.
 Muốn lấy cả sound ít video thì hạ **"Số video từ"** trong ⚙ Cài đặt crawl.
+
+**App tự thử lại 1 lần** trước khi bỏ (từ 2026-08-06), vì trang lỗi của TikTok ghi thẳng *"Please
+try again later"* kèm nút Refresh — chính nó khai là lỗi tạm thời. Lượt 2 đọc được thì sound vào
+**tab chính** với số đầy đủ, không phải kiểm tay. **Không** thử lại khi sound đã xoá hoặc khi lượt 1
+đã đọc được số (thử thêm chỉ làm TikTok chặn mình).
 
 ### Muốn xem tận mắt trang sound thì bật tab đếm
 

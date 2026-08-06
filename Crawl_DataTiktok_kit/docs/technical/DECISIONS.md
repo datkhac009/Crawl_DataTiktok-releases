@@ -1,7 +1,7 @@
 # Quyết định kiến trúc
 
 > Ghi lại các quyết định quan trọng **và lý do** — đọc file này trước khi đề xuất thay đổi
-> có thể xung đột. Cập nhật: 2026-08-05 (QĐ-32)
+> có thể xung đột. Cập nhật: 2026-08-06 (bổ sung QĐ-07, QĐ-32, QĐ-33)
 
 ---
 
@@ -103,6 +103,40 @@ không còn tốn 3 lần thử và không bị phạt tốc độ oan.
 sound được **trả về đầu hàng đợi** thay vì bỏ, tối đa 3 vòng chờ. Vì lúc đó sound hoàn toàn
 bình thường, chỉ là TikTok đang chặn — bỏ đi là oan. Ước tính trước khi vá: đợt chặn 6 giờ
 làm mất 280–350 sound với 5 profile.
+
+### Bổ sung (2026-08-06): THỬ LẠI trọn vòng 1 lần — đảo ngược phần "không retry"
+
+**Quyết định:** cả 2 bước trượt mà sound **còn sống** → mở lại trang `/music/` và làm lại **cả 2
+bước**, tối đa `COUNT_READ_ATTEMPTS = 2` lượt. Hết lượt vẫn trượt → tab chờ (QĐ-33) như cũ.
+
+**Vì sao đảo ngược:** trang lỗi của TikTok ghi thẳng *"Something went wrong — Sorry about that!
+Please try again later"* kèm nút **Refresh** — **chính TikTok khai đây là lỗi TẠM THỜI**. App cũ
+bỏ ngay sau 1 lượt, nên mỗi lỗi tạm thời = 1 sound mất hoặc 1 dòng người phải kiểm tay.
+
+**Không mâu thuẫn với QĐ-07:** QĐ-07 chặn việc **ghi số không chắc** vào dữ liệu. Thử lại rồi đọc
+được **số thật** không tạo dòng bẩn nào. Câu "không retry" trong bản gốc là **phương tiện**, mục
+đích là "dữ liệu sạch" — phương tiện thay được, mục đích thì không.
+
+**Giới hạn đã cân:**
+
+| Điểm | Lựa chọn | Lý do |
+|---|---|---|
+| Chỉ 2 lượt | Không nhiều hơn | Thử mãi = tự dội IP mình, đúng cái gây chặn |
+| **Không** thử lại khi sound đã xóa (`10201`) | Bỏ ngay | Xóa rồi thì lượt 2 cũng thế — tốn request vô ích |
+| **Không** thử lại khi lượt 1 đã đọc được | Bỏ qua | Tự tăng tải vô cớ |
+| **Giữ nguyên** slot đếm suốt các lượt | Không nhả rồi xin lại | Slot để hãm nhịp request `/music/` từ 1 IP; lúc TikTok đang lỗi thì chậm lại là **đúng hướng** |
+| `TTC_COUNT_ATTEMPTS=1` | Tắt được không cần build lại | Nếu đo thấy retry gây hại thì tắt ngay trên VPS |
+
+**Cũng sửa cùng lúc — `statusCode` lạ không còn bị bỏ qua trong IM LẶNG.** Code cũ chỉ có comment
+*"Trường hợp khác (statusCode lạ) → để raw=null"* và **không log gì**. Hệ quả thật: mã `10203`
+(đo 2026-08-06, body chỉ 205 byte, không có `musicInfo`) tồn tại không biết bao lâu mà không ai
+hay — tôi chỉ tình cờ thấy khi đo tay một link người dùng gửi. Nay ghi rõ mã + độ dài body vào
+log, để sau vài ngày có **dữ liệu thật** mà phân loại thay vì đoán.
+
+⚠️ **Việc còn nợ:** lỗi CỦA LINK (`statusCode` lạ) và BỊ CHẶN (không có response nào) vẫn đang bị
+gộp — cả hai cùng tăng `failStreak` nên cùng bị **phạt tốc độ toàn cục**. Nghĩa là gặp vài link
+`10203` liền nhau là app tự làm chậm **mọi profile** dù TikTok chẳng chặn gì. Chưa tách vì chưa
+biết `10203` phổ biến đến đâu — chờ log ở trên có số liệu rồi mới sửa, không đoán.
 
 ---
 
@@ -1391,7 +1425,7 @@ CŨ trong cache và tạm dừng oan (hoặc tệ hơn: tưởng đúng vùng kh
 
 ### Kiểm chứng
 
-`test/vpn-hma.test.js` — **52 khẳng định**, mock toàn bộ `child_process` (không cần cài HMA
+`test/vpn-hma.test.js` — **74 khẳng định**, mock toàn bộ `child_process` (không cần cài HMA
 thật để chạy test — máy CI/máy dev khác không có HMA vẫn test được):
 
 1. `pickGateway`: GB xoay vòng đúng city khác *(8 lần lặp, không bao giờ nhảy sang nước
@@ -1418,6 +1452,105 @@ và nhiều người dùng chung, nên có thể rút được một IP cũng đ
 năng này giảm xác suất chứ không phải thuốc chữa tuyệt đối, và trần 6 lần/ngày tồn tại chính vì
 lý do đó (đổi mãi cũng không thoát được thì vấn đề ở chỗ khác).
 
+### Bổ sung (2026-08-06): việc CHỜ phải KHÓA NÚT, không chỉ hiện đếm ngược
+
+**Lỗi thật, do người dùng bắt được:** bản đầu của việc chờ 1 phút chỉ **ghi đếm ngược vào dòng
+trạng thái**. Người dùng thử ở máy mình và báo: *"khi bật lại HMA thì tôi ấn Chạy nó vẫn chạy
+được luôn"* — tức việc chờ **không ngăn được đúng cái nó sinh ra để ngăn**. Yêu cầu: *"tôi muốn
+khi bật lại thì disable nút đó luôn và hiện thị ở nút đó là từ 59s, khi hết 59s thì hiện Chạy".*
+
+**Đã sửa — khóa **CẢ HAI** pha, không chỉ pha chờ.** Lúc rà lại mới thấy pha còn nguy hiểm hơn
+đang **hở hoàn toàn**:
+
+| Pha | Nhãn nút | Vì sao phải khóa |
+|---|---|---|
+| **Đang tắt/bật lại VPN** (`_vpnRunLock`) | `⏳ đổi IP` | HMA **vừa bị tắt** → bật profile lúc này là chạy bằng **IP THẬT**. Nguy hiểm hơn pha chờ mà bản đầu không hề chặn |
+| **Chờ IP nguội** (`_vpnCooldownUntil`) | `⏳ 59s` → `⏳ 1s` | Tránh 5 phiên cũ đồng loạt xuất hiện trên IP vừa đổi (QĐ-15) |
+| Hết chờ | `▶ Chạy` | **Mở khóa NGAY**, trước cả lúc app tự bật lại từng profile — VPN đã ổn định nên bấm tay là an toàn |
+
+Nút **"■ Dừng" luôn bấm được** ở mọi pha — người dùng còn phải dừng được profile khác.
+
+**3 cái bẫy đã xử, mỗi cái đều đủ để tính năng vô dụng trong im lặng:**
+
+1. **`renderProfiles()` vẽ lại cả bảng** và **`setRowRunning()` ghi lại nhãn nút** — hai chỗ này
+   không biết về khóa thì **chỉ cần một lần vẽ lại giữa lúc chờ là nút mở khóa trở lại**. Nên mọi
+   đường ghi chữ lên nút đều phải đi qua `applyVpnCooldown()` (đúng bài học QĐ-10).
+2. **Chỉ dựa vào `disabled` của nút là không kín** — `toggleProfile()` và `runSelected()` **tự
+   kiểm tra lại** `vpnRunLocked()`. Cùng khuôn "backend không tin renderer" ở mục trên.
+3. **Mở khóa phải nằm trong `finally`** — thiếu là nút **kẹt khóa vĩnh viễn** trên các đường
+   `return` sớm (bị giới hạn nhịp, đổi IP thất bại, người dùng hủy giữa chừng), và người dùng
+   không còn cách nào bật profile bằng tay.
+
+**Sửa kèm — nút "■ Dừng" trên TỪNG HÀNG cũng phải hủy việc tự chạy lại.** Trước đây chỉ
+`stopSelected()` làm việc đó, nên dừng bằng nút hàng thì app vẫn tự bật lại profile người dùng
+vừa tắt. Đã dồn về **một chỗ duy nhất** trong `stopProfileById()` (cả hai đường đều đi qua đó);
+`handleFeedStarved()` gọi `api.profileStop` **trực tiếp** nên không tự hủy lượt của chính nó.
+
+### Bổ sung 2 (2026-08-06): phải khoá cả khi NGƯỜI DÙNG tự tắt/bật HMA
+
+**Lỗi tiếp, cũng do người dùng bắt:** bản vá trên chỉ khoá nút trong `handleFeedStarved()`, tức
+**chỉ khi APP tự đổi IP**. Người dùng tự tay tắt/bật HMA thì app **không biết gì** → nút Chạy vẫn
+sáng. Họ gửi ảnh: HMA vừa `ON 00:00:02`, 5 profile đã dừng, mà cả 5 nút Chạy lẫn nút tổng đều sáng
+bình thường. Yêu cầu chốt: *"kể cả app tự động hay là tôi thì đều phải là khi bật lại HMA thì các
+nút chạy sẽ bị disable trong vòng 59 giây"*.
+
+**Bài học chung:** một ràng buộc chỉ được cài ở **một trong nhiều đường** dẫn tới nó thì kể như
+chưa có. Lần trước là "đường vẽ lại bảng ghi đè nhãn nút", lần này là "đường người dùng tự làm".
+Phải hỏi **ai có thể gây ra trạng thái này**, không chỉ **code của tôi gây ra ở đâu**.
+
+**Tín hiệu dùng để canh — chọn theo CHI PHÍ, đo trước khi chọn:**
+
+| Cách | Chi phí đo thật | Kết luận |
+|---|---|---|
+| `status()` qua native messaging | **spawn `VpnNM.exe` + chờ 600ms** mỗi lần → poll 2s/lần ≈ **1800 tiến trình/giờ** | ❌ Quá tốn cho VPS yếu |
+| `os.networkInterfaces()` (`tunnelState()`) | **2.1ms/lần**, đồng bộ, không spawn, không gọi mạng | ✅ Chọn cách này |
+
+Đo trên máy thật: HMA bật → adapter `"HMA VPN WireGuard"` có IPv4 `10.252.32.18`; 3 lần đọc liên
+tiếp **giống nhau** (ổn định, không sinh chuyển tiếp giả).
+
+**So cả ĐỊA CHỈ, không chỉ cờ `up`** — nếu HMA nối lại mà adapter *không* biến mất thì `up` luôn
+`true` và sẽ **không nhận ra lượt nối lại**; IP trong đường hầm thì vẫn đổi
+(`10.252.32.18` → `10.252.40.7`). Nhờ vậy hàm đúng ở **cả hai kiểu hành vi** của adapter, không
+phải đoán kiểu nào.
+
+**Lần poll đầu chỉ LẤY MỐC, không hành động.** Nếu coi lần đọc đầu là "VPN vừa sập" thì máy mở app
+lúc HMA đang tắt — hoặc **máy không cài HMA** — sẽ bị khoá nút ngay khi mở app, không bấm được gì.
+Chỉ hành động khi thấy trạng thái **ĐỔI**. Đó cũng là lý do hàm này **an toàn khi sai**: nếu HMA đổi
+tên adapter thì `up` bất biến `false` → không sinh chuyển tiếp → **mất tính năng, không khoá oan**.
+
+**Ba trạng thái, ba nhãn khác nhau** (gộp thành một chữ là bắt người dùng đoán):
+
+| Nhãn nút | Khi nào | Người dùng phải làm gì |
+|---|---|---|
+| `⏳ đổi IP` | App đang tắt/bật lại VPN | Chờ, app tự lo |
+| `⛔ VPN tắt` | VPN **đang tắt** (họ tắt / VPN tụt) | **Bật lại HMA** |
+| `⏳ 59s` → `⏳ 1s` | VPN vừa lên | Chờ hết đếm ngược |
+
+Khi VPN tắt mà **còn profile đang chạy**, app cảnh báo rõ số lượng: *"⚠ Còn 2 profile ĐANG CHẠY:
+nên dừng ngay, chúng đang dùng IP thật"*. **Không tự dừng** — người dùng đang chủ động điều khiển
+VPN, tự ý dừng profile của họ là vượt quyền.
+
+**Chạy BẤT KỂ công tắc "Tự đổi IP".** Công tắc đó quyết định app có **tự** đổi IP hay không; còn
+việc phản ánh trạng thái VPN lên nút bấm là chuyện khác — người dùng chốt "kể cả app tự động hay
+là tôi".
+
+**Một bộ đếm duy nhất** (1 giây/nhịp) lo cả việc vẽ đếm ngược và canh đường hầm (2 giây/lần) — hai
+timer cùng ghi vào nút là lặp lại đúng bẫy QĐ-10.
+
+**Kiểm chứng:** `test/vpn-run-lock.test.js` — **54 khẳng định**. Test **trích đúng mã nguồn** 6 hàm
+quyết định từ `renderer.js` rồi chạy trong Chromium với DOM thật — **không chép logic sang test**,
+vì bản chép sẽ lệch âm thầm và test pass trong khi app hỏng. Phủ đủ: lần poll đầu chỉ lấy mốc, máy
+không cài HMA không bao giờ bị khoá, tắt→bật, bật→tắt, chu trình đầy đủ, **nối lại mà adapter còn
+nguyên**, poll lại khi không có gì đổi **không được đặt lại đồng hồ** (nếu không thì đếm ngược đứng
+mãi), app đang tự đổi IP thì bộ canh đứng ngoài, và cảnh báo khi tắt VPN lúc còn profile chạy.
+
+Đã kiểm test có "cắn": đổi `btn.disabled = locked` thành `= false` → 2 khẳng định trượt ngay.
+
+⚠️ **Bẫy trong chính test** (đã sửa, ghi lại để không lặp): hàm trích mã nguồn tìm
+`"function <tên>("` nên với `async function watchVpnTunnel` nó **cắt mất chữ `async`** → thân hàm
+có `await` → SyntaxError → cả harness không nạp được và Playwright báo `"T is not defined"`, một
+thông báo **chẳng liên quan gì** tới nguyên nhân. Hàm trích phải kéo theo `async` phía trước.
+
 ---
 
 ## QĐ-33 — Link TikTok trả "Something went wrong": KHÔNG bỏ nữa, đưa sang TAB CHỜ kiểm tay
@@ -1443,6 +1576,45 @@ bảng/tab chính), nhưng link lỗi được ghi sang **một tab RIÊNG** đ�
 |---|---|---|---|
 | Sound **đã bị xóa** | API trả HTTP 400 + `statusCode 10201` (đã verify, QĐ-06) | **BỎ HẲN** | Không có gì cho người kiểm — sound không còn tồn tại |
 | Sound **còn sống** nhưng không đọc được số | API lẫn DOM đều không ra số (gồm ca "Something went wrong") | **→ TAB CHỜ** | Dữ liệu thật, đáng giữ lại |
+
+### Bổ sung (2026-08-06): BẬT SẴN với tên tab mặc định — "để trống = tắt" là sai thiết kế
+
+**Quyết định:** ô "Tên tab CHỜ KIỂM TAY" để trống **không còn nghĩa là tắt**. Trống → dùng
+`PENDING_TAB_DEFAULT = "Total_Link_Voice_Pending"`. Đường tắt bây giờ là **xoá/đổi tên tab trên
+Sheet**: app tự phát hiện, **ngưng cho cả phiên** và báo rõ *"link không đọc được số video sẽ bị
+BỎ"*.
+
+**Vì sao đảo ngược:** cấu hình nằm trong `electron-store` tại `%APPDATA%` — **riêng từng máy,
+không đồng bộ qua Sheet**. Người dùng chạy **5 máy** (1 chính + 4 VPS). Kết quả thật: họ hỏi
+**3 lần** *"sao tôi không thấy link nào ở tab Total_Link_Voice_Pending"*, và **cả 3 lần** nguyên
+nhân đều là ô trống ở đúng cái máy đang chạy. Lần thứ 3 họ gửi ảnh chứng minh thiệt hại: một sound
+**262K video** bị bỏ ở VPS (`/music/original-sound-7385710780424243974` — VPS hiện "Something went
+wrong", máy chính mở cùng link thì hiện `som original · 262K video`).
+
+**Bài học rút ra:** một tính năng **cứu dữ liệu** mà mặc định TẮT và phải bật tay trên từng máy thì
+trên thực tế là **KHÔNG TỒN TẠI**. Chi phí của mặc định sai lệch về hai phía không bằng nhau:
+
+| Mặc định | Nếu sai thì sao |
+|---|---|
+| **TẮT** (cũ) | **Mất dữ liệu vĩnh viễn, im lặng** — không có dấu vết nào để phát hiện |
+| **BẬT** (mới) | Ghi thêm vài dòng vào một tab; nếu tab không có thì app **báo ngay** ở dòng thông báo |
+
+Chọn mặc định phải theo **hậu quả khi sai**, không theo "cẩn thận thì để tắt". Đây cũng **không
+phải đoán ý người dùng**: họ đã nêu **đúng tên tab này 3 lần** trong lúc chốt yêu cầu, và nó vốn
+là chuỗi gợi ý sẵn trong ô nhập (mà họ tưởng là giá trị đã lưu — chính chỗ đó gây nhầm).
+
+**Hai đường phát hiện tab không tồn tại, đều phải tự ngưng:**
+
+| Lúc nào | Xử lý |
+|---|---|
+| **Đầu phiên** (`seedPendingLinks`) | Rẻ nhất — 1 lần gọi API. Trả `{missingTab}` để `main.js` in câu chỉ đúng chỗ sửa kèm **5 tiêu đề cần tạo** |
+| **Giữa phiên** (tab bị xoá lúc đang chạy, `flushPending`) | **Xoá lô, không hẹn thử lại.** Đường "giữ lô thử lại" bình thường (cho lỗi mạng/quota) mà áp vào đây sẽ thành **thử lại mãi mãi mỗi 5 giây** |
+
+**Kiểm chứng:** `test/sheets-pending.test.js` lên **40 khẳng định** — thêm mục 4 (ô trống → dùng
+tên mặc định, vẫn không làm bẩn tab chính) và 4b (cả hai đường phát hiện thiếu tab: tự ngưng,
+**không gọi API nào nữa**, thông báo có tên tab + nói thẳng hậu quả; sửa tên tab thì xoá cờ ngưng
+để thử lại). Mock trả **nguyên văn** `HTTP 400 "Unable to parse range: X!B:B"` như Google thật, để
+test còn kiểm được đường dịch lỗi của QĐ-26.
 
 **Ghi gì vào tab chờ:** 4 cột `A:D` y như tab chính — Tên sound | Link | Số video | Profile.
 Cột **Số video để TRỐNG** (không đọc được thì không bịa). Cột **"Tình trạng" (E) TUYỆT ĐỐI không
@@ -1613,3 +1785,23 @@ chữ số thật** — hiện đang dùng đúng 2 ID lấy từ ảnh người
 | Mở trình duyệt đếm ở chế độ HIỆN để "xem tab đếm" | Playwright mở mỗi browser/context thành CỬA SỔ RIÊNG → sinh ra cửa sổ thứ hai + tốn thêm cả một instance Chromium (người dùng gửi ảnh 2 cửa sổ và bác ngay). Phải dùng CHUNG context của profile để nó thành 1 TAB trong cùng cửa sổ — xem QĐ-33 |
 | Chạy lại cả nhóm profile NGAY sau khi đổi IP | 5 phiên đăng nhập cũ đồng loạt xuất hiện trên một IP vừa mới đổi trong vài giây = đúng khuôn "tài khoản bị chiếm" (QĐ-15, nguyên nhân số 1 khiến TikTok hủy phiên). Phải chờ ~1 phút cho IP nguội — xem QĐ-32 |
 | Dùng ID sound NGẮN làm dữ liệu test khi kiểm lọc trùng | `_extractMusicId` đòi tối thiểu 8 chữ số; ID ngắn không trích được ID nên `normalizeKey` lùi về so nguyên văn URL → 2 slug khác ngôn ngữ của CÙNG sound thành 2 key khác nhau → khẳng định lọc trùng VÔ NGHĨA. Phải dùng ID 19 chữ số thật (lặp lại đúng bẫy QĐ-09) — xem QĐ-33 |
+| Cho việc CHỜ chỉ hiện đếm ngược ở dòng trạng thái, không khóa nút | Người dùng vẫn bấm "▶ Chạy" và profile vào ngay — việc chờ **không ngăn được đúng cái nó sinh ra để ngăn**. Rằng buộc nào có thật thì UI phải **chặn** được, không chỉ **thông báo** — xem QĐ-32 |
+| Chỉ khóa nút Chạy trong pha CHỜ IP nguội | Pha **đang tắt/bật lại VPN** còn nguy hiểm hơn hẳn — HMA vừa bị tắt nên bật profile lúc đó là chạy bằng **IP THẬT**. Phải khóa cả hai pha — xem QĐ-32 |
+| Khóa nút bằng `disabled` mà không kiểm lại trong hàm xử lý | Một lần vẽ lại bảng (`renderProfiles`/`setRowRunning` ghi lại nhãn nút) là nút mở khóa trở lại. `toggleProfile`/`runSelected` phải **tự kiểm tra lại** — cùng khuôn "backend không tin renderer" của QĐ-32 |
+| Đặt việc mở khóa nút ở cuối thân hàm, không trong `finally` | Mọi đường `return` sớm (bị giới hạn nhịp, đổi IP thất bại, người dùng hủy) làm nút **kẹt khóa vĩnh viễn** — người dùng hết cách bật profile bằng tay — xem QĐ-32 |
+| Chỉ cho `stopSelected()` hủy việc tự-chạy-lại-sau-đổi-IP | Dừng bằng nút "■ Dừng" **trên từng hàng** thì app vẫn tự bật lại đúng profile vừa tắt. Dồn về một chỗ duy nhất trong `stopProfileById()` — xem QĐ-32 |
+| Chép logic renderer sang test để "dễ test" | Bản chép sẽ lệch âm thầm: test pass trong khi app hỏng. `vpn-run-lock.test.js` **trích đúng mã nguồn** từ `renderer.js` rồi chạy trong Chromium — ai đổi tên/xóa hàm là test báo lỗi ngay (bài học QĐ-10 áp cho cả test) |
+| Bỏ link ngay sau 1 lượt đọc số thất bại | Trang lỗi của TikTok ghi thẳng *"Please try again later"* kèm nút Refresh — **chính nó khai là lỗi tạm thời**. Mỗi lỗi tạm thời thành 1 sound mất hoặc 1 dòng phải kiểm tay. Thử lại trọn vòng 1 lần, tốn đúng 1 lần tải trang và CHỈ cho ca lỗi — xem QĐ-07 |
+| Thử lại cả khi sound đã XÓA (`10201`) hoặc khi lượt 1 đã đọc được số | Xóa rồi thì lượt 2 cũng thế; đọc được rồi thì thử thêm là **tự dội IP mình** — đúng cái gây ra chặn. Chỉ thử lại đúng ca "còn sống mà không đọc được" — xem QĐ-07 |
+| Để `statusCode` lạ rơi xuống bước sau mà KHÔNG log gì | Mã `10203` tồn tại không biết bao lâu mà không ai hay, chỉ tình cờ phát hiện lúc đo tay một link người dùng gửi. Nhánh "chưa biết nghĩa" **phải để lại dấu**, nếu không thì vĩnh viễn không có dữ liệu để phân loại — xem QĐ-07 |
+| Bắt lỗi bằng cách dò chuỗi "Something went wrong" trên trang | (a) Đo thật: chuỗi đó **cùng tồn tại** với số video đọc được (`16 videos`, `21 videos`) → bắt theo nó là đưa oan cả sound đọc số hoàn hảo vào tab chờ; (b) nó là chuỗi **đa ngôn ngữ**, profile khai `ko-KR` sẽ thấy chữ Hàn — đúng bẫy QĐ-10 đã phải thêm 22 ngôn ngữ cho nhãn "original sound" mà vẫn không đủ. Tín hiệu đáng tin duy nhất là **"có lấy được con số dùng được không"** |
+| Để một tính năng CỨU DỮ LIỆU mặc định TẮT, phải bật tay trên từng máy | Cấu hình nằm ở `%APPDATA%` riêng từng máy, không đồng bộ — với 5 máy thì tính năng thực tế **KHÔNG TỒN TẠI**. Người dùng hỏi 3 lần "sao không thấy link nào", cả 3 lần đều vì ô trống ở đúng máy đang chạy; thiệt hại đo được: 1 sound **262K video** bị bỏ. Chọn mặc định theo **hậu quả khi sai** (tắt sai = mất dữ liệu IM LẶNG; bật sai = thêm vài dòng + có báo lỗi ngay) — xem QĐ-33 |
+| Dùng chuỗi gợi ý (placeholder) mờ trong ô nhập làm cách "cho biết giá trị mặc định" | Người dùng đọc `Total_Link_Voice_Pending` mờ trong ô và tưởng **đã lưu rồi** — mất 3 lượt trao đổi mới truy ra. Placeholder không phải giá trị; muốn có mặc định thì phải **mặc định thật trong code** — xem QĐ-33 |
+| Áp đường "giữ lô rồi thử lại" cho lỗi TAB KHÔNG TỒN TẠI | Thử lại vô ích và thành **mỗi 5 giây một lần gọi API thất bại** cho tới hết phiên. Lỗi tạm thời (mạng, quota) thì giữ lô; lỗi cấu hình thì **ngưng cả phiên + báo đúng một lần** — xem QĐ-33 |
+| Cài một ràng buộc chỉ ở MỘT trong nhiều đường dẫn tới nó | Kể như chưa có. Lần 1: đường "vẽ lại bảng" ghi đè nhãn nút. Lần 2: đường "người dùng tự tắt/bật HMA" — app không biết gì nên nút vẫn sáng. Phải hỏi **AI có thể gây ra trạng thái này**, không chỉ "code của tôi gây ra ở đâu" — xem QĐ-32 |
+| Poll trạng thái VPN bằng `status()` (native messaging) | Mỗi lần **spawn `VpnNM.exe` + chờ 600ms** → poll 2s/lần ≈ **1800 tiến trình/giờ**, quá tốn cho VPS yếu. Dùng `tunnelState()` đọc `os.networkInterfaces()`: đo được **2.1ms/lần**, đồng bộ, không spawn — xem QĐ-32 |
+| Nhận biết VPN nối lại chỉ bằng cờ "adapter có tồn tại" | HMA nối lại mà adapter KHÔNG biến mất thì cờ luôn `true` → không nhận ra lượt nối lại. Phải so **địa chỉ IP trong đường hầm** (`10.252.32.18` → `10.252.40.7`) để đúng ở cả hai kiểu hành vi của adapter — xem QĐ-32 |
+| Coi lần đọc trạng thái ĐẦU TIÊN là một "chuyển tiếp" | Máy mở app lúc HMA đang tắt — hoặc **máy không cài HMA** — bị khoá nút Chạy ngay khi mở app, không bấm được gì. Lần đầu chỉ **lấy mốc**; chỉ hành động khi thấy trạng thái ĐỔI — xem QĐ-32 |
+| Gộp "VPN đang tắt" và "đang đổi IP" thành cùng một nhãn nút | Hai ca người dùng phải xử **khác nhau** (bật lại HMA / chỉ cần chờ). Gộp là bắt họ đoán — xem QĐ-32 |
+| Tự dừng profile khi thấy người dùng tắt VPN | Họ đang **chủ động** điều khiển VPN; tự ý dừng profile của họ là vượt quyền. Chỉ **cảnh báo rõ số lượng** profile đang chạy bằng IP thật rồi để họ quyết — xem QĐ-32 |
+| Hàm trích mã nguồn cho test tìm `"function <tên>("` | Với `async function` nó **cắt mất chữ `async`** → thân hàm có `await` → SyntaxError → harness không nạp được, và Playwright báo `"T is not defined"` — thông báo chẳng liên quan gì tới nguyên nhân, tốn thời gian truy — xem QĐ-32 |

@@ -1,6 +1,6 @@
 # API
 
-> Cập nhật: 2026-08-05 — nguồn sự thật là `preload.cjs` (danh sách kênh) và `main.js`
+> Cập nhật: 2026-08-06 (bảng statusCode của api/music/detail/)
 > (`ipcMain.handle`). Sửa 2 chỗ thì cập nhật lại file này.
 
 Ứng dụng **không có API server**. Phần này ghi lại 3 loại giao tiếp thực tế có trong app.
@@ -33,6 +33,7 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 | `download-progress`, `update-available`, `update-not-available`, `update-error` | nhận | Tiến trình tải + kết quả kiểm tra cập nhật |
 | `vpn-status` | gọi | Đọc trạng thái HMA VPN hiện tại (chỉ đọc, không đổi gì) — [QĐ-32](DECISIONS.md) |
 | `vpn-ipv6-risk` | gọi | Máy có IPv6 công khai (rò rỉ khi VPN tắt) hay không → quyết định dừng RIÊNG 1 profile hay dừng HẾT. Rẻ, đồng bộ, không spawn gì |
+| `vpn-tunnel` | gọi | Đường hầm HMA đang lên/xuống + **IP trong hầm** (`{up, address, iface}`). Renderer poll **2 giây/lần** để biết NGƯỜI DÙNG tự tắt/bật HMA. ⚠ CỐ Ý không dùng `vpn-status` cho việc này: kênh đó spawn `VpnNM.exe` + chờ 600ms (≈1800 tiến trình/giờ nếu poll dày); kênh này chỉ đọc `os.networkInterfaces()` — đo thật **2.1ms/lần** — [QĐ-32](DECISIONS.md) |
 | `vpn-cycle` | gọi | Tắt/bật lại HMA VPN **đúng server đang dùng** để lấy IP mới từ pool (không đổi city — xem QĐ-32). Backend tự chặn nếu còn profile đang chạy + giới hạn nhịp (10 phút/lần, 6 lần/ngày) |
 
 ### Các loại `crawl-status`
@@ -57,7 +58,21 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 | Endpoint | Dùng để | Ghi chú |
 |---|---|---|
 | `https://www.tiktok.com/` | Feed For You | Cần User-Agent Chrome thật, nếu không bị chặn |
-| `api/music/detail/` | Lấy số video của sound | Nghe response khi mở trang `/music/`. `statusCode: 0` = OK; HTTP 400 + `10201` = sound đã xóa |
+| `api/music/detail/` | Lấy số video của sound | Nghe response khi mở trang `/music/` — **không gọi thẳng** (cần tham số ký `X-Bogus`/`msToken`, xem [QĐ-06](DECISIONS.md)) |
+
+**Các `statusCode` đã gặp thật trong body của `api/music/detail/`** — app xử khác nhau hoàn toàn:
+
+| `statusCode` | Nghĩa | App làm gì |
+|---|---|---|
+| `0` | OK, có `musicInfo.stats.videoCount` | Dùng **số chính xác** (vd `88100`, không phải text `"88.1K"` làm tròn) |
+| `10201`, `10202` (thường kèm HTTP 400), hoặc **body rỗng** | Sound đã xóa / không tồn tại | **Bỏ hẳn**, không thử lại, không vào tab chờ. Không tính là "bị chặn" → không phạt tốc độ |
+| **`10203`** (đo 2026-08-06: HTTP 200, body ~205 byte, **không có** `musicInfo`) | Chưa rõ nghĩa — **phụ thuộc IP/vùng**: cùng link, từ IP UK trả `10203` còn từ IP US lại hiện `21 videos` | **Không** coi là sound chết. Rơi xuống đọc giao diện → thử lại trọn vòng → vẫn trượt thì **tab chờ**. Ghi log kèm mã + độ dài body |
+| Mã lạ khác | Chưa gặp | Xử như `10203` (không bỏ oan cái chưa hiểu) |
+| **Không có response nào** | Đang bị chặn / rate-limit | Tăng `failStreak` → phạt tốc độ toàn cục → backoff 30s/2ph/5ph |
+
+⚠️ **Nợ kỹ thuật đã biết:** hai dòng cuối đang bị **gộp** — lỗi của riêng một link (`statusCode`
+lạ) cũng làm tăng `failStreak` nên cũng phạt tốc độ **mọi profile**, dù TikTok chẳng chặn gì. Chờ
+log có số liệu về `10203` rồi mới tách — xem [QĐ-07](DECISIONS.md).
 | `https://www.tiktok.com/music/<slug>-<id>` | Trang sound | Chỉ `<id>` có ý nghĩa, phần chữ bị bỏ qua |
 
 ## 3. Google Sheets API v4

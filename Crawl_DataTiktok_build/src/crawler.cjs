@@ -108,6 +108,13 @@ const STARVE_WAITS = process.env.TTC_STARVE_RETRY_MS
   ? [Number(process.env.TTC_STARVE_RETRY_MS)]
   : [5 * 60000, 15 * 60000, 30 * 60000];
 
+// Số lượt đọc số video cho MỘT sound (2026-08-06). Trang lỗi của TikTok ghi thẳng
+// "Something went wrong — Sorry about that! Please try again later" kèm nút Refresh, tức TikTok
+// TỰ KHAI đây là lỗi TẠM THỜI. Trước đây app bỏ ngay sau 1 lượt nên mỗi lỗi tạm thời = 1 sound
+// mất (hoặc 1 dòng phải kiểm tay). Đặt 1 là tắt hẳn việc thử lại, không cần build lại.
+const COUNT_READ_ATTEMPTS = Math.max(1, Number(process.env.TTC_COUNT_ATTEMPTS) || 2);
+const COUNT_RETRY_WAIT_MS = Math.max(0, Number(process.env.TTC_COUNT_RETRY_MS) || 2500);
+
 // ── Vòng lặp crawl cho 1 profile (nhận cờ `stop` riêng) ──
 // `onPending` (QĐ-33): link TikTok trả "Something went wrong" — không đọc được số video nhưng
 // sound VẪN CÒN. Trả về true nếu đã xếp vào tab chờ (để log nói đúng việc đã làm).
@@ -673,47 +680,82 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
       // giãn nhịp → không dội IP khi chạy nhiều profile (nguyên nhân kẹt "nghỉ 300s").
       const gotSlot = await acquireCountSlot(stop);
       if (!gotSlot) break;   // đã yêu cầu dừng
+      let oddStatus = null;  // statusCode TikTok trả về mà ta chưa biết nghĩa (để log — xem dưới)
       try {
         // ĐỌC QUA API (2026-07-06): trang /music/ tự gọi api/music/detail/ ngay khi tải.
         // Nghe response đó thay vì poll DOM: (a) có số CHÍNH XÁC (videoCount=88100 thay vì
         // text "88.1K" làm tròn), (b) về sớm ~1s, (c) phân biệt được sound CHẾT (API trả
         // body RỖNG — đã verify) với BỊ CHẶN (không có response).
         // Quy trình 2 BƯỚC (user chốt 2026-07-12): API lỗi → đọc GIAO DIỆN (DOM) trên chính
-        // trang vừa tải → cả 2 đều lỗi → BỎ LINK LUÔN (không retry, không nhả dòng '?').
-        try {
-          // Đăng ký nghe TRƯỚC khi điều hướng để không lỡ response.
-          const respPromise = sidePage
-            .waitForResponse(r => r.url().includes('/api/music/detail/'), { timeout: 20000 })
-            .catch(() => null);
-          await sidePage.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-          const resp = await respPromise;
-          if (resp) {
-            let body = '';
-            try { body = await resp.text(); } catch (_) {}
-            let j = null;
-            try { j = JSON.parse(body); } catch (_) {}
-            if (j && j.statusCode === 0 && j.musicInfo && j.musicInfo.stats
-                && typeof j.musicInfo.stats.videoCount === 'number') {
-              raw = j.musicInfo.stats.videoCount;
-            } else if (!body.trim() || resp.status() === 400
-                       || (j && (j.statusCode === 10201 || j.statusCode === 10202))) {
-              // Sound chết/không tồn tại — đã verify thực tế: HTTP 400 + statusCode
-              // 10201 (hoặc body rỗng). KHÔNG phải bị chặn → không phạt/backoff.
-              dead = true;
-            }
-            // Trường hợp khác (statusCode lạ) → để raw=null, rơi xuống bước đọc DOM.
+        // trang vừa tải → cả 2 đều lỗi → không nhả dòng '?' vào dữ liệu.
+        //
+        // THỬ LẠI TRỌN VÒNG (2026-08-06, COUNT_READ_ATTEMPTS): xem lý do ở chỗ khai hằng số.
+        // KHÔNG mâu thuẫn QĐ-07 ("không retry"): QĐ-07 chặn việc GHI SỐ KHÔNG CHẮC vào dữ liệu
+        // — thử lại rồi đọc được SỐ THẬT không tạo dữ liệu bẩn nào.
+        // GIỮ NGUYÊN slot đếm suốt các lượt (không nhả rồi xin lại): slot là để hãm nhịp request
+        // `/music/` từ một IP, nên lúc TikTok đang lỗi thì chậm lại là ĐÚNG hướng.
+        for (let attempt = 1; attempt <= COUNT_READ_ATTEMPTS; attempt++) {
+          if (stop.requested || raw !== null || dead) break;
+          if (attempt > 1) {
+            onStatus(profile.id, 'running', `"${item.name}": TikTok trả trang lỗi`
+              + ` — thử lại lượt ${attempt}/${COUNT_READ_ATTEMPTS}...`);
+            await interruptibleSleep(COUNT_RETRY_WAIT_MS, stop);
+            if (stop.requested) break;
           }
-          // BƯỚC 2: API không có kết quả → đọc GIAO DIỆN (DOM) trên trang vừa tải.
-          if (raw === null && !dead && !stop.requested) {
-            for (let i = 0; i < 6 && !stop.requested; i++) {
-              const t = await readVideoCount(sidePage);
-              if (t) { raw = t; break; }
-              await sleep(500);
+          try {
+            // Đăng ký nghe TRƯỚC khi điều hướng để không lỡ response.
+            const respPromise = sidePage
+              .waitForResponse(r => r.url().includes('/api/music/detail/'), { timeout: 20000 })
+              .catch(() => null);
+            await sidePage.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+            const resp = await respPromise;
+            if (resp) {
+              let body = '';
+              try { body = await resp.text(); } catch (_) {}
+              let j = null;
+              try { j = JSON.parse(body); } catch (_) {}
+              if (j && j.statusCode === 0 && j.musicInfo && j.musicInfo.stats
+                  && typeof j.musicInfo.stats.videoCount === 'number') {
+                raw = j.musicInfo.stats.videoCount;
+              } else if (!body.trim() || resp.status() === 400
+                         || (j && (j.statusCode === 10201 || j.statusCode === 10202))) {
+                // Sound chết/không tồn tại — đã verify thực tế: HTTP 400 + statusCode
+                // 10201 (hoặc body rỗng). KHÔNG phải bị chặn → không phạt/backoff.
+                dead = true;
+              } else if (j && typeof j.statusCode === 'number') {
+                // statusCode LẠ → KHÔNG coi là sound chết (chưa biết nghĩa thì đừng bỏ oan),
+                // rơi xuống bước đọc DOM. Nhưng phải GHI LẠI: trước đây ca này bị bỏ qua trong
+                // im lặng nên `10203` (đo thật 2026-08-06: body chỉ 205 byte, không có
+                // musicInfo) tồn tại bao lâu cũng không ai biết. Có log mới phân loại đúng được.
+                oddStatus = `${j.statusCode} (body ${body.length} byte)`;
+              }
             }
-          }
-        } catch (_) {}
+            // BƯỚC 2: API không có kết quả → đọc GIAO DIỆN (DOM) trên trang vừa tải.
+            //
+            // KIÊN NHẪN TĂNG DẦN theo lượt (2026-08-06): lượt 1 chờ 3s như cũ, lượt 2 chờ 6s.
+            // Lý do: người dùng chỉ đúng nguyên nhân — **VPS yếu nên không dựng nổi trang**. Cùng
+            // một link, VPS hiện "Something went wrong" còn máy chính hiện `262K video`. Máy chậm
+            // thì header có thể mất hơn 3s mới xong, mà 3s là toàn bộ ngân sách cũ.
+            // Vì sao không nâng cả lượt 1: trang lỗi THẬT sẽ luôn tiêu hết ngân sách, nâng cả 2
+            // lượt là mọi link lỗi đắt gấp đôi. Đã sang lượt 2 thì link vốn đã đáng ngờ → chờ
+            // thêm là hợp lý; còn lượt 1 phải nhanh để không kéo cả hàng đợi.
+            if (raw === null && !dead && !stop.requested) {
+              const rounds = attempt === 1 ? 6 : 12;
+              for (let i = 0; i < rounds && !stop.requested; i++) {
+                const t = await readVideoCount(sidePage);
+                if (t) { raw = t; break; }
+                await sleep(500);
+              }
+            }
+          } catch (_) {}
+        }
       } finally {
         releaseCountSlot();
+      }
+      // Chỉ báo khi thực sự KHÔNG đọc được — statusCode lạ mà lượt sau đọc ra số thì không cần ồn.
+      if (oddStatus && raw === null && !dead && !stop.requested) {
+        onStatus(profile.id, 'running',
+          `"${item.name}": TikTok trả statusCode lạ ${oddStatus} — không đọc được số video.`);
       }
 
       // Cập nhật chuỗi fail + phạt tốc độ TOÀN CỤC trước khi quyết định bỏ/giữ.
