@@ -109,6 +109,12 @@ function _norm(c) {
   const u = String(c || '').toUpperCase();
   return _ALIASES[u] || u;
 }
+// XUẤT RA để mọi nơi so quốc gia dùng CHUNG một phép quy đổi (2026-08-05).
+// Lý do: `vpn-hma.cjs` cũng phải so nhãn quốc gia của profile với vùng HMA đang nối, và lần
+// đầu nó tự so chuỗi thẳng → profile `(UK)` gặp HMA báo `GB` là bị coi là LỆCH → tính năng đổi
+// IP tự chối chạy với TOÀN BỘ profile UK. Đúng bẫy QĐ-10: 2 bản sao của cùng một logic thì
+// chúng SẼ lệch nhau. Test `vpn-hma.test.js` mục 3 bắt được ngay lúc triển khai.
+const normalizeCountry = _norm;
 
 // So nhãn quốc gia mong muốn với IP thật.
 // Trả { state, ip, country, want }
@@ -124,4 +130,4 @@ async function check(wantCountry, opts) {
   return { state: _norm(country) === want ? 'ok' : 'mismatch', ip, country, want };
 }
 
-module.exports = { check, getPublicIp };
+module.exports = { check, getPublicIp, normalizeCountry };

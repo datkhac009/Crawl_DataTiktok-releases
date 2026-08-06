@@ -2,7 +2,7 @@
 
 > Mã nguồn thật: `Crawl_DataTiktok_build/` (cùng repo, thư mục ngang cấp với `_kit`)
 > — thư mục `_kit` này chỉ chứa tài liệu & kế hoạch.
-> Cập nhật: 2026-07-28
+> Cập nhật: 2026-08-05
 
 ## Tổng quan
 
@@ -31,7 +31,7 @@ sound TikTok. Mỗi profile = một tài khoản TikTok, chạy độc lập, c�
 | `crawler/util.cjs` | `sleep`/`rand`/`interruptibleSleep`, `parseCount`, `isOriginalSound` |
 | `crawler/count-throttle.cjs` | Semaphore đếm video **toàn app** — chống dội `/music/` từ cùng 1 IP |
 | `crawler/page-read.cjs` | `readActiveSound`/`readVideoCount`/`scrollFeed`/`recyclePage` |
-| `crawler/stuck.cjs` | `makeFeedTracker` + chẩn đoán & thoát kẹt feed 3 cấp |
+| `crawler/stuck.cjs` | `makeFeedTracker` + chẩn đoán & thoát kẹt feed 3 cấp + `looksStarved` (nhận biết **feed cạn** — QĐ-31) |
 | `crawler/session-watch.cjs` | `checkLoginState` + theo dõi phiên đăng nhập giữa lúc chạy |
 | `resource-blocker.cjs` | Chặn ảnh/media/font — **dùng chung** cho tab đếm và cửa sổ 🦊 |
 | `ip-guard.cjs` | Canh IP công khai khớp nhãn quốc gia profile (VPN tụt trên VPS) |
@@ -46,6 +46,7 @@ sound TikTok. Mỗi profile = một tài khoản TikTok, chạy độc lập, c�
 | `history.cjs` | **Lịch sử theo ngày**: đếm sound thu được, ghi `config/history.json` (ghi trễ + atomic) |
 | `paths.cjs` | Đường dẫn dữ liệu (cạnh file .exe khi đóng gói) |
 | `updater.cjs` | Tải Firefox khi thiếu. **Tự cập nhật đang TẮT** — xem [QĐ-18](DECISIONS.md) |
+| `vpn-hma.cjs` | Điều khiển HMA VPN (tắt/bật lại lấy IP mới khi feed cạn) qua native messaging của chính HMA + `ipv6LeakRisk()` phát hiện rò rỉ IPv6 — [QĐ-32](DECISIONS.md) |
 
 ### Một vòng quét dùng chung cho mọi chế độ
 
@@ -67,9 +68,11 @@ Không nằm trong bản đóng gói. Chạy: `pnpm test`.
 
 | File | Kiểm gì |
 |---|---|
-| `crawl-modes.test.js` | 13 kịch bản — mock Playwright + `browser.cjs` để chạy engine thật không cần TikTok: tiền tố log từng chế độ, thoát kẹt (trùng sound / không đọc được sound), chế độ khách, `recycle` bật/tắt đúng chế độ, canh IP (lệch → tạm dừng, về đúng vùng → tự chạy tiếp) |
-| `chromium-profile.test.js` | 49 khẳng định cho chế độ **profile Chromium riêng** (QĐ-27, QĐ-28): mặc định TẮT, mở đúng `<profile>/ChromiumProfile` + giới hạn cache, dọn `SingletonLock` kẹt, vân tay khớp chế độ thường, lần đầu bơm cookie sang (lần sau không bơm lại), tab đếm dùng chung context và không bị đóng oan, nút 🦊 mở TAB MỚI chứ không chiếm tab feed đang quét, và **trộn 2 chế độ trên cùng máy** (profile bật / profile tắt không ăn theo nhau) |
+| `crawl-modes.test.js` | 19 kịch bản — mock Playwright + `browser.cjs` để chạy engine thật không cần TikTok: tiền tố log từng chế độ, thoát kẹt (trùng sound / không đọc được sound), chế độ khách, `recycle` bật/tắt đúng chế độ, canh IP (lệch → tạm dừng, về đúng vùng → tự chạy tiếp), và **feed cạn** (QĐ-31: báo đúng khi cạn, **không báo oan** khi nút còn bấm được / feed còn nhiều video / đang là khách; chu kỳ cắt pha Quét sang pha Xem).<br>⚠ **13 kịch bản GỐC chỉ IN log, KHÔNG có khẳng định nào** — pass chỉ nghĩa "không ném lỗi". Chỉ 17 khẳng định của phần feed cạn là kiểm thật (trượt → exit ≠ 0). |
+| `chromium-profile.test.js` | 58 khẳng định cho chế độ **profile Chromium riêng** (QĐ-27, QĐ-28): mặc định TẮT, mở đúng `<profile>/ChromiumProfile` + giới hạn cache, dọn `SingletonLock` kẹt, vân tay khớp chế độ thường, lần đầu bơm cookie sang (lần sau không bơm lại), nút 🦊 mở TAB MỚI chứ không chiếm tab feed đang quét, **trộn 2 chế độ trên cùng máy** (profile bật / profile tắt không ăn theo nhau), và **tab đếm theo chế độ hiển thị** — chạy ẩn thì dùng chung context (không bị đóng oan), chạy hiện thì tách sang trình duyệt ẩn riêng |
 | `sheet-rows-status.test.js` | 15 khẳng định cho ô **"Sheet: N dòng data"** (QĐ-29): luôn hiện dù dòng thông báo đang bị lỗi/câu dài chiếm, mà cũng không xoá mất câu đó; dựng lại đúng 2 câu đã gây lỗi thật; đối chiếu thẳng `renderer.js`/`index.html`/`styles.css` để bản sao logic không lệch âm thầm |
+| `sheets-pending.test.js` | 26 khẳng định cho **tab chờ kiểm tay** (QĐ-33), mock `google-api.cjs`: ghi đúng 4 cột A:D và **không bao giờ ghi cột E "Tình trạng"**; ghi đúng tab chờ, **tuyệt đối không** ghi vào tab chính; không ghi trùng (link đã có trên Sheet / vừa ghi / **cùng ID khác slug ngôn ngữ**); để trống tên tab = tắt hoàn toàn (không gọi API nào); đổi tên tab thì quên danh sách tab cũ; lỗi ghi thì **giữ lô rồi ghi lại được**. ⚠ Dùng ID sound **19 chữ số thật** — ID ngắn làm `normalizeKey` lùi về so nguyên văn URL và khẳng định lọc trùng thành vô nghĩa |
+| `vpn-hma.test.js` | 60 khẳng định điều khiển HMA VPN (QĐ-32), mock toàn bộ `child_process`: **mặc định nối lại đúng server cũ, không xoay city** (`rotate:true` là đường dự phòng, vẫn kiểm); **tuyệt đối không dùng `ConnectToOptimal`** (đo thật trả về Việt Nam bất kể profile khai nước nào); từ chối đổi IP khi quốc gia HMA đang nối không khớp profile hoặc khi HMA đang tắt sẵn; cảnh báo rõ "VPN có thể đang TẮT" khi bật lại thất bại; `status()` chỉ đọc, không đụng VPN; và **`ipv6LeakRisk()`** — nhận đúng `2000::/3` là rò rỉ, **không** tính Tailscale `fd7a:`/link-local `fe80`, không tính IPv6 trên adapter VPN, nhận cả `family` dạng số `6` |
 | `ui-responsive.test.js` | Đo layout ở 5 khổ cửa sổ bằng Chromium, phát hiện nội dung bị cắt, chụp ảnh vào `.ui-shots/` |
 
 ## 5 chế độ crawl
@@ -101,7 +104,13 @@ Cuộn feed ──► đọc link sound ──► lọc trùng (linkkey) ──�
                                      bảng kết quả + Google Sheet
 ```
 
-Cả 2 bước đều thất bại → **bỏ link**, không ghi dòng `?` vào dữ liệu.
+Cả 2 bước đều thất bại → **không vào dữ liệu chính** (không ghi dòng `?` — QĐ-07). Nhưng từ
+2026-08-06 ([QĐ-33](DECISIONS.md)) phân biệt tiếp:
+
+| Ca | Xử lý |
+|---|---|
+| Sound **đã bị xóa** (`statusCode 10201`) | **Bỏ hẳn** — không có gì cho người kiểm |
+| Sound **còn sống**, TikTok trả *"Something went wrong"* | → **TAB CHỜ** trên Sheet để người kiểm tay (cột "Tình trạng" để trống) |
 
 ## Kiến trúc trình duyệt
 
@@ -125,7 +134,10 @@ test, các profile còn lại vẫn dùng chung một Chromium như cũ.
 - Mỗi profile **1 Chromium + 1 thư mục riêng** `<profile>/ChromiumProfile` — giữ cả
   `localStorage`/`IndexedDB` nên **TikTok ít hủy phiên hơn**. Đổi lại **+150–250MB RAM mỗi
   profile** (5 profile ≈ +1GB) và ~100–200MB đĩa mỗi profile.
-- **Tab đếm dùng CHUNG context của profile** — một thư mục chỉ cho một Chromium mở.
+- **Tab đếm**: chạy **ẩn** → dùng chung context của profile (một thư mục chỉ cho một *persistent
+  context* mở, và không ai thấy tab nên tiết kiệm được 1 instance). Chạy **hiện** → tách sang
+  **trình duyệt ẩn riêng**, để tab `/music/` không lòi vào cửa sổ người dùng đang xem
+  (sửa 2026-08-05 — xem bổ sung của [QĐ-27](DECISIONS.md)).
 - Nút 🦊 **dùng lại** context đang crawl nếu profile đang chạy.
 - Lần đầu bật: cookie trong `session.state.json` được bơm sang nên **không mất đăng nhập**.
 - Đổi công tắc chỉ áp cho **lần bật profile tiếp theo**.
@@ -186,6 +198,21 @@ sound với 2 kiểu slug khác nhau không còn bị tính là 2 sound.
 
 - **Feed kẹt**: đọc trúng cùng 1 sound 20 lần liên tiếp → chẩn đoán trang rồi thoát kẹt theo
   3 cấp (bấm nút "video kế tiếp" của TikTok → click lấy con trỏ + phím xuống → tải lại).
+- **Feed cạn** (TikTok không cấp thêm video, [QĐ-31](DECISIONS.md)): kẹt + trang chỉ còn ≤2
+  video + không có nút "xuống" dùng được + đã thử trọn vòng 3 cấp + **không** phải chế độ khách
+  → chu kỳ **cắt pha Quét sang pha Xem**; chế độ khác **tạm dừng 5/15/30 phút** rồi thử lại.
+  Phải đủ cả 5 điều kiện — báo oan làm profile khoẻ tự tạm dừng. Kết luận mất 2–3 phút, thay
+  cho việc quay vòng thoát kẹt vô hạn (đo thật: ~2 giờ ra 0 sound).
+- **Tự đổi IP khi feed cạn** ([QĐ-32](DECISIONS.md), tùy chọn — mặc định TẮT): phát hiện feed
+  cạn phát status riêng `feed-starved` → nếu công tắc "Tự đổi IP" bật, renderer dừng profile →
+  **tắt/bật lại HMA VPN đúng server đang dùng** (qua native messaging của chính HMA,
+  `src/vpn-hma.cjs`) → chạy lại đúng nhóm vừa dừng. **Không cần đổi city** — HMA cấp IP từ pool
+  mỗi lần kết nối (đo thật: cùng gateway London cho `18.171.54.19` → `18.132.40.68`).
+  Giới hạn 10 phút/lần, 6 lần/ngày.
+  **Dừng 1 hay dừng hết do `ipv6LeakRisk()` quyết định**: máy có IPv6 công khai thì lúc VPN tắt
+  IPv6 đi thẳng ra IP thật (đo: lọt trong 241ms, `systemKillSwitchActive` của HMA KHÔNG chặn) →
+  phải dừng hết; máy đã tắt IPv6 → chỉ dừng đúng profile bị cạn. Kiểm ở **cả** renderer (để
+  quyết định) và `main.js` (chốt lại, không tin renderer).
 - **Chế độ khách**: sau khi feed hiện, kiểm tra trang có nút "Log in" không. Có → dừng ngay
   với thông báo *"cần đăng nhập lại bằng 🦊"* thay vì cào vô ích hàng giờ.
 - **Thống kê cuộn**: mỗi 100 lần cuộn ghi `Cuộn 100 lần, gặp N sound khác nhau, M sound mới`

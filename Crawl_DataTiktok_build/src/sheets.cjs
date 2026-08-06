@@ -6,12 +6,15 @@
 //   2. Ghi dữ liệu bằng values:append trên phạm vi A:Z (thêm dòng mới vào cuối tab,
 //      dò dòng cuối xét MỌI cột — an toàn khi nhiều máy/tiến trình cùng ghi 1 Sheet).
 //   3. Gộp lô: buffer nhiều dòng, flush khi đủ 10 dòng hoặc sau 5 giây.
-'use strict';
+"use strict";
 
 const {
-  httpRequest, getToken, extractSpreadsheetId, SHEETS_BASE,
-} = require('./google-api.cjs');
-const quota = require('./quota-guard.cjs');
+  httpRequest,
+  getToken,
+  extractSpreadsheetId,
+  SHEETS_BASE,
+} = require("./google-api.cjs");
+const quota = require("./quota-guard.cjs");
 
 const BATCH_SIZE = 10;
 const FLUSH_MS = 5000;
@@ -30,22 +33,30 @@ async function appendRows(spreadsheetId, tab, rows, sa) {
   if (!rows.length) return;
   const token = await getToken(sa);
   const range = encodeURIComponent(`${tab}!A:Z`);
-  const url = `${SHEETS_BASE}/${spreadsheetId}/values/${range}:append`
-    + `?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
+  const url =
+    `${SHEETS_BASE}/${spreadsheetId}/values/${range}:append` +
+    `?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
 
-  const resp = await httpRequest('POST', url, {
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  const resp = await httpRequest("POST", url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
     body: { values: rows },
   });
   if (resp.status < 200 || resp.status >= 300) {
     if (quota.isQuotaError(resp.status, resp.body)) {
-      quota.noteQuotaHit('ghi dòng lên Sheet');
-      throw new Error(`Google API vượt giới hạn (HTTP ${resp.status}) — lô này được giữ lại`
-        + ` trong bộ đệm và tự đẩy lại sau ${Math.round(quota.COOLDOWN_MS / 1000)}s.`);
+      quota.noteQuotaHit("ghi dòng lên Sheet");
+      throw new Error(
+        `Google API vượt giới hạn (HTTP ${resp.status}) — lô này được giữ lại` +
+          ` trong bộ đệm và tự đẩy lại sau ${Math.round(quota.COOLDOWN_MS / 1000)}s.`,
+      );
     }
-    if (resp.status === 400 && /unable to parse range/i.test(resp.body || '')) {
-      throw new Error(`Không có tab tên "${tab}" trên Google Sheet này — không ghi được.`
-        + ' Mở ☁ Google Sheet sửa lại "Tên tab" rồi Lưu (bấm 🔌 Test kết nối để xem tab có thật).');
+    if (resp.status === 400 && /unable to parse range/i.test(resp.body || "")) {
+      throw new Error(
+        `Không có tab tên "${tab}" trên Google Sheet này — không ghi được.` +
+          ' Mở ☁ Google Sheet sửa lại "Tên tab" rồi Lưu (bấm 🔌 Test kết nối để xem tab có thật).',
+      );
     }
     throw new Error(`append HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
   }
@@ -76,46 +87,61 @@ async function readLinkColumn(spreadsheetId, tab, sa, { startRow = 1 } = {}) {
   const id = extractSpreadsheetId(spreadsheetId);
   if (!id) return { links: [], rawRows: 0 };
   const from = Math.max(1, parseInt(startRow, 10) || 1);
-  const a1 = from > 1 ? `${tab || 'Data'}!B${from}:B` : `${tab || 'Data'}!B:B`;
+  const a1 = from > 1 ? `${tab || "Data"}!B${from}:B` : `${tab || "Data"}!B:B`;
   const url = `${SHEETS_BASE}/${id}/values/${encodeURIComponent(a1)}?majorDimension=ROWS`;
 
   let lastErr;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const token = await getToken(sa);
-      const resp = await httpRequest('GET', url, {
-        headers: { 'Authorization': `Bearer ${token}` },
+      const resp = await httpRequest("GET", url, {
+        headers: { Authorization: `Bearer ${token}` },
         timeoutMs: READ_LINKS_TIMEOUT_MS,
       });
       if (resp.status < 200 || resp.status >= 300) {
         // Vượt quota thì MỞ CẦU DAO rồi ném lỗi nói rõ — để nơi gọi không thử lại dồn dập.
         if (quota.isQuotaError(resp.status, resp.body)) {
-          quota.noteQuotaHit('đọc cột Link');
-          throw new Error(`Google API vượt giới hạn (HTTP ${resp.status}) — tạm ngưng đọc Sheet`
-            + ` ${Math.round(quota.COOLDOWN_MS / 1000)}s. Nếu bị thường xuyên: dùng Service Account`
-            + ' RIÊNG cho từng máy (hạn 60 request/phút tính theo từng Service Account).');
+          quota.noteQuotaHit("đọc cột Link");
+          throw new Error(
+            `Google API vượt giới hạn (HTTP ${resp.status}) — tạm ngưng đọc Sheet` +
+              ` ${Math.round(quota.COOLDOWN_MS / 1000)}s. Nếu bị thường xuyên: dùng Service Account` +
+              " RIÊNG cho từng máy (hạn 60 request/phút tính theo từng Service Account).",
+          );
         }
         // HTTP 400 "Unable to parse range" = TÊN TAB KHÔNG TỒN TẠI trên Sheet. Thông báo gốc
         // của Google (`Unable to parse range: Data!B:B`) rất khó hiểu — người dùng đã mất thời
         // gian vì nó (2026-08-03: cấu hình để tab mặc định "Data" nhưng Sheet không có tab đó).
         // Nói thẳng ra vấn đề + chỉ đúng chỗ sửa.
-        if (resp.status === 400 && /unable to parse range/i.test(resp.body || '')) {
-          throw new Error(`Không có tab tên "${tab || 'Data'}" trên Google Sheet này.`
-            + ' Mở ☁ Google Sheet → sửa lại đúng "Tên tab" (phân biệt chữ hoa/thường, đúng cả'
-            + ' dấu gạch dưới) → Lưu. Bấm 🔌 Test kết nối để xem danh sách tab có thật.');
+        if (
+          resp.status === 400 &&
+          /unable to parse range/i.test(resp.body || "")
+        ) {
+          throw new Error(
+            `Không có tab tên "${tab || "Data"}" trên Google Sheet này.` +
+              ' Mở ☁ Google Sheet → sửa lại đúng "Tên tab" (phân biệt chữ hoa/thường, đúng cả' +
+              " dấu gạch dưới) → Lưu. Bấm 🔌 Test kết nối để xem danh sách tab có thật.",
+          );
         }
-        throw new Error(`đọc Sheet HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
+        throw new Error(
+          `đọc Sheet HTTP ${resp.status}: ${resp.body.slice(0, 200)}`,
+        );
       }
       let data;
-      try { data = JSON.parse(resp.body); } catch (_) { data = {}; }
+      try {
+        data = JSON.parse(resp.body);
+      } catch (_) {
+        data = {};
+      }
       const rows = data.values || [];
       return {
-        links: rows.map(r => (r && r[0] ? String(r[0]).trim() : '')).filter(Boolean),
+        links: rows
+          .map((r) => (r && r[0] ? String(r[0]).trim() : ""))
+          .filter(Boolean),
         rawRows: rows.length,
       };
     } catch (e) {
       lastErr = e;
-      if (attempt === 0) await new Promise(r => setTimeout(r, 1000));
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 1000));
     }
   }
   throw lastErr;
@@ -123,14 +149,16 @@ async function readLinkColumn(spreadsheetId, tab, sa, { startRow = 1 } = {}) {
 
 // Đọc TOÀN BỘ cột Link (giữ nguyên chữ ký cũ — dùng ở đầu phiên và ở nút "Đẩy lên Sheet").
 async function readLinks(spreadsheetId, tab, sa) {
-  const { links } = await readLinkColumn(spreadsheetId, tab, sa, { startRow: 1 });
+  const { links } = await readLinkColumn(spreadsheetId, tab, sa, {
+    startRow: 1,
+  });
   return links;
 }
 
 // Khóa so trùng dùng CHUNG với crawler.cjs (src/linkkey.cjs) — trước đây là bản copy
 // riêng và ĐÃ TỪNG LỆCH (crawler thêm rút gọn link 2026-07-12, bản ở đây không theo →
 // link dài cũ và link ngắn mới bị coi là 2 sound → nút đẩy bù tạo trùng).
-const { normalizeKey } = require('./linkkey.cjs');
+const { normalizeKey } = require("./linkkey.cjs");
 
 // ── Link ĐÃ CÓ trên Sheet (từ máy này lẫn máy khác) — chặn trùng LIÊN MÁY ở cửa đẩy ──
 // Nạp lúc bắt đầu phiên + cập nhật định kỳ (main.js đọc lại cột B). Mọi đường đẩy tự
@@ -143,10 +171,14 @@ const _knownLinks = new Set();
 // động (dữ liệu vẫn hiện trong bảng ở app, không mất — chỉ chưa lên Sheet), main.js tự thử
 // lại đọc mỗi phút cho tới khi thành công.
 let _seeded = false;
-function isSeeded() { return _seeded; }
+function isSeeded() {
+  return _seeded;
+}
 // Số link đã biết (nạp từ Sheet + đã tự đẩy) — hiện ra UI để người dùng thấy bộ lọc
 // trùng đang giữ bao nhiêu link, thay vì phải mò trong log.
-function knownCount() { return _knownLinks.size; }
+function knownCount() {
+  return _knownLinks.size;
+}
 
 // ── TỔNG SỐ DÒNG hiện có trên tab Sheet (để hiện lên UI) ──
 // Đếm theo SỐ DÒNG THÔ của cột B mà app đã đọc được — khớp với số dòng cuối bạn thấy trên
@@ -156,12 +188,17 @@ function knownCount() { return _knownLinks.size; }
 //   (c) app tự đẩy thành công → cộng thêm số dòng vừa ghi (không phải chờ tới lần đọc sau)
 // 0 = chưa đọc lần nào (chưa cấu hình Sheet, hoặc chưa chạy) → UI ẩn badge.
 let _sheetRows = 0;
-function sheetRowCount() { return _sheetRows; }
+function sheetRowCount() {
+  return _sheetRows;
+}
 function updateKnownLinks(links) {
   let added = 0;
-  for (const u of (links || [])) {
+  for (const u of links || []) {
     const k = normalizeKey(u);
-    if (k && !_knownLinks.has(k)) { _knownLinks.add(k); added++; }
+    if (k && !_knownLinks.has(k)) {
+      _knownLinks.add(k);
+      added++;
+    }
   }
   _seeded = true;
   // Gỡ luôn khỏi buffer đang chờ những link đã lên Sheet bằng đường khác (máy khác đẩy).
@@ -175,13 +212,20 @@ function updateKnownLinks(links) {
 // Bấm bao nhiêu lần cũng không tạo trùng. Trả { ok, pushed, skipped, total }.
 async function pushDedup(cfgRaw, rows) {
   const spreadsheetId = extractSpreadsheetId(cfgRaw.spreadsheetId);
-  const tab = cfgRaw.tab || 'Data';
+  const tab = cfgRaw.tab || "Data";
   const sa = cfgRaw.sa;
-  if (!spreadsheetId || !sa) return { ok: false, msg: 'Chưa cấu hình Google Sheet (ID/Service Account).' };
-  if (!Array.isArray(rows) || !rows.length) return { ok: false, msg: 'Bảng dữ liệu đang trống.' };
+  if (!spreadsheetId || !sa)
+    return {
+      ok: false,
+      msg: "Chưa cấu hình Google Sheet (ID/Service Account).",
+    };
+  if (!Array.isArray(rows) || !rows.length)
+    return { ok: false, msg: "Bảng dữ liệu đang trống." };
 
   // Link đã có trên Sheet (đọc MỚI ngay lúc bấm — thấy cả những gì máy khác vừa ghi).
-  const existing = new Set((await readLinks(spreadsheetId, tab, sa)).map(normalizeKey));
+  const existing = new Set(
+    (await readLinks(spreadsheetId, tab, sa)).map(normalizeKey),
+  );
 
   const fresh = [];
   const seenInBatch = new Set(); // chống trùng ngay trong chính bảng gửi lên
@@ -191,13 +235,19 @@ async function pushDedup(cfgRaw, rows) {
     seenInBatch.add(key);
     fresh.push(r);
   }
-  if (!fresh.length) return { ok: true, pushed: 0, skipped: rows.length, total: rows.length };
+  if (!fresh.length)
+    return { ok: true, pushed: 0, skipped: rows.length, total: rows.length };
 
   // Append theo lô 200 dòng/lần cho nhẹ request.
   for (let i = 0; i < fresh.length; i += 200) {
     await appendRows(spreadsheetId, tab, fresh.slice(i, i + 200), sa);
   }
-  return { ok: true, pushed: fresh.length, skipped: rows.length - fresh.length, total: rows.length };
+  return {
+    ok: true,
+    pushed: fresh.length,
+    skipped: rows.length - fresh.length,
+    total: rows.length,
+  };
 }
 
 // ── DỌN TRÙNG TRÊN SHEET (2026-07-29) ──
@@ -214,35 +264,59 @@ const SCAN_TIMEOUT_MS = 150000;
 
 async function _fetchAllRows(spreadsheetId, tab, sa) {
   const token = await getToken(sa);
-  const range = encodeURIComponent(`${tab || 'Data'}!A:Z`);
-  const resp = await httpRequest('GET',
+  const range = encodeURIComponent(`${tab || "Data"}!A:Z`);
+  const resp = await httpRequest(
+    "GET",
     `${SHEETS_BASE}/${spreadsheetId}/values/${range}?majorDimension=ROWS`,
-    { headers: { 'Authorization': `Bearer ${token}` }, timeoutMs: SCAN_TIMEOUT_MS });
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: SCAN_TIMEOUT_MS,
+    },
+  );
   if (resp.status < 200 || resp.status >= 300) {
-    throw new Error(`đọc Sheet HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
+    throw new Error(
+      `đọc Sheet HTTP ${resp.status}: ${resp.body.slice(0, 200)}`,
+    );
   }
   let data;
-  try { data = JSON.parse(resp.body); } catch (_) { data = {}; }
+  try {
+    data = JSON.parse(resp.body);
+  } catch (_) {
+    data = {};
+  }
   return data.values || [];
 }
 
 async function _getSheetId(spreadsheetId, tab, sa) {
   const token = await getToken(sa);
-  const resp = await httpRequest('GET',
+  const resp = await httpRequest(
+    "GET",
     `${SHEETS_BASE}/${spreadsheetId}?fields=sheets.properties(sheetId,title)`,
-    { headers: { 'Authorization': `Bearer ${token}` } });
-  if (resp.status !== 200) throw new Error(`đọc metadata HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (resp.status !== 200)
+    throw new Error(
+      `đọc metadata HTTP ${resp.status}: ${resp.body.slice(0, 200)}`,
+    );
   let data;
-  try { data = JSON.parse(resp.body); } catch (_) { data = {}; }
-  const found = (data.sheets || []).find(s => s.properties && s.properties.title === (tab || 'Data'));
-  if (!found) throw new Error(`Không tìm thấy tab "${tab || 'Data'}" trên Sheet.`);
+  try {
+    data = JSON.parse(resp.body);
+  } catch (_) {
+    data = {};
+  }
+  const found = (data.sheets || []).find(
+    (s) => s.properties && s.properties.title === (tab || "Data"),
+  );
+  if (!found)
+    throw new Error(`Không tìm thấy tab "${tab || "Data"}" trên Sheet.`);
   return found.properties.sheetId;
 }
 
 // Điểm "đầy đủ dữ liệu tự ghi" = số ô không rỗng từ cột E (index 4) trở đi.
 function _completeness(row) {
   let n = 0;
-  for (let i = 4; i < row.length; i++) if (row[i] !== undefined && String(row[i]).trim() !== '') n++;
+  for (let i = 4; i < row.length; i++)
+    if (row[i] !== undefined && String(row[i]).trim() !== "") n++;
   return n;
 }
 
@@ -250,7 +324,7 @@ function _completeness(row) {
 // bước này (dùng để hiện xem trước/xác nhận trước khi xoá thật).
 async function scanDuplicates(spreadsheetId, tab, sa) {
   const id = extractSpreadsheetId(spreadsheetId);
-  if (!id) return { ok: false, msg: 'Thiếu Spreadsheet ID.' };
+  if (!id) return { ok: false, msg: "Thiếu Spreadsheet ID." };
   const rows = await _fetchAllRows(id, tab, sa);
 
   const groups = new Map(); // normalizeKey(link) -> [{ rowIndex (1-based, dòng 1 = header), row }]
@@ -272,12 +346,21 @@ async function scanDuplicates(spreadsheetId, tab, sa) {
     // Giữ dòng nhiều dữ liệu tự ghi nhất; ngang nhau thì giữ dòng nhỏ hơn (cũ hơn/xuất hiện trước).
     let keep = list[0];
     for (const item of list.slice(1)) {
-      const a = _completeness(item.row), b = _completeness(keep.row);
+      const a = _completeness(item.row),
+        b = _completeness(keep.row);
       if (a > b || (a === b && item.rowIndex < keep.rowIndex)) keep = item;
     }
-    const deleteRows = list.filter(x => x.rowIndex !== keep.rowIndex).map(x => x.rowIndex);
+    const deleteRows = list
+      .filter((x) => x.rowIndex !== keep.rowIndex)
+      .map((x) => x.rowIndex);
     toDelete.push(...deleteRows);
-    if (sample.length < 20) sample.push({ link: keep.row[1] || '', total: list.length, keepRow: keep.rowIndex, deleteRows });
+    if (sample.length < 20)
+      sample.push({
+        link: keep.row[1] || "",
+        total: list.length,
+        keepRow: keep.rowIndex,
+        deleteRows,
+      });
   }
   toDelete.sort((a, b) => b - a); // GIẢM DẦN — xoá từ dưới lên để không lệch dòng khác
 
@@ -296,7 +379,8 @@ async function scanDuplicates(spreadsheetId, tab, sa) {
 // nhỏ trước sẽ làm lệch index của mọi dòng lớn hơn còn lại trong CÙNG 1 lần gọi.
 async function deleteRows(spreadsheetId, tab, sa, rowIndexes) {
   const id = extractSpreadsheetId(spreadsheetId);
-  if (!id || !Array.isArray(rowIndexes) || !rowIndexes.length) return { ok: true, deleted: 0 };
+  if (!id || !Array.isArray(rowIndexes) || !rowIndexes.length)
+    return { ok: true, deleted: 0 };
   const sheetId = await _getSheetId(id, tab, sa);
   const sorted = [...rowIndexes].sort((a, b) => b - a);
   const token = await getToken(sa);
@@ -305,16 +389,28 @@ async function deleteRows(spreadsheetId, tab, sa, rowIndexes) {
   let deleted = 0;
   for (let i = 0; i < sorted.length; i += CHUNK) {
     const slice = sorted.slice(i, i + CHUNK);
-    const requests = slice.map(rowIndex => ({
-      deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: rowIndex - 1, endIndex: rowIndex } },
+    const requests = slice.map((rowIndex) => ({
+      deleteDimension: {
+        range: {
+          sheetId,
+          dimension: "ROWS",
+          startIndex: rowIndex - 1,
+          endIndex: rowIndex,
+        },
+      },
     }));
-    const resp = await httpRequest('POST', `${SHEETS_BASE}/${id}:batchUpdate`, {
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    const resp = await httpRequest("POST", `${SHEETS_BASE}/${id}:batchUpdate`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
       body: { requests },
       timeoutMs: SCAN_TIMEOUT_MS,
     });
     if (resp.status < 200 || resp.status >= 300) {
-      throw new Error(`xoá dòng HTTP ${resp.status}: ${resp.body.slice(0, 200)} (đã xoá ${deleted}/${sorted.length} dòng trước khi lỗi)`);
+      throw new Error(
+        `xoá dòng HTTP ${resp.status}: ${resp.body.slice(0, 200)} (đã xoá ${deleted}/${sorted.length} dòng trước khi lỗi)`,
+      );
     }
     deleted += slice.length;
   }
@@ -334,55 +430,80 @@ async function cleanDuplicates(spreadsheetId, tab, sa) {
 // ── Kiểm tra kết nối: đọc metadata spreadsheet ──
 async function testConnection(spreadsheetId, sa) {
   const id = extractSpreadsheetId(spreadsheetId);
-  if (!id) return { ok: false, msg: 'Thiếu Spreadsheet ID.' };
+  if (!id) return { ok: false, msg: "Thiếu Spreadsheet ID." };
   let token;
-  try { token = await getToken(sa); }
-  catch (e) { return { ok: false, msg: e.message }; }
+  try {
+    token = await getToken(sa);
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
 
-  const resp = await httpRequest('GET',
+  const resp = await httpRequest(
+    "GET",
     `${SHEETS_BASE}/${id}?fields=properties.title,sheets.properties.title`,
-    { headers: { 'Authorization': `Bearer ${token}` } });
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
 
   if (resp.status === 200) {
-    let title = '';
+    let title = "";
     let tabs = [];
     try {
       const d = JSON.parse(resp.body);
-      title = d.properties?.title || '';
-      tabs = (d.sheets || []).map(s => s.properties?.title).filter(Boolean);
+      title = d.properties?.title || "";
+      tabs = (d.sheets || []).map((s) => s.properties?.title).filter(Boolean);
     } catch (_) {}
     return { ok: true, msg: `Kết nối OK: "${title}"`, title, tabs };
   }
   if (resp.status === 403) {
-    return { ok: false, msg: 'Bị từ chối (403). Hãy chia sẻ Sheet cho email service account (quyền Editor).' };
+    return {
+      ok: false,
+      msg: "Bị từ chối (403). Hãy chia sẻ Sheet cho email service account (quyền Editor).",
+    };
   }
   if (resp.status === 404) {
-    return { ok: false, msg: 'Không tìm thấy Sheet (404). Kiểm tra lại Spreadsheet ID.' };
+    return {
+      ok: false,
+      msg: "Không tìm thấy Sheet (404). Kiểm tra lại Spreadsheet ID.",
+    };
   }
   return { ok: false, msg: `HTTP ${resp.status}: ${resp.body.slice(0, 200)}` };
 }
 
 // ── Batch writer (1 sheet chung cho mọi profile) ──
-let _cfg = null;          // { enabled, spreadsheetId, tab, sa }
+let _cfg = null; // { enabled, spreadsheetId, tab, sa }
 let _buffer = [];
 let _timer = null;
 let _flushChain = Promise.resolve();
-let _onError = null;      // callback báo lỗi ra UI
+let _onError = null; // callback báo lỗi ra UI
 
 function configure(cfg, onError) {
-  const next = cfg && cfg.enabled ? {
-    enabled: true,
-    spreadsheetId: extractSpreadsheetId(cfg.spreadsheetId),
-    tab: cfg.tab || 'Data',
-    sa: cfg.sa,
-  } : null;
+  const next =
+    cfg && cfg.enabled
+      ? {
+          enabled: true,
+          spreadsheetId: extractSpreadsheetId(cfg.spreadsheetId),
+          tab: cfg.tab || "Data",
+          // Tab CHỜ KIỂM TAY (QĐ-33) — để trống = tắt tính năng, link lỗi lại bị bỏ như trước.
+          pendingTab: (cfg.pendingTab || "").trim(),
+          sa: cfg.sa,
+        }
+      : null;
+  // Đổi tab chờ → quên danh sách link chờ đã nạp, nếu không thì lọc trùng theo tab CŨ.
+  if ((next && next.pendingTab) !== (_cfg && _cfg.pendingTab)) {
+    _pendingKnown.clear();
+    _pendingSeeded = false;
+  }
   // Đổi sang Sheet/tab KHÁC thì mốc dòng cũ vô nghĩa → phải quên đi để lần sau đọc lại toàn bộ.
   // ⚠ CHỈ khi thực sự đổi: configure() được gọi lại ở MỖI lần bấm Chạy, reset vô điều kiện là
   // lặp lại đúng cái bẫy đã gặp ở sheet-lock (QĐ-19) — mất mốc liên tục, đọc lại toàn bộ mãi.
-  const changedTarget = (next && next.spreadsheetId) !== (_cfg && _cfg.spreadsheetId)
-    || (next && next.tab) !== (_cfg && _cfg.tab);
+  const changedTarget =
+    (next && next.spreadsheetId) !== (_cfg && _cfg.spreadsheetId) ||
+    (next && next.tab) !== (_cfg && _cfg.tab);
   _cfg = next;
-  if (changedTarget) { _nextRow = 0; _sheetRows = 0; }
+  if (changedTarget) {
+    _nextRow = 0;
+    _sheetRows = 0;
+  }
   _onError = onError || null;
 }
 
@@ -393,22 +514,30 @@ function configure(cfg, onError) {
 //
 // Trả `{ links, rawRows, from, full }` — `links` là phần MỚI đọc được (để nơi gọi nạp thêm
 // vào bộ lọc quét của crawler).
-let _nextRow = 0;              // 0 = chưa biết mốc → phải đọc toàn bộ
-let _refreshInFlight = null;   // gộp các lời gọi trùng nhau, tránh 2 nơi cùng đọc rồi cùng
-                               // đẩy mốc lên → nhảy qua mất dòng chưa đọc
+let _nextRow = 0; // 0 = chưa biết mốc → phải đọc toàn bộ
+let _refreshInFlight = null; // gộp các lời gọi trùng nhau, tránh 2 nơi cùng đọc rồi cùng
+// đẩy mốc lên → nhảy qua mất dòng chưa đọc
 async function refreshKnownLinks({ full = false } = {}) {
   if (!_cfg) return { links: [], rawRows: 0, from: 0, full: false };
   // Đang bị Google chặn vì vượt quota → KHÔNG gọi thêm (càng dội càng bị chặn sâu). Dùng lại
   // danh sách đã biết; hết cooldown thì lần sau đọc tiếp từ đúng mốc, không mất dòng nào.
   if (quota.isCoolingDown()) {
-    return { links: [], rawRows: 0, from: _nextRow, full: false, skipped: 'quota' };
+    return {
+      links: [],
+      rawRows: 0,
+      from: _nextRow,
+      full: false,
+      skipped: "quota",
+    };
   }
-  if (_refreshInFlight) return _refreshInFlight;   // đang đọc → dùng chung kết quả
+  if (_refreshInFlight) return _refreshInFlight; // đang đọc → dùng chung kết quả
   const cfg = _cfg;
   const doFull = full || _nextRow <= 0;
   const from = doFull ? 1 : _nextRow;
   _refreshInFlight = (async () => {
-    const r = await readLinkColumn(cfg.spreadsheetId, cfg.tab, cfg.sa, { startRow: from });
+    const r = await readLinkColumn(cfg.spreadsheetId, cfg.tab, cfg.sa, {
+      startRow: from,
+    });
     updateKnownLinks(r.links);
     // Mốc kế tiếp: đọc toàn bộ thì bắt đầu từ dòng 1 nên mốc = rawRows + 1; đọc tăng dần thì
     // cộng dồn từ chỗ bắt đầu. Dùng rawRows (số dòng THÔ) chứ KHÔNG dùng links.length —
@@ -424,7 +553,9 @@ async function refreshKnownLinks({ full = false } = {}) {
   }
 }
 
-function isEnabled() { return !!_cfg; }
+function isEnabled() {
+  return !!_cfg;
+}
 
 function enqueue(row) {
   if (!_cfg) return;
@@ -439,7 +570,7 @@ function enqueue(row) {
   if (key && _knownLinks.has(key)) return;
   // Chống trùng ngay trong buffer: nếu link này đang chờ đẩy (vd lô lỗi được trả về
   // buffer từ phiên trước, phiên mới quét lại trúng nó) → bỏ, không xếp hàng 2 lần.
-  if (key && _buffer.some(r => normalizeKey(r && r[1]) === key)) return;
+  if (key && _buffer.some((r) => normalizeKey(r && r[1]) === key)) return;
   _buffer.push(row);
   if (_buffer.length >= BATCH_SIZE) flush();
   else ensureTimer();
@@ -450,18 +581,27 @@ function enqueue(row) {
 function dropFromBuffer(links) {
   const keys = new Set((links || []).map(normalizeKey).filter(Boolean));
   if (!keys.size) return;
-  _buffer = _buffer.filter(r => !keys.has(normalizeKey(r && r[1])));
+  _buffer = _buffer.filter((r) => !keys.has(normalizeKey(r && r[1])));
 }
 
 // `delayMs`: mặc định FLUSH_MS. Khi đang bị chặn quota thì hẹn đúng phần cooldown còn lại —
 // nếu vẫn hẹn 5s thì cứ 5s lại tỉnh dậy một lần vô ích suốt cả phút.
 function ensureTimer(delayMs = FLUSH_MS) {
   if (_timer) return;
-  _timer = setTimeout(() => { _timer = null; flush(); }, Math.max(500, delayMs));
+  _timer = setTimeout(
+    () => {
+      _timer = null;
+      flush();
+    },
+    Math.max(500, delayMs),
+  );
 }
 
 function flush() {
-  if (_timer) { clearTimeout(_timer); _timer = null; }
+  if (_timer) {
+    clearTimeout(_timer);
+    _timer = null;
+  }
   if (!_cfg || !_buffer.length) return _flushChain;
   // Đang bị chặn vì quota → hoãn cả lô, giữ nguyên trong bộ đệm rồi hẹn thử lại. KHÔNG ghi
   // lúc này (sẽ lại 429) và KHÔNG bỏ dữ liệu.
@@ -471,14 +611,14 @@ function flush() {
   }
   // Lọc lần cuối trước khi ghi: bỏ dòng đã lên Sheet bằng đường khác trong lúc nằm chờ
   // buffer (máy khác đẩy giữa 2 lần đọc lại) — chốt chặn cuối của chống trùng liên máy.
-  const rows = _buffer.filter(r => {
+  const rows = _buffer.filter((r) => {
     const k = normalizeKey(r && r[1]);
     return !(k && _knownLinks.has(k));
   });
   _buffer = [];
   if (!rows.length) return _flushChain;
   const cfg = _cfg;
-  let pending = rows;   // lô THỰC SỰ sẽ ghi (có thể bị co lại sau khi đọc mới nhất)
+  let pending = rows; // lô THỰC SỰ sẽ ghi (có thể bị co lại sau khi đọc mới nhất)
   _flushChain = _flushChain
     .then(async () => {
       // ── ĐỌC MỚI NHẤT NGAY TRƯỚC KHI GHI (2026-08-03, người dùng yêu cầu) ──
@@ -492,29 +632,37 @@ function flush() {
       try {
         await refreshKnownLinks();
       } catch (e) {
-        console.warn('[sheets] Không đọc được phần mới trước khi ghi (vẫn ghi):', e.message);
+        console.warn(
+          "[sheets] Không đọc được phần mới trước khi ghi (vẫn ghi):",
+          e.message,
+        );
       }
-      pending = rows.filter(r => {
+      pending = rows.filter((r) => {
         const k = normalizeKey(r && r[1]);
         return !(k && _knownLinks.has(k));
       });
       const dropped = rows.length - pending.length;
       if (dropped > 0) {
-        console.log(`[sheets] Bỏ ${dropped} dòng trước khi ghi — máy khác vừa đẩy lên trước (chống trùng liên máy).`);
+        console.log(
+          `[sheets] Bỏ ${dropped} dòng trước khi ghi — máy khác vừa đẩy lên trước (chống trùng liên máy).`,
+        );
       }
       if (!pending.length) return;
       await appendRows(cfg.spreadsheetId, cfg.tab, pending, cfg.sa);
       // Ghi thành công → các link này giờ ĐÃ có trên Sheet, ghi nhớ để mọi đường đẩy
       // sau (kể cả buffer retry) không bao giờ đẩy lại.
-      for (const r of pending) { const k = normalizeKey(r && r[1]); if (k) _knownLinks.add(k); }
+      for (const r of pending) {
+        const k = normalizeKey(r && r[1]);
+        if (k) _knownLinks.add(k);
+      }
       // Cộng luôn vào tổng số dòng + đẩy mốc đọc lên: dòng mình vừa ghi cũng nằm ở cuối tab,
       // nếu không cộng thì badge trên UI bị tụt lại tới lần đọc sau, và lần đọc tăng dần kế
       // tiếp sẽ đọc lại chính mấy dòng mình vừa ghi (vô ích).
       if (_sheetRows > 0) _sheetRows += pending.length;
       if (_nextRow > 0) _nextRow += pending.length;
     })
-    .catch(e => {
-      console.error('[sheets] flush lỗi:', e.message);
+    .catch((e) => {
+      console.error("[sheets] flush lỗi:", e.message);
       // KHÔNG bỏ rơi lô lỗi (trước đây lô lỗi bị mất luôn → "nghẽn" là mất data):
       // trả các dòng về ĐẦU buffer để timer thử đẩy lại sau. Nếu lỗi kéo dài, dữ liệu
       // vẫn nằm chờ trong buffer + user có nút "Đẩy lên Sheet" để đẩy bù thủ công.
@@ -529,6 +677,141 @@ function flush() {
 async function flushAll() {
   flush();
   await _flushChain;
+  await flushPending();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// TAB CHỜ KIỂM TAY — link TikTok trả "Something went wrong" (QĐ-33)
+// ════════════════════════════════════════════════════════════════════════════
+// VÌ SAO CÓ (2026-08-06, người dùng chốt): QĐ-07 quyết định "cả API lẫn giao diện đều lỗi →
+// BỎ LINK", với lý do "thà mất một ít link còn hơn dữ liệu bẩn". Thực tế người dùng thấy app
+// bỏ RẤT NHIỀU sound, mở tay ra thì trang `/music/` hiện **"Something went wrong"** — tức
+// sound VẪN TỒN TẠI (header còn tên tác giả + số video), chỉ là TikTok lỗi lúc dựng trang.
+// Bỏ hẳn là mất dữ liệu thật.
+//
+// Cách giải KHÔNG phá QĐ-07: dữ liệu chính vẫn sạch (không có dòng `?` nào lọt vào), nhưng
+// link lỗi được ghi sang MỘT TAB RIÊNG để người kiểm tay — cột "Tình trạng" để TRỐNG cho
+// người dùng tự điền (đúng yêu cầu).
+//
+// ⚠ KHÔNG tự tạo tab: người dùng đã phản đối việc app tự thêm tab lạ lên Sheet của họ (QĐ-19
+// phải chuyển `_locks` sang ẩn vì việc này). Tab này do người dùng tự tạo; thiếu thì báo lỗi
+// chỉ đúng chỗ sửa (như QĐ-26), không im lặng bỏ qua.
+const PENDING_FLUSH_MS = 5000;
+const PENDING_BATCH = 10;
+
+const _pendingKnown = new Set(); // link đã có trên tab chờ → không ghi trùng
+let _pendingSeeded = false; // đã nạp danh sách link chờ từ Sheet chưa
+let _pendingBuffer = [];
+let _pendingTimer = null;
+let _pendingChain = Promise.resolve();
+let _pendingWritten = 0; // số dòng đã ghi sang tab chờ trong phiên (hiện ra UI)
+
+function pendingTabName() {
+  return (_cfg && _cfg.pendingTab) || "";
+}
+function isPendingEnabled() {
+  return !!(_cfg && _cfg.pendingTab);
+}
+function pendingCount() {
+  return _pendingWritten;
+}
+
+// Nạp link đã có trên tab chờ (cột B) để không ghi trùng.
+// ⚠ CỐ Ý **không** nạp vào `_knownLinks` của tab chính lẫn bộ lọc quét của crawler: link chờ
+// nên được THỬ LẠI ở phiên sau — "Something went wrong" thường là lỗi tạm thời, lần sau đọc
+// được số video thật thì nó vào tab CHÍNH với dữ liệu đầy đủ (tốt hơn hẳn nằm mãi ở tab chờ).
+// Ghi trùng vẫn không xảy ra vì `_pendingKnown` chặn ở cửa ghi.
+async function seedPendingLinks() {
+  if (!isPendingEnabled()) return { ok: false, skipped: "off" };
+  try {
+    const { links } = await readLinkColumn(
+      _cfg.spreadsheetId,
+      _cfg.pendingTab,
+      _cfg.sa,
+      { startRow: 1 },
+    );
+    for (const u of links) {
+      const k = normalizeKey(u);
+      if (k) _pendingKnown.add(k);
+    }
+    _pendingSeeded = true;
+    return { ok: true, count: _pendingKnown.size };
+  } catch (e) {
+    return { ok: false, msg: e.message };
+  }
+}
+
+// Xếp 1 link lỗi vào hàng chờ ghi. row = [name, url, count, profile] — cột "Tình trạng" (E)
+// KHÔNG được điền, để người dùng tự ghi.
+function enqueuePending(row) {
+  if (!isPendingEnabled()) return false;
+  const key = normalizeKey(row && row[1]);
+  if (!key) return false;
+  // Đã có trên tab chờ (từ phiên trước hoặc máy khác) → không ghi trùng.
+  if (_pendingKnown.has(key)) return false;
+  // Đang chờ ghi trong buffer → không xếp hàng 2 lần.
+  if (_pendingBuffer.some((r) => normalizeKey(r && r[1]) === key)) return false;
+  _pendingBuffer.push(row);
+  if (_pendingBuffer.length >= PENDING_BATCH) flushPending();
+  else if (!_pendingTimer) {
+    _pendingTimer = setTimeout(() => {
+      _pendingTimer = null;
+      flushPending();
+    }, PENDING_FLUSH_MS);
+    if (_pendingTimer.unref) _pendingTimer.unref();
+  }
+  return true;
+}
+
+function flushPending() {
+  if (_pendingTimer) {
+    clearTimeout(_pendingTimer);
+    _pendingTimer = null;
+  }
+  if (!isPendingEnabled() || !_pendingBuffer.length) return _pendingChain;
+  // Đang bị Google chặn vì quota → giữ nguyên lô, hẹn lại (cùng cách flush() chính làm, QĐ-24).
+  if (quota.isCoolingDown()) {
+    if (!_pendingTimer) {
+      _pendingTimer = setTimeout(
+        () => {
+          _pendingTimer = null;
+          flushPending();
+        },
+        Math.max(500, quota.cooldownRemaining() + 500),
+      );
+      if (_pendingTimer.unref) _pendingTimer.unref();
+    }
+    return _pendingChain;
+  }
+  const rows = _pendingBuffer;
+  _pendingBuffer = [];
+  const cfg = _cfg;
+  _pendingChain = _pendingChain
+    .then(async () => {
+      await appendRows(cfg.spreadsheetId, cfg.pendingTab, rows, cfg.sa);
+      for (const r of rows) {
+        const k = normalizeKey(r && r[1]);
+        if (k) _pendingKnown.add(k);
+      }
+      _pendingWritten += rows.length;
+      console.log(
+        `[pending] Đã ghi ${rows.length} link lỗi sang tab "${cfg.pendingTab}" (tổng phiên: ${_pendingWritten}).`,
+      );
+    })
+    .catch((e) => {
+      // KHÔNG bỏ rơi lô lỗi — trả về đầu buffer để thử lại (cùng nguyên tắc với flush() chính).
+      console.error("[pending] Ghi tab chờ lỗi:", e.message);
+      _pendingBuffer = rows.concat(_pendingBuffer);
+      if (!_pendingTimer) {
+        _pendingTimer = setTimeout(() => {
+          _pendingTimer = null;
+          flushPending();
+        }, PENDING_FLUSH_MS);
+        if (_pendingTimer.unref) _pendingTimer.unref();
+      }
+      if (_onError) _onError(`Tab chờ "${cfg.pendingTab}": ${e.message}`);
+    });
+  return _pendingChain;
 }
 
 module.exports = {
@@ -551,4 +834,11 @@ module.exports = {
   scanDuplicates,
   deleteRows,
   cleanDuplicates,
+  // Tab chờ kiểm tay (QĐ-33)
+  isPendingEnabled,
+  pendingTabName,
+  pendingCount,
+  seedPendingLinks,
+  enqueuePending,
+  flushPending,
 };
