@@ -494,9 +494,37 @@ async function runSelected() {
 let _vpnAutoCycle = false;    // công tắc trong ⚙ (chung toàn app)
 let _vpnCycling = false;      // chống chạy chồng nhiều lượt
 
+// Thời gian để IP mới "nguội" trước khi cho profile chạy lại (người dùng chốt: ~1 phút).
+// Không đặt ngắn hơn: mục đích chính là để 5 phiên đăng nhập cũ không đồng loạt xuất hiện trên
+// một IP vừa mới đổi trong vài giây.
+const VPN_COOLDOWN_MS = 60 * 1000;
+
+// Người dùng bấm Dừng/Dừng mềm trong lúc đang chờ → phải huỷ, không được cứ thế bật lại.
+// Không có cờ stop riêng ở renderer, nên suy từ việc người dùng có bấm gì không: nếu họ chủ
+// động bật lại profile nào trong lúc chờ thì coi như họ đã tự lo, ta dừng can thiệp.
+let _vpnCancelRestart = false;
+function scanStopRequested() { return _vpnCancelRestart; }
+
+// Đếm ngược có hiển thị, huỷ được. Ghi vào dòng trạng thái mỗi giây để người dùng thấy rõ app
+// đang CHỜ CÓ CHỦ ĐÍCH, không phải treo (đúng bài học QĐ-21: vòng chờ im lặng bị báo là bug).
+async function waitBeforeRestart(ids) {
+  const until = Date.now() + VPN_COOLDOWN_MS;
+  while (Date.now() < until) {
+    if (_vpnCancelRestart) return;
+    const left = Math.ceil((until - Date.now()) / 1000);
+    const m = `⏳ Chờ ${left}s cho IP mới ổn định rồi mới chạy lại ${ids.length} profile`
+      + ' (tránh TikTok coi là đăng nhập dồn dập trên IP vừa đổi)...';
+    $('crawlStatusMsg').textContent = m;
+    // Chỉ ghi log mỗi 15s cho khỏi ngập log 📄.
+    if (left % 15 === 0) for (const id of ids) appendLog(id, m);
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
 async function handleFeedStarved(profileId) {
   if (!_vpnAutoCycle || _vpnCycling) return;
   _vpnCycling = true;
+  _vpnCancelRestart = false;   // bắt đầu lượt mới → xoá cờ huỷ của lượt trước
   // Nhớ ĐÚNG nhóm đang chạy để bật lại y như cũ (không bật thừa profile người dùng đã tắt tay).
   const wasAll = [...runningSet];
 
@@ -567,6 +595,21 @@ async function handleFeedStarved(profileId) {
       return;
     }
 
+    // ── CHỜ CHO IP "NGUỘI" TRƯỚC KHI CHẠY LẠI (người dùng chốt 2026-08-06) ──
+    // Yêu cầu: *"khi bật lại HMA thì set khoảng 1 phút, hết 1 phút thì profile mới được chạy —
+    // để tránh TikTok chặn profile vì spam đăng nhập liên tục"*.
+    //
+    // Vì sao đúng: sau khi đổi IP, 5 profile khởi động lại gần như cùng lúc trên MỘT IP vừa mới
+    // xuất hiện. Với TikTok đó là 5 phiên đăng nhập cũ bỗng chuyển sang một IP mới trong vài
+    // giây — đúng khuôn "tài khoản bị chiếm" mà QĐ-15 nói là nguyên nhân số 1 khiến nó hủy phiên.
+    // Chờ 1 phút cho đường mạng/định tuyến ổn định rồi mới vào là rẻ (mất 1 phút sản lượng) so
+    // với mất phiên cả nhóm.
+    //
+    // Việc chờ này ĐỘC LẬP với `startProfilesStaggered` (bật lần lượt, QĐ-21): cái đó giãn các
+    // profile ra để không tranh CPU, còn cái này giãn CẢ NHÓM ra khỏi thời điểm IP vừa đổi.
+    if (!scanStopRequested()) await waitBeforeRestart(was);
+    if (scanStopRequested()) { say('Đã hủy chạy lại (người dùng bấm dừng trong lúc chờ).'); return; }
+
     // Bật lại đúng nhóm vừa dừng, lần lượt. Mỗi profile khi khởi động sẽ TỰ chờ ip-guard xác
     // nhận IP đúng nhãn quốc gia trước khi mở trình duyệt (waitForCorrectCountry) — nên nếu VPN
     // chưa kịp ổn định thì nó đứng chờ chứ không chạy sai vùng.
@@ -581,6 +624,12 @@ async function handleFeedStarved(profileId) {
 async function stopSelected() {
   const ids = getCheckedIds();
   if (!ids.length) return toast('Tick chọn profile cần dừng.', 'err');
+  // Bấm Dừng trong lúc đang chờ IP nguội → HUỶ luôn việc tự chạy lại. Nếu không, app sẽ tự bật
+  // lại profile ngay sau khi hết giờ chờ, đúng lúc người dùng vừa chủ động dừng nó.
+  if (_vpnCycling) {
+    _vpnCancelRestart = true;
+    toast('Đã huỷ việc tự chạy lại sau đổi IP.', 'ok');
+  }
   for (const id of ids) if (runningSet.has(id)) await stopProfileById(id);
 }
 
@@ -694,8 +743,9 @@ function openSettingsModal(ids) {
   // Số luồng đếm đồng thời + tự đổi IP là cài đặt CHUNG (global store), không theo profile.
   // ⚠ Cả hai đều ghi rõ "(toàn app)" ngay trên tiêu đề mục — bài học QĐ-28: đặt cài đặt toàn app
   // vào modal mở-từ-một-profile mà không nói rõ thì người dùng hiểu là của riêng profile đó.
-  api.storeGet(['count_concurrency', 'vpn_auto_cycle']).then(r => {
+  api.storeGet(['count_concurrency', 'vpn_auto_cycle', 'show_count_tab']).then(r => {
     $('cfgCountConcurrency').value = (r && r.count_concurrency) || 2;
+    $('cfgShowCountTab').checked = !!(r && r.show_count_tab);
     $('cfgVpnAutoCycle').checked = !!(r && r.vpn_auto_cycle);
   });
   updateCfgModeUI();
@@ -740,7 +790,12 @@ async function saveCrawlSettings() {
   // Lưu cài đặt CHUNG toàn app: số luồng đếm đồng thời (1–10) + tự đổi IP khi TikTok cắt feed.
   const cc = Math.max(1, Math.min(10, parseInt($('cfgCountConcurrency').value, 10) || 2));
   _vpnAutoCycle = $('cfgVpnAutoCycle').checked;
-  await api.storeSet({ count_concurrency: cc, vpn_auto_cycle: _vpnAutoCycle });
+  await api.storeSet({
+    count_concurrency: cc,
+    vpn_auto_cycle: _vpnAutoCycle,
+    // Hiện cửa sổ tab đếm — chỉ để chẩn đoán, áp cho lần mở trình duyệt đếm tiếp theo.
+    show_count_tab: $('cfgShowCountTab').checked,
+  });
   await saveProfileSettings();
   renderProfileTable();
   $('crawlSettingsModal').classList.remove('open');

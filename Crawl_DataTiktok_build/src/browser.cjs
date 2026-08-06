@@ -805,17 +805,37 @@ function _notifyClosed(profilePath) {
 let _sharedHeadless = null;          // { browser, refs }
 let _sharedHeadlessLaunching = null; // Promise khi đang khởi chạy (chống mở trùng)
 
+// ── HIỆN TAB ĐẾM để chẩn đoán (2026-08-06, người dùng yêu cầu) ──
+// Trình duyệt đếm vốn LUÔN chạy ẩn — đúng thiết kế, vì tab `/music/` liên tục điều hướng sẽ
+// nhấp nháy rất khó chịu nếu hiện. Nhưng khi cần soi TẬN MẮT trang sound (vd nghi TikTok trả
+// "Something went wrong", hoặc muốn biết vì sao một sound bị bỏ) thì không thấy gì là bí.
+//
+// ⚠ CHỈ để chẩn đoán, KHÔNG dùng khi chạy dài: mỗi lần đếm là một lần goto, cửa sổ sẽ nhấp
+// nháy liên tục và tốn thêm RAM/CPU cho phần render mà bình thường không cần.
+// Đổi cờ chỉ áp cho LẦN MỞ TRÌNH DUYỆT ĐẾM TIẾP THEO (giống công tắc profile Chromium riêng —
+// QĐ-28): trình duyệt đang mở thì giữ nguyên chế độ tới khi hết profile đếm và nó tự đóng.
+let _showCountTab = false;
+function setShowCountTab(on) {
+  const next = !!on;
+  if (next === _showCountTab) return;
+  _showCountTab = next;
+  console.log(`[browser] Tab đếm số video: ${next ? 'HIỆN (chỉ để chẩn đoán)' : 'ẨN (bình thường)'}`
+    + ' — áp dụng cho lần mở trình duyệt đếm tiếp theo.');
+}
+function isShowCountTab() { return _showCountTab; }
+
 function _ensureSharedHeadless() {
   if (_sharedHeadless) return Promise.resolve(_sharedHeadless);
   if (!_sharedHeadlessLaunching) {
     _configureBrowsersPath();
     const { chromium } = require('playwright');
-    _sharedHeadlessLaunching = chromium.launch({ headless: true, args: _CHROMIUM_ARGS })
+    const showTab = _showCountTab;   // chốt cờ ở thời điểm mở, không đọc lại giữa đường
+    _sharedHeadlessLaunching = chromium.launch({ headless: !showTab, args: _CHROMIUM_ARGS })
       .then(b => {
         _sharedHeadless = { browser: b, refs: 0 };
         _sharedHeadlessLaunching = null;
         b.on('disconnected', () => { _sharedHeadless = null; });
-        console.log('[browser] Đã mở trình duyệt headless dùng chung để đếm video.');
+        console.log(`[browser] Đã mở trình duyệt dùng chung để đếm video (${showTab ? 'HIỆN — chế độ chẩn đoán' : 'ẩn'}).`);
         return _sharedHeadless;
       })
       .catch(err => { _sharedHeadlessLaunching = null; throw err; });
@@ -983,5 +1003,7 @@ module.exports = {
   checkProfileBusy,
   closeProfile,
   closeAll,
+  setShowCountTab,
+  isShowCountTab,
   TIKTOK_HOME,
 };

@@ -285,6 +285,8 @@ ipcMain.handle('profile-start', async (_e, params) => {
 
   // Áp số luồng đếm đồng thời toàn app (cài đặt chung, mặc định 2).
   crawler.setCountConcurrency(store.get('count_concurrency') || 2);
+  // Hiện tab đếm để chẩn đoán (mặc định TẮT — xem setShowCountTab trong browser.cjs).
+  browser.setShowCountTab(!!store.get('show_count_tab'));
 
   // ── CHẶN CHẠY TRÙNG PROFILE GIỮA CÁC MÁY (2026-07-28) ──
   // Đây là nguyên nhân SỐ 1 khiến TikTok hủy phiên đăng nhập (1 phiên phát từ 2 IP). Khác
@@ -663,6 +665,10 @@ ipcMain.handle('store-set', (_e, data) => {
   // Đổi số luồng đếm → áp dụng NGAY, kể cả đang chạy (không cần chạy lại).
   if (Object.prototype.hasOwnProperty.call(data, 'count_concurrency')) {
     crawler.setCountConcurrency(data.count_concurrency || 2);
+  }
+  // Hiện/ẩn tab đếm — áp cho lần mở trình duyệt đếm tiếp theo.
+  if (Object.prototype.hasOwnProperty.call(data, 'show_count_tab')) {
+    browser.setShowCountTab(!!data.show_count_tab);
   }
 });
 
