@@ -1,6 +1,6 @@
 # Hướng dẫn sử dụng — TikTok Crawler
 
-> Cập nhật: 2026-07-28
+> Cập nhật: 2026-08-05 (thêm mục Tự đổi IP bằng HMA VPN)
 
 ## Thêm profile
 
@@ -74,6 +74,9 @@ bấm 🦊. Cùng máy nghĩa là **cùng IP, cùng giờ, cùng phiên bản** 
 
 Lưu ý:
 - Lần đầu bật, cookie đang có được **mang sang tự động** → **không mất đăng nhập**.
+- **Tab đếm số video chạy ngầm** (từ v0.1.61): chạy ở chế độ **hiện** thì cửa sổ profile chỉ có
+  **một tab chính**, tab `/music/` của bước đếm nằm trong trình duyệt ẩn riêng. Trước v0.1.61
+  nó nằm chung cửa sổ nên bạn thấy 2 tab — cập nhật app là hết.
 - Đổi công tắc chỉ áp cho **lần bật profile tiếp theo**; profile đang chạy giữ nguyên chế độ cũ
   tới khi dừng.
 - Muốn quay lại: tắt công tắc là xong. Thư mục `ChromiumProfile` trong profile có thể **xóa
@@ -109,6 +112,97 @@ thường, không phải treo. Muốn đếm nhanh hơn thì tăng **"Số luồ
 | **Trạng thái** | Việc đang làm; chế độ chu kỳ có thêm chip đếm ngược `⏳ Quét · còn 4g52p → Xem` |
 
 Nhấn **📄** để xem log chi tiết của từng profile — đây là nơi đầu tiên cần xem khi có vấn đề.
+
+## Khi TikTok không cho lướt tiếp ("feed cạn")
+
+Đôi khi một profile **vẫn đăng nhập tốt** nhưng TikTok chỉ cho nó **1–2 video** rồi không nạp
+thêm — nút mũi tên xuống trên trang bị làm mờ. App nhận ra và báo:
+
+```
+⛔ TikTok KHÔNG cấp thêm video cho profile này — trang chỉ còn 2 video và nút
+  "video kế tiếp" ĐANG BỊ TẮT, đã thử 3 lượt thoát kẹt đều không hiệu quả.
+  Phiên đăng nhập vẫn TỐT — cuộn thêm chỉ làm TikTok siết nặng hơn.
+```
+
+**Không cần bấm gì**, và **không phải đăng nhập lại** (app đã tự kiểm phiên trước khi kết luận —
+nên đừng mất công bấm 🦊). App tự xử:
+
+| Chế độ của profile đó | App làm gì |
+|---|---|
+| **Quét ⇄ Xem** | Kết thúc pha Quét **sớm**, chuyển sang pha Xem luôn. Vòng sau tự thử quét lại |
+| **For You / Tìm kiếm / Tab đang mở** | **Tạm dừng 5 → 15 → 30 phút** rồi tự tải lại thử tiếp |
+
+App mất **2–3 phút** mới dám kết luận (phải thử đủ 3 cách thoát kẹt trước) — đó là cố ý, để
+không báo oan làm profile đang khoẻ tự tạm dừng.
+
+**Nếu bị lặp lại nhiều lần thì nguyên nhân ở NGOÀI app**, làm theo thứ tự:
+
+0. **Bật "Tự đổi IP khi TikTok cắt feed" trong ⚙** nếu máy có cài HMA VPN — xem mục ngay dưới
+   đây. Đây là cách duy nhất chạm tới **gốc rễ** (đổi IP thật); các cách còn lại chỉ là vòng qua.
+1. **Đổi profile đó sang chế độ Tìm kiếm** (đổi ngay ở cột **Chế độ**). Đây là cách lướt tiếp
+   **có thật**: video mở từ kết quả tìm kiếm dùng danh sách phát riêng của trang tìm kiếm, không
+   dùng feed For You — nên For You bị siết không có nghĩa Tìm kiếm cũng bị.
+2. **Tìm kiếm cũng cụt** ⇒ đang bị siết theo IP/tài khoản ⇒ **tắt rồi bật lại VPN** để lấy IP
+   mới (HMA cấp IP khác mỗi lần kết nối — không cần đổi thành phố). Nhớ **dừng hết profile
+   trước khi tắt VPN**, vì lúc VPN tắt máy dùng IP thật.
+3. Xem các profile khác **trên cùng máy đó**: nếu có profile khác cũng báo `TikTok đang chặn
+   trang đếm` thì gần như chắc là **IP của máy đó** bị siết, không phải lỗi riêng 1 profile.
+   So với máy đang khoẻ — profile khoẻ ghi `cuộn 100 lần, gặp 94 sound khác nhau`.
+4. Chuyển profile sang máy có IP khoẻ (chép **cả thư mục profile**, và đừng chạy cùng profile
+   ở 2 máy — app sẽ chặn).
+
+⚠️ **Bản thân app không có cách nào bắt TikTok cấp thêm video** khi nó đã quyết định cắt — đây
+là giới hạn thật, không phải app thiếu tính năng. Nhưng **đổi IP máy** (mục dưới) thường giải
+quyết được, vì khi đó TikTok gặp một "máy" hoàn toàn khác.
+
+### Tự đổi IP bằng HMA VPN (mặc định TẮT)
+
+Nếu máy có cài **HMA VPN** và **đã đăng nhập**, app có thể tự **tắt/bật lại HMA** rồi **tự chạy
+lại** đúng các profile vừa dừng — không cần bạn làm gì tay. Bật ở **⚙ Cài đặt crawl → "Tự đổi IP
+khi TikTok cắt feed"** (cài đặt **chung toàn app**, áp dụng cho máy này).
+
+App chỉ **tắt rồi bật lại đúng server đang dùng**, không đổi thành phố — vì HMA cấp **IP khác
+mỗi lần kết nối** (đo thật: cùng server London cho IP `18.171.54.19` → `18.132.40.68`). Nên
+những nước HMA chỉ có 1 thành phố (như Hàn Quốc — Seoul) vẫn đổi IP được bình thường.
+
+Khi bật, một profile báo feed cạn sẽ kích hoạt:
+
+```
+⛔ "tên profile" bị TikTok cắt feed — dừng 5 profile để đổi IP (IP là của cả máy nên
+   phải dừng hết, không thể dừng riêng 1 profile)...
+Đang tắt HMA VPN rồi bật lại để lấy IP mới (nối lại đúng server cũ — HMA cấp IP khác
+   mỗi lần kết nối nên không cần đổi city)...
+✅ HMA đã tắt/bật lại (London) — GB. IP mới: 18.132.40.68 (GB).
+```
+
+rồi tự chạy lại lần lượt đúng nhóm profile đã dừng.
+
+**App dừng 1 profile hay dừng hết?** Nó tự kiểm máy rồi chọn:
+
+| Máy của bạn | App làm gì |
+|---|---|
+| **Đã tắt IPv6** | Chỉ dừng **đúng profile bị cắt feed** — các profile khác chạy tiếp |
+| **Còn IPv6** (mặc định của Windows) | Dừng **hết** rồi bật lại |
+
+⚠️ **Vì sao còn IPv6 thì phải dừng hết:** VPN HMA chỉ bảo vệ IPv4. Lúc VPN tắt (dù chỉ vài
+giây), IPv6 đi **thẳng ra internet bằng IP thật ở Việt Nam**, trong khi profile vẫn khai giờ
+London/Seoul/New York. Đây là kiểu rò rỉ **im lặng** — profile vẫn chạy mượt, không báo lỗi gì,
+chỉ **mất phiên sau đó**. Đo thật: IP Việt Nam lọt ra chỉ trong **241 mili giây**.
+
+👉 **Nên tắt IPv6 trên mọi máy** — vừa để app chỉ cần dừng 1 profile, vừa bịt lỗ rò rỉ này mỗi
+lần VPN tụt (kể cả tụt tự nhiên ban đêm). Cách làm: xem
+[TROUBLESHOOTING mục 17](../technical/TROUBLESHOOTING.md) — chỉ 1 dòng lệnh PowerShell chạy bằng
+quyền Administrator. Tắt xong app tự nhận ra, không cần cấu hình gì thêm.
+
+**Giới hạn:**
+- **Không bao giờ đổi quốc gia** — chỉ nối lại trong đúng nước profile đang khai (đổi nước sẽ
+  phá vỡ vân tay của profile và bị app tự tạm dừng).
+- Tối đa **6 lần/ngày**, cách nhau ít nhất **10 phút**.
+- **Không đảm bảo IP mới sạch** — pool IP của HMA hữu hạn và nhiều người dùng chung, nên vẫn có
+  thể rút được một IP cũng đang bị TikTok siết. Tính năng này giảm xác suất, không phải thuốc
+  chữa tuyệt đối. Nếu đổi mấy lần vẫn bị cắt feed thì nguyên nhân ở chỗ khác (xem 4 bước trên).
+- Nếu đổi IP thất bại, app **không tự chạy lại profile** (sợ VPN đang tắt thật, chạy lúc đó là
+  lộ IP thật) — mở cửa sổ HMA kiểm tra bằng mắt rồi tự bấm ▶ Chạy lại.
 
 ## 📊 Lịch sử thu thập theo ngày
 
@@ -153,6 +247,38 @@ Modal **☁ Google Sheet**:
 
 Dữ liệu ghi vào 4 cột **A–D**: Tên sound | Link | Số video | Profile. Các cột từ E trở đi
 để trống cho bạn tự dùng.
+
+### Tab CHỜ KIỂM TAY — cứu những link TikTok bị lỗi trang
+
+Có những sound mà app **không đọc được số video** vì TikTok trả trang lỗi:
+
+```
+Something went wrong
+Sorry about that! Please try again later.
+```
+
+Sound đó **vẫn còn** (mở tay vẫn thấy tên tác giả và số video ở phần đầu trang) — chỉ là TikTok
+lỗi lúc dựng trang. Trước đây app **bỏ luôn** những link này, và thực tế bỏ khá nhiều.
+
+Giờ bạn có thể giữ chúng lại: điền **"Tên tab CHỜ KIỂM TAY"** trong modal ☁ Google Sheet (ví dụ
+`Total_Link_Voice_Pending`). Những link đó sẽ được ghi sang tab đó thay vì mất.
+
+| | |
+|---|---|
+| App ghi | 4 cột **A–D** như tab chính. Cột **Số video để TRỐNG** (không đọc được thì không bịa) |
+| App **KHÔNG** ghi | Cột **E "Tình trạng"** — để trống cho **bạn tự điền** |
+| Trùng lặp | Không. App đọc tab chờ lúc bắt đầu chạy nên link đã có thì không ghi lại |
+
+⚠️ **Bạn phải tự tạo tab đó trên Sheet trước** — app không tự tạo tab lạ trên Sheet của bạn.
+Đặt 5 tiêu đề ở dòng 1: `Tên Sound | Link | Số Video | Profile | Tình trạng`. Sai tên tab thì app
+báo lỗi rõ (*"Không có tab tên X"*) chứ không im lặng.
+
+**Để trống ô này = tắt** — link lỗi lại bị bỏ như trước.
+
+✅ **Link ở tab chờ vẫn được thử lại** những lần chạy sau. Lỗi *"Something went wrong"* thường chỉ
+là tạm thời — lần sau đọc được số video thì sound vào **tab chính với dữ liệu đầy đủ**. Lúc đó nó
+sẽ **có ở cả hai tab** (tab chờ từ lần lỗi, tab chính từ lần đọc được) — bạn dọn dòng ở tab chờ
+khi xử lý. Đổi lấy việc không mất dữ liệu.
 
 ⚠️ **"Tên tab" phải khớp CHÍNH XÁC** tên tab trên Sheet (phân biệt chữ hoa/thường, đúng cả dấu
 gạch dưới — vd `Total_Link_Voice`). Sai tên tab thì app báo:

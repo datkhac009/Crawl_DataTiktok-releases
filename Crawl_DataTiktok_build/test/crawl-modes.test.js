@@ -9,6 +9,8 @@ const Module = require('module');
 
 // Rut ngan nhip cho khi tam dung vi IP lech vung (that la 60s) de test duong tu phuc hoi.
 process.env.TTC_IP_RETRY_MS = '250';
+// Rut ngan backoff khi FEED CAN (that la 5/15/30 phut) de test duong tam dung + thu lai.
+process.env.TTC_STARVE_RETRY_MS = '300';
 
 const SRC = path.join(__dirname, '..', 'src');
 const browserPath = require.resolve(path.join(SRC, 'browser.cjs'));
@@ -53,7 +55,7 @@ function makeFakePage(script) {
       // diagnoseFeed — PHAI xet TRUOC readActiveSound: ca hai deu chua 'video-music' +
       // 'getBoundingClientRect' + 'aria-label', neu xet sau se bi readActiveSound an mat.
       if (src.includes('activeElement')) {
-        return { links: 2, videoReady: 4, active: 'BODY', overlay: '' };
+        return { links: script.links ?? 2, videoReady: 4, active: 'BODY', overlay: '' };
       }
       // readActiveSound
       if (src.includes('video-music') && src.includes('getBoundingClientRect') && src.includes('aria-label')) {
@@ -61,8 +63,16 @@ function makeFakePage(script) {
         readIdx++;
         return v;
       }
-      // _findNextButtonInPage
-      if (src.includes('action-item')) return { x: 1480, y: 440, label: 'action-item' };
+      // _findNextButtonInPage — 3 ca, dung dung 3 hinh dang tra ve that cua ham do:
+      //   'enabled'  -> { x, y, label }        nut bam duoc
+      //   'disabled' -> { disabled, label }    CO nut nhung TikTok da TAT (bao het video)
+      //   'none'     -> null                  khong co nut nao
+      if (src.includes('action-item')) {
+        const nb = script.navButton || 'enabled';
+        if (nb === 'none') return null;
+        if (nb === 'disabled') return { disabled: true, label: 'action-item' };
+        return { x: 1480, y: 440, label: 'action-item' };
+      }
       // readVideoCount / duration / like
       if (src.includes('videos?')) return null;
       if (src.includes('duration')) return 10;
@@ -136,13 +146,14 @@ function installMocks(page, profileName) {
 }
 
 // ── Chay 1 kich ban ──
-async function run({ name, mode, sounds, loginState, runMs, ipScript = ['ok'], profileName, extra = {} }) {
+async function run({ name, mode, sounds, loginState, runMs, ipScript = ['ok'], profileName,
+                     links, navButton, extra = {} }) {
   // Xoa cache crawler de moi kich ban co trang thai phien sach
   for (const k of Object.keys(require.cache)) {
     if (k.includes('crawler') || k.includes('browser.cjs') || k.includes('profiles.cjs')
         || k.includes('ip-guard.cjs')) delete require.cache[k];
   }
-  const page = makeFakePage({ sounds, loginState });
+  const page = makeFakePage({ sounds, loginState, links, navButton });
   installMocks(page, profileName);
   installIpGuardMock(ipScript);
   const crawler = require(path.join(SRC, 'crawler.cjs'));
@@ -252,6 +263,50 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
     profileName: 'TEST_KHONG_NHAN', ipScript: ['mismatch'],   // du mismatch cung phai chay
   }));
 
+  // ── FEED CAN: TikTok KHONG CAP THEM VIDEO cho profile/IP nay (2026-08-05) ──
+  // Su co that: 1 may ao, profile CON dang nhap (nut 🔑 xac nhan), nhung trang chi co 2 video
+  // va nut "video ke tiep" bi TikTok TAT. App quay vong thoat ket cach 1→2→3 gan 2 gio, ra
+  // 0 sound hop le. 4 kich ban duoi kiem CA hai chieu: bao dung khi can, va KHONG bao oan.
+  // ⚠ runMs phai DU cho TRON MOT VONG 3 CAP thoat ket: cap 2 ("cuon manh 3 nhip con lan")
+  // mat ~2.1s vi 3 x sleep(700) trong unstickFeed. Dat 2600ms thi moi den ket lan 2 -> chua
+  // du dieu kien (4) nen KHONG bao gi, va khang dinh truot oan (da gap khi viet test nay).
+  const starveForyou = await run({
+    name: 'FEED CAN foryou: 2 video + nut ke tiep DANG TAT -> phai bao + TAM DUNG co backoff',
+    mode: 'foryou', sounds: [SOUND_A], runMs: 4200, links: 2, navButton: 'disabled',
+  });
+  results.push(starveForyou);
+
+  const starveNoBtn = await run({
+    name: 'FEED CAN foryou: 2 video + KHONG co nut nao -> cung phai bao feed can',
+    mode: 'foryou', sounds: [SOUND_A], runMs: 4200, links: 2, navButton: 'none',
+  });
+  results.push(starveNoBtn);
+
+  const notStarvedEnabled = await run({
+    name: 'KHONG BAO OAN: 2 video nhung nut VAN BAM DUOC -> chi thoat ket, khong bao feed can',
+    mode: 'foryou', sounds: [SOUND_A], runMs: 4200, links: 2, navButton: 'enabled',
+  });
+  results.push(notStarvedEnabled);
+
+  const notStarvedManyLinks = await run({
+    name: 'KHONG BAO OAN: nut TAT nhung feed con 8 video -> khong bao feed can',
+    mode: 'foryou', sounds: [SOUND_A], runMs: 4200, links: 8, navButton: 'disabled',
+  });
+  results.push(notStarvedManyLinks);
+
+  const starveGuest = await run({
+    name: 'FEED CAN + dang la KHACH -> phai bao KHACH (khong bao feed can, huong chua khac han)',
+    mode: 'foryou', sounds: [SOUND_A], loginState: 'guest', runMs: 12000,
+    links: 2, navButton: 'disabled',
+  });
+  results.push(starveGuest);
+
+  const starveCycle = await run({
+    name: 'FEED CAN cycle: phai KET THUC PHA QUET SOM roi sang pha XEM',
+    mode: 'cycle', sounds: [SOUND_A], runMs: 3200, links: 2, navButton: 'disabled',
+  });
+  results.push(starveCycle);
+
   for (const r of results) {
     console.log('\n' + '='.repeat(78));
     console.log('### ' + r.name);
@@ -261,6 +316,47 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
     if (r.data && r.data.length) console.log('  --- onData:', r.data.length, 'dong');
     if (r.calls) console.log('  --- wheel:', r.calls.wheel, '| reload:', r.calls.reload, '| click:', JSON.stringify(r.calls.click));
   }
+
+  // ── KHANG DINH THAT ──
+  // ⚠ Cac kich ban PHIA TREN (13 cai goc) chi IN log ra cho nguoi doc, KHONG co khang dinh
+  // nao — nen chung KHONG tu bat duoc hoi quy. Phan duoi day la khang dinh thuc su (fail thi
+  // exit code khac 0) cho duong FEED CAN moi them.
+  let failed = 0;
+  const has = (r, needle) => (r.msgs || []).some(m => m.includes(needle));
+  function ok(cond, label) {
+    console.log((cond ? '  ✓ ' : '  ✗ ') + label);
+    if (!cond) failed++;
+  }
+
+  console.log('\n' + '='.repeat(78));
+  console.log('### KHANG DINH: phat hien FEED CAN');
+
+  ok(has(starveForyou, 'KHÔNG cấp thêm video'), 'nut TAT -> bao dung "KHONG cap them video"');
+  ok(has(starveForyou, 'ĐANG BỊ TẮT'),
+    'noi ro nut ke tiep DANG BI TAT — bang chung truc tiep TikTok het video');
+  ok(has(starveForyou, 'Phiên đăng nhập vẫn TỐT'),
+    'noi ro phien VAN TOT, de khong ai di bam 🦊 vo ich');
+  ok(has(starveForyou, '⏸'), 'sau do TAM DUNG (khong quay vong thoat ket vo han nua)');
+  ok(has(starveForyou, 'đổi IP/VPN'), 'chi dung viec can lam o NGOAI app: doi IP/VPN hoac Tim kiem');
+  ok(has(starveForyou, 'Hết giờ tạm dừng'), 'het backoff thi TU THU LAI (khong dung han)');
+  ok(!has(starveForyou, 'chế độ KHÁCH'), 'KHONG bao nham thanh che do khach');
+
+  ok(has(starveNoBtn, 'KHÔNG cấp thêm video'), 'khong co nut nao -> cung ket luan feed can');
+  ok(has(starveNoBtn, 'không có nút'), 'phan biet duoc "khong co nut" voi "nut bi TAT"');
+
+  console.log('### KHANG DINH: KHONG bao oan (quan trong hon — bao oan lam profile khoe tu dung)');
+  ok(!has(notStarvedEnabled, 'KHÔNG cấp thêm video'), 'nut con bam duoc -> KHONG bao feed can');
+  ok(has(notStarvedEnabled, 'thử cách'), 'van chay thoat ket 3 cap nhu cu');
+  ok(!has(notStarvedManyLinks, 'KHÔNG cấp thêm video'), 'feed con 8 video -> KHONG bao feed can');
+  ok(has(starveGuest, 'chế độ KHÁCH'), 'dang la KHACH -> phai bao KHACH');
+  ok(!has(starveGuest, 'KHÔNG cấp thêm video'), 'dang la KHACH -> KHONG bao feed can');
+
+  console.log('### KHANG DINH: che do chu ky nhay sang pha XEM thay vi tam dung');
+  ok(has(starveCycle, 'kết thúc pha QUÉT SỚM'), 'cycle: ket thuc pha QUET som');
+  ok(has(starveCycle, 'pha XEM'), 'cycle: chuyen sang pha XEM');
+  ok(!has(starveCycle, '⏸'), 'cycle: KHONG dung backoff (da co pha Xem de nhay sang)');
+
+  console.log(`\n${failed ? '❌' : '✅'} ${failed} khang dinh TRUOT`);
   console.log('\nDONE');
-  process.exit(0);
+  process.exit(failed ? 1 : 0);
 })();

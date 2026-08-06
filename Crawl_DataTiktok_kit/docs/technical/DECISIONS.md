@@ -1,7 +1,7 @@
 # Quyết định kiến trúc
 
 > Ghi lại các quyết định quan trọng **và lý do** — đọc file này trước khi đề xuất thay đổi
-> có thể xung đột. Cập nhật: 2026-07-28
+> có thể xung đột. Cập nhật: 2026-08-05 (QĐ-32)
 
 ---
 
@@ -919,6 +919,47 @@ vân tay khớp `contextOptions(fp)` từng khóa, lần đầu bơm đủ cooki
 sau **không** bơm lại, tab đếm không mở thêm trình duyệt và không bị đóng oan, tắt công tắc thì
 quay về `chromium.launch()`.
 
+**Bổ sung (2026-08-05) — TAB ĐẾM chỉ dùng chung context khi chạy ẨN; chạy HIỆN thì TÁCH ra
+trình duyệt ẩn riêng.**
+
+Bảng "4 cái bẫy" ở trên ghi đánh đổi: *"nếu chạy CHẾ ĐỘ HIỆN thì tab đếm sẽ hiện trong chính
+cửa sổ của profile"*. Đánh đổi đó **người dùng không chấp nhận** — báo thật: bấm ▶ Chạy thì cửa
+sổ profile hiện ra **HAI tab**, tab feed và tab `/music/original-sound-...` của bước đếm, trong
+khi họ chỉ muốn thấy tab chính; "tab sound kia cho chạy ngầm".
+
+⚠ **Lý do QĐ-27 nêu để BẮT dùng chung là một chẩn đoán SAI phạm vi.** Nó viết: *"mở tab đếm
+bằng trình duyệt ẩn riêng sẽ lỗi profile is already in use"*. Điều đó chỉ đúng nếu mở thêm một
+**persistent context trên CÙNG thư mục**. Nhưng đường tab đếm của chế độ thường KHÔNG làm thế:
+`_ensureSharedHeadless()` gọi `chromium.launch()` — một Chromium riêng với `user-data-dir` tạm
+của Playwright — rồi `_newProfileContext()` chỉ **ĐỌC** `fingerprint.json`, tuyệt đối không mở
+`persistDir`. Cookie được copy từ context đang chạy, y hệt chế độ thường vẫn làm. **Không có
+tranh chấp khóa nào.**
+
+**Quyết định:** phân biệt theo `headless` của chính profile đó.
+
+| Profile persistent chạy | Tab đếm | Vì sao |
+|---|---|---|
+| **ẨN** | Dùng chung context (như cũ) | Không ai thấy tab đếm, mà tiết kiệm đúng 1 instance Chromium |
+| **HIỆN** | **Trình duyệt ẩn RIÊNG** | Tab `/music/` nhấp nháy trong cửa sổ người dùng đang xem là thứ họ báo lỗi |
+
+Chi phí đúng bằng **1 instance cho CẢ APP**, không phải mỗi profile một cái — `_sharedHeadless`
+là một trình duyệt dùng chung cho mọi tab đếm. Nên câu *"bù lại một phần RAM"* của QĐ-27 vốn đã
+nhỏ hơn nó nghe.
+
+Vân tay vẫn khớp: cả hai đường đi qua cùng `_newProfileContext(…, profilePath)` nên tab đếm
+trình bày cùng thiết bị với tab chính — bắt buộc, vì hai bên xài chung cookie (QĐ-05).
+
+**Vì sao chọn phân biệt theo `headless` chứ không tách cả hai:** tách cả hai thì mất luôn phần
+tiết kiệm 1 instance ở trường hợp chạy ẩn (là cách chạy chính khi vận hành qua đêm), mà chẳng
+giải quyết thêm gì — chạy ẩn thì vốn đã không ai thấy tab nào. Và nó khiến **49 khẳng định sẵn
+có của `chromium-profile.test.js` phải sửa hàng loạt** (mọi ca trong đó đều `headless: true`),
+tức mất lưới an toàn đúng lúc đang sửa phần dễ vỡ nhất. Cách này giữ nguyên cả 49 khẳng định.
+
+**Kiểm chứng:** `test/chromium-profile.test.js` — **58 khẳng định** (49 cũ giữ nguyên không sửa
+một chữ, + 9 mới ở mục 11): chạy HIỆN thì tab đếm **không** trả handle `shared` và **không** mở
+thêm persistent context nào (chứng minh không đụng khóa thư mục); chạy ẨN thì **vẫn** dùng chung
+— nửa sau này dễ bị "dọn dẹp" mất nhất nên phải có khẳng định giữ lại.
+
 ---
 
 ## QĐ-28 — "Profile Chromium riêng" là cài đặt RIÊNG TỪNG PROFILE, không phải toàn app
@@ -1052,6 +1093,384 @@ Lý do vẫn nên làm sau này:
 
 ---
 
+## QĐ-31 — FEED CẠN (TikTok không cấp thêm video): phát hiện đúng rồi ĐỔI HƯỚNG, không có cách nào ép nó cấp thêm
+
+**Sự cố thật (2026-08-05):** một máy ảo có profile **còn đăng nhập tốt** — nút 🔑 xác nhận
+"Đã đăng nhập" — nhưng trang chỉ có **2 video** và nút "video kế tiếp" của TikTok bị **TẮT**
+(`aria-disabled="true"`). App quay vòng thoát kẹt cách 1→2→3 gần **2 giờ**, cho ra **0 sound
+hợp lệ**. Ảnh bảng profile cùng lúc đó cho thấy 5 profile mang **3 bệnh khác nhau** mà từ ngoài
+trông y hệt: một profile khoẻ (`gặp 94 sound khác nhau/100 lần cuộn`), một profile bị chặn
+**trang đếm** (`23 sound liên tiếp lỗi — nghỉ 374s`), hai profile **feed cạn**.
+
+**⛔ NÓI THẲNG GIỚI HẠN TRƯỚC: KHÔNG có cách nào trong code làm TikTok cấp thêm video.**
+Cuộn không thể cuộn tới cái không tồn tại. Nút xuống bị `aria-disabled` nghĩa là băng chuyền
+đã ở cuối và **máy chủ từ chối nạp thêm** — không có thao tác client nào ép được. Đã cân và
+LOẠI 3 hướng, đừng thử lại:
+
+| Đã cân | Vì sao loại |
+|---|---|
+| `window.scrollBy` / dispatch synthetic wheel event | QĐ-13: feed For You là băng chuyền CSS, `scrollIntoView` đã thất bại 100%; và React bỏ qua event không `isTrusted` |
+| Điều hướng thẳng tới video kế tiếp bằng `href` có trong DOM | Trang chỉ còn 1–2 href — hết, không có gì để nhảy tới |
+| Gọi thẳng API feed (`/api/recommend/item_list/`) | Cần tham số ký `X-Bogus`/`msToken` sinh phía client — đúng lý do QĐ-06 chọn **NGHE** response thay vì **GỌI** endpoint |
+
+**Vậy quyết định là gì:** không cố sửa cái không sửa được. Mục tiêu chỉ còn 3 việc —
+**phát hiện đúng, ngừng dội, đổi hướng.**
+
+**Phát hiện — phải đủ CẢ 4 điều kiện** (thiếu một là KHÔNG kết luận):
+
+| # | Điều kiện | Vì sao cần |
+|---|---|---|
+| 1 | Đã vào trạng thái kẹt (20 lần đọc trúng cùng 1 sound) | Không có nó thì feed vừa tải xong tạm 1–2 video cũng bị báo oan |
+| 2 | Trang chỉ còn **≤2** link video | Feed khoẻ dựng nhiều video — đo thật: 94 sound khác nhau/100 lần cuộn |
+| 3 | Không có nút "xuống" **dùng được** (không tồn tại, hoặc tồn tại nhưng `aria-disabled`) | Chính TikTok nói "hết video" |
+| 4 | Đã thử **trọn một vòng 3 cấp** thoát kẹt mà feed không cho sound mới nào | Phân biệt "cạn thật" với "kẹt tạm, gỡ được" |
+
+Cộng điều kiện thứ 5 trước khi báo: `checkLoginStateStable` phải **không** ra `guest`. Nếu là
+khách thì hướng chữa khác hoàn toàn (bấm 🦊 đăng nhập lại) — báo sai là **đẩy người dùng đi
+sai đường**. Tốn tới 20s nhưng chỉ chạy đúng 1 lần ở thời điểm đã bế tắc.
+
+Đây đúng triết lý đã dùng ở **ip-guard** (2 nhà cung cấp phải đồng thuận), **session-watch**
+(`guest` phải ổn định 3 lần liên tiếp) và **sheet-lock** (lỗi mạng thì KHÔNG chặn): *chỉ kết
+luận khi CHẮC CHẮN*. Báo oan ở đây làm **profile khoẻ tự tạm dừng** — tệ hơn cả bệnh.
+
+**Đổi hướng — khác nhau theo chế độ:**
+
+| Chế độ | Xử lý | Vì sao |
+|---|---|---|
+| **Quét ⇄ Xem** | **Kết thúc pha QUÉT sớm → sang pha XEM luôn** | Dùng đúng máy móc đã có. Hết dội ngay; pha Xem là hoạt động **giống người thật nhất** app có (mở link sound, xem 40–70% thời lượng, thỉnh thoảng like) nên có cơ hội để TikTok nới lại; hết pha Xem thì vòng sau **tự thử quét lại** |
+| **For You / Tìm kiếm / Tab đang mở** | **Tạm dừng 5 → 15 → 30 phút** rồi tải lại thử tiếp | Không có pha Xem để nhảy sang. Theo khuôn ip-guard: TẠM DỪNG chứ không dừng hẳn — siết thường tự hết, dừng hẳn là mất cả đêm sản lượng |
+
+Riêng chế độ `current` **không tải lại** khi hết giờ tạm dừng — đó là tab của người dùng.
+
+**Vì sao TẠM DỪNG chứ không "dừng rồi chạy lại" (người dùng đề nghị):** cấp 3 của thoát kẹt
+*đã là* tải lại trang và đã thất bại. Dừng-chạy-lại về bản chất chỉ là reload đắt hơn — cùng
+IP, cùng cookie, cùng vân tay, cùng endpoint; không có biến nào đổi thì không có lý do gì kết
+quả đổi. Tệ hơn: vòng dừng-chạy liên tục **chính là "càng dội càng bị chặn sâu"** mà backoff
+của bước đếm được dựng ra để tránh.
+
+**Thời gian kết luận thực tế: 2–3 phút** (20 lần đọc × delay 2–3s cho mỗi cấp, cộng ~2.1s cho
+cấp 2 vì nó cuộn 3 nhịp có `sleep(700)`) — thay cho ~2 giờ ra 0 sound.
+
+**Tách 2 ca chẩn đoán trước đây bị GỘP.** `_findNextButtonInPage` cũ loại nút `aria-disabled`
+ngay trong bộ lọc rồi trả `null`, nên log chỉ in được một câu `KHÔNG thấy nút kế tiếp` cho hai
+tình huống nghĩa khác hẳn nhau: *không có nút nào* (có thể TikTok đổi bố cục / trang chưa dựng
+xong) và *có nút nhưng đang TẮT* (bằng chứng **trực tiếp** của feed cạn). Giờ trả 3 hình dạng
+(`null` / `{x,y,label}` / `{disabled,label}`) và log nói rõ từng ca.
+
+**⚠ Dùng status `running` cho dòng tạm dừng, KHÔNG dùng `error`:** renderer coi `error` là đã
+dừng (`setRowRunning(false)` + xoá chip pha) nên hàng đổi về nút "▶ Chạy" trong khi profile
+VẪN đang sống → bấm vào bị từ chối *"Profile đang chạy"*. Đường **canh IP (QĐ-17) hiện đang
+mắc đúng cái vênh này** — chưa sửa để giữ phạm vi thay đổi hẹp, nhưng đừng lặp lại nó.
+
+**Còn cách nào "lướt tiếp" thật không — CÓ, nhưng không phải trên For You:** khi mở một video
+từ một **LƯỚI** (kết quả Tìm kiếm, trang hashtag, Explore, trang tác giả), TikTok dựng trình
+phát với **băng chuyền riêng theo ngữ cảnh lưới đó**, không dùng feed For You. Đó chính là cách
+chế độ **Tìm kiếm** đang hoạt động. Nên For You bị siết **không** kéo theo Tìm kiếm bị siết →
+đổi profile sang Tìm kiếm là đường đi tiếp có thật. Thông báo tạm dừng đã nói thẳng điều này.
+⚠ Nhưng nếu bị siết ở tầng **IP/tài khoản** thì lưới cũng có thể cụt — lúc đó chỉ đổi IP mới
+xong. **Chưa kiểm chứng** trên profile thật (chưa ai thử Tìm kiếm trên đúng profile bị cạn).
+
+**Đã cân và HOÃN — tự động chuyển sang Tìm kiếm khi For You cạn:** làm được, nhưng profile
+được cấu hình For You mà app tự đi quét Tìm kiếm là **tự mở rộng phạm vi ngoài cái người dùng
+thấy** — đúng bài học QĐ-28 (vị trí điều khiển là lời hứa về phạm vi). Nếu làm thì phải là
+công tắc, không phải hành vi mặc định ngầm.
+
+**Kiểm chứng:** `test/crawl-modes.test.js` — thêm **17 khẳng định THẬT** (trượt là exit ≠ 0),
+kiểm **cả hai chiều**. Chiều "không báo oan" quan trọng hơn: nút còn bấm được → KHÔNG báo;
+feed còn 8 video → KHÔNG báo; đang là khách → báo KHÁCH chứ không báo feed cạn.
+
+⚠ **Lưu ý về chính bộ test này:** 13 kịch bản GỐC của file chỉ `console.log` rồi `process.exit(0)`
+— **không có khẳng định nào**, nên chúng KHÔNG tự bắt được hồi quy, phải có người đọc output.
+Chỉ phần thêm 2026-08-05 mới có khẳng định thật. Đừng tin "bộ test này pass" là "hành vi đúng"
+cho 13 kịch bản cũ.
+
+**Bài học lúc viết test:** đặt cửa sổ chạy 2600ms thì chỉ tới được **kẹt lần 2** → chưa đủ điều
+kiện (4) → khẳng định trượt oan, trông như code sai. Nguyên nhân: cấp 2 mất ~2.1s. Đã ghi chú
+ngưỡng thời gian vào test để không ai đặt lại quá ngắn.
+
+---
+
+## QĐ-32 — Tự đổi IP (tắt/bật lại HMA VPN) khi feed cạn — chạm tới GỐC RỄ thay vì chỉ giảm thiệt hại
+
+**Người dùng chốt (2026-08-05), ngay sau QĐ-31:** *"Nếu tiktok block cuộn xuống thì sẽ dừng
+profile đó và tắt HMA VPN đi rồi bật lại và tự chạy lại profile đó"*. QĐ-31 chỉ phát hiện đúng
+và đổi hướng (tạm dừng có backoff / nhảy sang pha Xem) — đó là **giảm thiệt hại**, không sửa
+được nguyên nhân. Đổi IP là thứ duy nhất chạm tới **gốc rễ**: gần như chắc chắn feed cạn là do
+tầng IP/máy, không phải tài khoản (phiên đăng nhập vẫn tốt — đã xác nhận ở QĐ-31).
+
+### Tìm đường điều khiển HMA — 3 cách đã thử, đo TRỰC TIẾP trên máy thật
+
+HMA (Privax) không có CLI chính hãng. Đã cân và **loại 2 hướng**, giữ hướng thứ 3:
+
+| Cách | Kết quả đo thật | Kết luận |
+|---|---|---|
+| **UI Automation** (cửa sổ HMA) | Cây UI Automation chỉ có **1 node duy nhất**, `BoundingRectangle=Empty`, **0 phần tử con** | GUI là **WebView2**, không phơi accessibility tree ra ngoài — kể cả bấm theo toạ độ cũng không đáng tin (`BoundingRectangle` rỗng). **Loại hẳn.** Trên máy ảo mà RDP ngắt/khoá màn hình thì càng chắc chắn không dùng được. |
+| **Windows Service Control** (`net stop/start HmaProVpn`) | `sc sdshow HmaProVpn` cho ACL: `IU`/`SU` (user thường) chỉ có `CCLCSWLORC` (Query/Status/Interrogate) — **không có** `RP`/`WP` (Start/Stop). Chỉ SYSTEM + Administrators mới dừng/khởi động được. User hiện tại `IsAdmin: False` dù tên tài khoản là "Admin" (token bị UAC bó) | Không đồng nhất được trên cả dàn máy (tuỳ máy chạy dưới quyền gì) — bắt người dùng chạy app bằng admin là quá đắt. **Loại.** |
+| **Native messaging host** (`VpnNM.exe`, HMA tự đăng ký `com.privax.vpn` cho extension trình duyệt của chính họ) | Chạy dưới **quyền người dùng thường**, không cần credential riêng (dùng lại phiên đã đăng nhập của `HmaProVpn` service) | **Dùng cách này.** |
+
+### Giao thức: dò bằng chuỗi trong binary, xác nhận bằng gọi thật
+
+`VpnNM.exe` là Chrome native messaging host chuẩn (4-byte length little-endian + JSON UTF-8,
+gọi với `argv[1]` = origin extension). Không có tài liệu công khai. Quét chuỗi ASCII/UTF-16
+trong file lộ ra từ vựng (namespace `asw` = hạ tầng dùng chung của Avast/Gen Digital, HMA chỉ
+là một sản phẩm dùng lại nó):
+
+```
+Vpn_GetState_NmSvc · Vpn_GetApiVersion_NmSvc · Vpn_GetOptimalGateway_NmSvc
+Vpn_Connect_NmSvc · Vpn_ConnectToOptimal_NmSvc · Vpn_Disconnect_NmSvc
+Vpn_OnStateChanged_SvcNm · Vpn_OnErrorOccurred_SvcNm
+```
+
+Xác nhận bằng gọi **thật** trên máy có HMA đang chạy: gửi `{}` (thiếu field) → host tự trả lỗi
+rõ ràng `"expected an object with required field: action"` — tự khai luôn schema. Từ đó gọi
+đúng `{"action":"Vpn_GetState_NmSvc","args":{},"requestId":"<uuid>"}` → nhận về **toàn bộ danh
+sách gateway** + `activeGateway`. Đo tiếp bằng chu trình Disconnect → Connect{gatewayId} thật:
+ngắt xong `activeGateway` về `null` trong 3s; nối lại xong `activeGateway` khớp gateway yêu cầu
+trong 1.5s. Không cần quyền admin, không cần credential.
+
+**Số gateway theo quốc gia (đo thật):**
+
+| Quốc gia | Số gateway | Ghi chú |
+|---|---|---|
+| GB (UK) | 5 | London, Manchester, Nottingham, Edinburgh, Glasgow |
+| US | 25 | Phoenix, LA, NYC, Chicago, Seattle... |
+| KR | 1 duy nhất | Seoul |
+
+### ⚠ ĐÃ SỬA MỘT GIẢ ĐỊNH SAI: không cần đổi city, chỉ tắt/bật lại là đủ
+
+Bản đầu của module mặc định **xoay sang city khác** trong cùng quốc gia, dựa trên giả định:
+*"nối lại đúng server cũ thì HMA cấp lại đúng IP cũ, nên không đổi được gì"*. **Giả định đó
+SAI** — người dùng chỉ ra (*"KR chỉ có 1 gateway thì không cần đổi city đâu, chỉ cần tắt đi bật
+lại là được, mấy IP khác cũng thế"*), và đo thật xác nhận ngay:
+
+```
+Gateway: GB-H9-LONDON-ULT (KHÔNG đổi)
+IP trước disconnect+connect: 18.171.54.19
+IP sau  disconnect+connect: 18.132.40.68   → ĐÃ ĐỔI IP
+```
+
+HMA cấp IP từ một **POOL** mỗi lần kết nối, không gán tĩnh theo gateway. Nên:
+
+- **Mặc định giờ là `rotate: false`** — nối lại đúng gateway cũ.
+- Xoay city không chỉ **dư thừa** mà **có hại**: nó đưa IP sang một vùng địa lý khác trong cùng
+  nước, lệch với vùng mà phiên đăng nhập của profile đã quen — thêm rủi ro, không đổi lấy lợi
+  ích nào. `rotate: true` vẫn còn nhưng chỉ là đường dự phòng.
+- **KR (1 gateway) KHÔNG còn là trường hợp yếu hơn GB/US.** Tài liệu bản đầu ghi *"KR nối lại
+  vẫn có thể ra cùng IP, không đảm bảo đổi được gì"* — điều đó dựa trên chính giả định sai ở
+  trên và **không đúng**.
+
+**Bài học:** giả định "cùng server ⇒ cùng IP" nghe rất hợp lý nên tôi không kiểm — trong khi
+việc kiểm chỉ tốn một lần disconnect/connect và đọc IP. Cứ đo được thì đừng suy luận.
+
+### ⛔ CÁI BẪY QUAN TRỌNG NHẤT: TUYỆT ĐỐI không dùng `Vpn_ConnectToOptimal_NmSvc`
+
+Đo thật: `Vpn_GetOptimalGateway_NmSvc` (server "tối ưu") trả về **`VN-51-HANOI` (Việt Nam)** —
+vì "optimal" nghĩa là server **gần nhất theo địa lý** (máy đo vật lý ở Việt Nam), **không phải**
+server đang được chọn hay phù hợp với profile. Nối vào gateway "optimal" thì một profile khai
+giờ London/Seoul/New York sẽ bỗng chạy trên IP Việt Nam — đúng mâu thuẫn "IP nước này, giờ nước
+khác" mà QĐ-05 gọi là dễ bị nhận diện proxy nhất, và `ip-guard` (QĐ-17) sẽ tạm dừng cả dàn máy.
+**Luôn Connect bằng `gatewayId` tường minh, chọn trong đúng quốc gia profile đang khai — không
+bao giờ dùng optimal/tự động.**
+
+### Kiến trúc: vpn-hma.cjs "câm" về VPN, điều phối nằm ở renderer
+
+**`src/vpn-hma.cjs`** chỉ biết nói chuyện với `VpnNM.exe` — không biết gì về crawler/profile:
+
+- `hostPath()` — tìm `VpnNM.exe` qua **registry NativeMessagingHosts → đọc manifest → lấy
+  field `path`** (đúng cách Chrome tự resolve native host, không hardcode đường dẫn — máy khác
+  có thể cài ở ổ đĩa/thư mục khác, kể cả x86 vs x64).
+- `status()` — chỉ đọc, không đụng gì tới VPN.
+- `pickGateway(gateways, countryId, currentId)` — chỉ dùng khi `rotate: true`: chọn city
+  **KHÁC, CÙNG quốc gia**. Chỉ 1 gateway (KR) thì trả về đúng gateway cũ, `rotated: false` —
+  thành thật về giới hạn, không bịa ra một city không tồn tại.
+- `cycle({expectCountry, rotate = false})` — chu trình Disconnect → Connect **lại đúng gateway
+  cũ** (mặc định) → xác nhận, với **3 lớp chốt an toàn**:
+  1. **Từ chối nếu HMA đang KHÔNG kết nối** — không biết nên nối lại vào đâu, bắt người dùng tự
+     bật tay trước.
+  2. **Từ chối nếu quốc gia HMA đang nối KHÔNG khớp `expectCountry`** — không tự "sửa" giùm,
+     vì làm vậy có thể vô tình nối đúng nước profile khai nhưng **sai với nước IP thật đang
+     phục vụ khu vực đó** (vd máy VPS đặt ở Đức nhưng đang cố nối US) mà không ai kiểm tra được.
+  3. **Sau khi nối lại, nếu SAI NƯỚC so với trước khi ngắt** → báo thất bại rõ ràng, không im
+     lặng cho qua.
+- Dùng chung `normalizeCountry` của `ip-guard.cjs` (UK→GB) — không tự viết bảng alias thứ hai
+  (bẫy QĐ-10). Bản đầu tự so chuỗi thẳng đã bị chính test bắt được: mọi profile `(UK)` bị coi
+  là lệch vùng khi HMA báo `GB`, làm tính năng tự chối chạy với **toàn bộ** profile UK.
+
+**Điều phối (dừng hết → đổi IP → chạy lại) nằm ở `renderer.js` (`handleFeedStarved`), KHÔNG
+phải `crawler.cjs`** — quyết định có chủ đích:
+
+- `crawler.cjs` chỉ phát status **RIÊNG** `'feed-starved'` (không phải `'running'` hay
+  `'error'`) khi một profile phát hiện cạn (QĐ-31). Status này vừa là dòng log, vừa là **tín
+  hiệu máy** để renderer quyết định có can thiệp hay không.
+- Renderer nghe status đó, và **nếu** công tắc "Tự đổi IP" đang bật thì gọi `handleFeedStarved`.
+- `crawler.cjs` vẫn giữ nguyên vòng backoff cục bộ của nó (QĐ-31: tạm dừng 5→15→30 phút) làm
+  **phương án dự phòng** — nếu tính năng tắt, hoặc HMA không cài, hoặc renderer đang bận việc
+  khác, profile vẫn tự phục hồi theo đường cũ mà không cần biết gì về VPN. Hai lớp không xung
+  đột: renderer gọi `profilesStopAll()` → mọi `stop.requested` bật lên → `interruptibleSleep`
+  trong vòng backoff cục bộ của `crawler.cjs` tự thoát ngay, không phải chờ hết giờ.
+
+### Dừng RIÊNG 1 profile hay dừng HẾT — và phát hiện RÒ RỈ IPv6
+
+Yêu cầu ban đầu là *"dừng profile ĐÓ"* (chỉ 1). Bản đầu tôi làm **dừng HẾT**, lý do nêu ra là
+*"lúc VPN tắt máy dùng IP thật"* — nhưng đó là **đánh giá rủi ro tôi chưa đo**. Người dùng phản
+biện bằng quan sát thực địa: *"tôi thấy rerender HMA thì các profile chạy mượt không bị cắt vẫn
+hoạt động"*. Quan sát đó **đúng** — nên phải đo thật thay vì bảo vệ giả định.
+
+Đo cho ra một thứ **quan trọng hơn cả câu hỏi ban đầu**:
+
+```
+HMA BẬT : IPv4 → 13.40.11.3 (GB)         IPv6 → bị chặn (EACCES)        ✅ an toàn
+HMA TẮT : IPv6 → 2405:4802:… (VN)  lọt ra chỉ trong 241ms               ❌ RÒ RỈ
+```
+
+Đường hầm WireGuard của HMA **chỉ định tuyến IPv4**. Khi VPN tắt, IPv6 mở ra và đi thẳng ra
+internet bằng IP thật. Và `systemKillSwitchActive: true` của HMA **KHÔNG chặn IPv6** — đã đo,
+đừng tin cờ đó (chính vì tin tên cờ nghe rất thuyết phục mà tôi gần như đã kết luận "có kill
+switch nên an toàn").
+
+Vì sao quan sát của người dùng và rủi ro thật **không mâu thuẫn**: rò rỉ này **im lặng**. Profile
+vẫn chạy mượt, không lỗi, không dừng — hậu quả là mất phiên **sau đó**. Nên *"chạy mượt"* và
+*"an toàn"* là hai chuyện khác nhau, và đây đúng là loại nguyên nhân mất phiên mà
+TROUBLESHOOTING mục 3 liệt kê nhưng **không ai truy ra được**. Nó xảy ra **mỗi lần VPN tắt**,
+kể cả VPN tụt tự nhiên lúc 3h sáng — không riêng gì lúc app tự đổi IP.
+
+**Quyết định: app tự đo rồi chọn, không cấu hình tay.** `ipv6LeakRisk()` trong `vpn-hma.cjs`
+đọc `os.networkInterfaces()` (đồng bộ, không spawn gì, không cần admin) và tìm địa chỉ
+**global unicast 2000::/3** trên adapter **không phải VPN**:
+
+| Máy | Hành vi | Lý do |
+|---|---|---|
+| Không có IPv6 công khai | **Chỉ dừng profile bị cạn** — các profile khác chạy tiếp | Request của chúng chỉ bị lỗi mạng vài giây, không lộ gì |
+| Có IPv6 công khai | **Dừng HẾT** + hướng dẫn tắt IPv6 | Không dừng là lộ IP thật cả nhóm |
+
+Chốt ở **hai tầng**: renderer hỏi trước để quyết định dừng bao nhiêu, và `main.js` **tự kiểm lại**
+trong `vpn-cycle` (không tin renderer — nó có thể lỗi/bị reload giữa dòng). Hỏi thất bại thì coi
+như **CÓ rủi ro** → dừng hết; an toàn hơn là đoán rồi mất phiên.
+
+Chỉ tính `2000::/3` là đúng: `fe80` (link-local) và `fd/fc` (ULA riêng tư) **không ra được
+internet** nên không thể rò rỉ. Quan trọng với máy này — **Tailscale dùng `fd7a:…`**, nếu tính
+cả ULA thì tính năng sẽ tự khoá mình trên mọi máy có Tailscale. Adapter của chính VPN cũng bỏ
+qua: IPv6 ở đó đi trong đường hầm, và nó biến mất khi VPN tắt.
+
+**Cách bịt (nên làm trên mọi máy, không chỉ để phục vụ tính năng này):** tắt IPv6 trên adapter
+vật lý — `Disable-NetAdapterBinding -Name "Ethernet" -ComponentID ms_tcpip6` (cần admin). Xem
+TROUBLESHOOTING mục 17. **Đừng tắt trên adapter Tailscale.**
+
+⚠ **Đã thử và LOẠI — đóng gói việc tắt IPv6 thành script `.ps1` trong repo:** Windows Defender
+chặn hẳn (*"file contains a virus or potentially unwanted software"*) vì sửa binding mạng là
+hành vi bị heuristic đánh dấu — chặn cả việc **chạy** lẫn việc **xoá** file. Với thao tác chỉ 1
+dòng lệnh thì script là thừa: để lệnh trong tài liệu, người dùng copy-paste.
+
+### Phòng thủ ở tầng backend — không tin renderer
+
+`main.js` (`ipcMain.handle('vpn-cycle', ...)`) **tự kiểm tra lại `crawler.isAnyRunning()`**
+trước khi cho phép chạm vào VPN — không tin renderer đã dừng hết thật (nó có thể lỗi/bị reload
+giữa dòng). Cùng tinh thần phòng thủ 2 lớp với `withDeadline` ở `profile-start` (QĐ-19).
+
+**Giới hạn nhịp đổi IP** (chặn ở backend, không phải chỉ renderer): tối thiểu **10 phút** giữa
+2 lần, tối đa **6 lần/ngày**. Lý do: đổi IP quá dày tự nó là tín hiệu bất thường với TikTok, và
+mỗi lượt đã tốn thời gian dừng + bật lại cả dàn profile — không có lý do gì để chạy liên tục.
+Bị chặn vì nhịp (`skipped: 'rate'`) thì **VPN không hề bị đụng tới** — renderer coi là an toàn
+để chạy lại profile ngay với IP hiện tại (không phải chờ).
+
+Sau khi `cycle()` thành công, `main.js` **ép `ip-guard` đọc lại IP ngay** (`getPublicIp({force:
+true})`) — nó có cache 1 phút, không ép thì profile khởi động lại ngay sau đó có thể thấy IP
+CŨ trong cache và tạm dừng oan (hoặc tệ hơn: tưởng đúng vùng khi IP thật chưa kịp đổi).
+
+### Kiểm chứng
+
+`test/vpn-hma.test.js` — **52 khẳng định**, mock toàn bộ `child_process` (không cần cài HMA
+thật để chạy test — máy CI/máy dev khác không có HMA vẫn test được):
+
+1. `pickGateway`: GB xoay vòng đúng city khác *(8 lần lặp, không bao giờ nhảy sang nước
+   khác)*; KR chỉ 1 gateway → giữ nguyên + báo rõ `rotated:false`; quốc gia không có gateway
+   nào → giữ nguyên, không bịa; nhãn `"UK"` phải quy đổi ra `"GB"` — bắt đúng bẫy QĐ-10 đã
+   xảy ra lúc triển khai.
+2. Tìm `VpnNM.exe` qua registry (giả lập `reg query` trả về manifest, đọc field `path`).
+3. Chu trình tắt/bật thành công theo **mặc định**: đọc trạng thái **TRƯỚC** khi ngắt (thứ tự
+   lệnh gửi đúng), nối lại **đúng gateway cũ** (không xoay city), vẫn đúng quốc gia. Mục 3b
+   kiểm `rotate: true` (đường dự phòng) vẫn xoay được sang city khác cùng nước.
+4. **Khẳng định quan trọng nhất**: suốt cả chu trình **không hề gửi** `Vpn_ConnectToOptimal_NmSvc`
+   lẫn `Vpn_GetOptimalGateway_NmSvc` — không dùng tin đó để quyết định bất cứ điều gì.
+5. Profile khai quốc gia không khớp vùng HMA đang nối → từ chối, **không gửi lệnh ngắt** (từ
+   chối trước khi đụng tay vào VPN, không phải đụng rồi mới phát hiện sai).
+6. HMA đang tắt sẵn → từ chối (không biết nên nối lại vào đâu).
+7. Bật lại thất bại → phải cảnh báo rõ **VPN CÓ THỂ ĐANG TẮT**, nói thẳng "đừng chạy profile
+   nào lúc này".
+8. Bật lại nhưng SAI NƯỚC (giả lập HMA tự fallback sang server khác) → phải báo thất bại rõ
+   ràng, không im lặng cho qua.
+9. `status()` chỉ gửi **đúng 1** lệnh đọc, không gửi lệnh nào làm đổi trạng thái VPN.
+
+**Giới hạn đã biết:** không có gì đảm bảo IP mới **không bị siết sẵn** — pool của HMA là hữu hạn
+và nhiều người dùng chung, nên có thể rút được một IP cũng đang bị TikTok hạn chế. Vì vậy tính
+năng này giảm xác suất chứ không phải thuốc chữa tuyệt đối, và trần 6 lần/ngày tồn tại chính vì
+lý do đó (đổi mãi cũng không thoát được thì vấn đề ở chỗ khác).
+
+---
+
+## QĐ-33 — Link TikTok trả "Something went wrong": KHÔNG bỏ nữa, đưa sang TAB CHỜ kiểm tay
+
+**Sự cố thật (2026-08-06):** người dùng thấy app *"bỏ qua rất nhiều sound không rõ nguyên nhân"*.
+Mở tay các link bị bỏ thì trang `/music/` hiện **"Something went wrong — Sorry about that! Please
+try again later."** Nhưng phần header **vẫn có đủ** tên sound, tác giả (`duita102`) và **số video
+(`19 videos`)** — tức **sound VẪN TỒN TẠI**, chỉ là TikTok lỗi lúc dựng phần lưới video. Đối
+chiếu với một link bình thường thì trang hiện đủ lưới video.
+
+**Xung đột với QĐ-07 và cách giải.** QĐ-07 chốt: *"API lỗi → đọc giao diện → cả hai lỗi thì BỎ
+LINK, không ghi dòng `?`"*, lý do người dùng đưa ra là *"thà mất một ít link còn hơn dữ liệu
+bẩn"*. Nhưng "một ít" hoá ra là **rất nhiều**, và những link đó **không phải sound chết** — bỏ
+hẳn là mất dữ liệu thật.
+
+Cách giải **không phá QĐ-07**: dữ liệu chính vẫn sạch tuyệt đối (không có dòng `?` nào lọt vào
+bảng/tab chính), nhưng link lỗi được ghi sang **một tab RIÊNG** để người kiểm tay. QĐ-07 vẫn
+đúng ở chỗ nó bảo vệ — chỉ là chỗ chứa link lỗi giờ không còn là thùng rác.
+
+**Phân biệt 2 ca — khác nhau hoàn toàn:**
+
+| Ca | Dấu hiệu | Xử lý | Vì sao |
+|---|---|---|---|
+| Sound **đã bị xóa** | API trả HTTP 400 + `statusCode 10201` (đã verify, QĐ-06) | **BỎ HẲN** | Không có gì cho người kiểm — sound không còn tồn tại |
+| Sound **còn sống** nhưng không đọc được số | API lẫn DOM đều không ra số (gồm ca "Something went wrong") | **→ TAB CHỜ** | Dữ liệu thật, đáng giữ lại |
+
+**Ghi gì vào tab chờ:** 4 cột `A:D` y như tab chính — Tên sound | Link | Số video | Profile.
+Cột **Số video để TRỐNG** (không đọc được thì không bịa). Cột **"Tình trạng" (E) TUYỆT ĐỐI không
+ghi** — người dùng tự điền, đó là yêu cầu rõ ràng.
+
+**KHÔNG tự tạo tab.** Người dùng đã phản đối việc app tự thêm tab lạ lên Sheet của họ — QĐ-19 đã
+phải chuyển `_locks` sang **ẩn** vì chuyện đó. Tab chờ do người dùng tự tạo (họ đã tạo sẵn
+`Total_Link_Voice_Pending` với đúng 5 tiêu đề); thiếu tab thì báo lỗi chỉ đúng chỗ sửa (dùng lại
+đường dịch lỗi của QĐ-26), không im lặng bỏ qua.
+
+**Để trống tên tab = TẮT tính năng** — link lỗi lại bị bỏ như trước. Mặc định tắt, không bật ngầm.
+
+**Link ở tab chờ VẪN được thử lại ở phiên sau — cố ý.** `seedPendingLinks()` chỉ nạp vào
+`_pendingKnown` (chặn ghi trùng), **không** nạp vào `_knownLinks` của tab chính lẫn bộ lọc quét
+`_collected` của crawler. Lý do: "Something went wrong" thường là **lỗi tạm thời**; lần sau đọc
+được số video thật thì sound vào **tab CHÍNH với dữ liệu đầy đủ** — tốt hơn hẳn việc nằm mãi ở
+tab chờ. Mà vẫn không sinh dòng trùng vì `_pendingKnown` chặn ở cửa ghi.
+
+Hệ quả đã chấp nhận: một sound có thể **vừa ở tab chờ, vừa ở tab chính** (chờ từ lần lỗi, chính
+từ lần đọc được). Người dùng dọn tay khi xử lý tab chờ — đổi lấy việc không mất dữ liệu.
+
+**Dùng lại hạ tầng sẵn có, không viết lại:** `appendRows` (phạm vi `A:Z`, QĐ-08), `normalizeKey`
+(so trùng theo ID nên slug khác ngôn ngữ vẫn nhận ra là cùng sound, QĐ-10), cầu dao quota
+(QĐ-24 — bị chặn thì giữ lô, hẹn lại đúng phần cooldown còn lại), và nguyên tắc **không bỏ rơi
+lô lỗi** (trả về đầu buffer để thử lại, như `flush()` chính).
+
+**Kiểm chứng:** `test/sheets-pending.test.js` — **26 khẳng định**, mock `google-api.cjs` (không
+gọi mạng): ghi đúng 4 cột (**không** có cột E), ghi đúng tab chờ và **tuyệt đối không** ghi vào
+tab chính, không ghi trùng (link đã có trên Sheet / vừa ghi / **cùng ID khác slug ngôn ngữ**),
+để trống tên tab = tắt hoàn toàn (không gọi API nào), đổi tên tab thì quên danh sách tab cũ,
+và lỗi ghi thì **giữ lại lô rồi ghi lại được** (không mất dữ liệu).
+
+⚠ **Bài học lúc viết test (lặp lại đúng bẫy QĐ-09):** ban đầu tôi dùng ID sound giả ngắn (`222`,
+`111`). `_extractMusicId` đòi **tối thiểu 8 chữ số**, nên ID ngắn không trích được ID → `normalizeKey`
+lùi về so **nguyên văn URL** → 2 slug khác ngôn ngữ của cùng một sound bị coi là 2 sound khác
+nhau, và khẳng định lọc trùng thành **vô nghĩa** (test đã bắt được ngay). Phải dùng **ID dài 19
+chữ số thật** — hiện đang dùng đúng 2 ID lấy từ ảnh người dùng gửi.
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |
@@ -1061,7 +1480,8 @@ Lý do vẫn nên làm sau này:
 | Chuyển sang chế độ hiện để tránh bị chặn trang đếm | Đã A/B test: ẩn và hiện giống hệt nhau, không phải nguyên nhân |
 | Chuyển toàn bộ sang FirefoxPortable cho "đỡ ngốn RAM" | Đo thật thì Firefox tốn HƠN: 13 tiến trình / 4.6GB / CPU 60% so với Chromium 8–10 / 3.2GB / 23–32% — xem QĐ-27 |
 | Bật `launchPersistentContext` cho mọi profile thay cho file cookie | Mỗi profile thành 1 Chromium riêng → mất lợi ích "1 Chromium dùng chung" (~+1GB với 5 profile). Phải là công tắc, mặc định tắt — xem QĐ-27 |
-| Mở trình duyệt thứ hai (tab đếm / nút 🦊) trên cùng một `user-data-dir` | Chromium báo "profile is already in use" — phải dùng lại đúng context đang mở, xem QĐ-27 |
+| Mở **persistent context thứ hai** trên cùng một `user-data-dir` | Chromium báo "profile is already in use" — nút 🦊 phải dùng lại đúng context đang mở, xem QĐ-27 |
+| Suy từ đó ra rằng tab đếm **không thể** tách khỏi context của profile persistent | Chẩn đoán SAI PHẠM VI: trình duyệt đếm ẩn dùng `chromium.launch()` + `newContext()` + copy cookie, KHÔNG mở `persistDir` → không đụng khóa. Vì tin nhầm điều này mà chạy HIỆN bị lòi tab `/music/` vào cửa sổ người dùng — xem bổ sung 2026-08-05 của QĐ-27 |
 | Đặt cài đặt **toàn app** vào modal mở ra **từ một profile** | Người dùng hiểu theo vị trí điều khiển, không theo chữ "(toàn app)" ghi cạnh → báo là bug ngay hôm phát hành. Vị trí là lời hứa về phạm vi — xem QĐ-28 |
 | Giữ chế độ profile bằng **cờ module toàn cục** (`setPersistentProfiles`) | Không thể trộn 2 chế độ trên cùng máy → mất khả năng A/B test cùng IP/cùng giờ, mà đó mới là so sánh sạch. Phải truyền option mỗi lần mở — xem QĐ-28 |
 | Cho nút 🦊 mở bằng chế độ khác với lúc crawl | Đăng nhập xong "không ăn": ghi vào thư mục Chromium mà lượt chạy đọc file cookie (hoặc ngược lại) — xem QĐ-28 |
@@ -1087,6 +1507,12 @@ Lý do vẫn nên làm sau này:
 | Tin rằng `await startProfileById()` là đủ để bật profile tuần tự | `crawler.startProfile()` trả về NGAY (vòng crawl chạy nền) → 5 profile khởi động gần như cùng lúc, tranh chấp CPU làm 1-2 profile bị chẩn đoán nhầm là kẹt feed — xem QĐ-21 |
 | Để trần hàng đợi đếm quá lớn (500) | Backlog phình to → khoảng cách Quét/Đã check lớn, và đó chính là số sound MẤT khi bấm Dừng cứng; quét nhanh hơn cổ chai chỉ để dồn hàng rồi mất — xem QĐ-21 |
 | Vòng chờ/tạm dừng trong luồng crawl mà không phát status ra UI | Bảng đứng yên không một dòng thông báo → người dùng tưởng app treo, báo là bug — xem QĐ-21 |
+| Quay vòng thoát kẹt cách 1→2→3 vô hạn khi feed đã CẠN | Gần 2 giờ cho ra 0 sound hợp lệ, mà càng thử càng dội. Bước ĐẾM có backoff từ lâu, vòng QUÉT thì không — phải có — xem QĐ-31 |
+| "Dừng rồi chạy lại" profile khi feed cạn | Cấp 3 của thoát kẹt ĐÃ là tải lại trang và đã thất bại; restart chỉ là reload đắt hơn với cùng IP/cookie/vân tay. Vòng dừng-chạy liên tục chính là "càng dội càng bị chặn sâu" — xem QĐ-31 |
+| Gộp "KHÔNG có nút kế tiếp" với "CÓ nút nhưng đang bị TẮT" thành cùng một thông báo | Hai thứ nghĩa khác hẳn: ca sau là bằng chứng TRỰC TIẾP TikTok nói hết video. Gộp lại thì đọc log không phân biệt được feed cạn với cơ chế cuộn hỏng — xem QĐ-31 |
+| Kết luận "feed cạn" chỉ từ một dấu hiệu (vd trang còn ≤2 video) | Feed vừa tải lại cũng có lúc tạm 1–2 video → báo oan làm profile KHOẺ tự tạm dừng, tệ hơn cả bệnh. Phải đủ 4 điều kiện + không phải khách — xem QĐ-31 |
+| Dùng status `error` cho thông báo TẠM DỪNG khi profile VẪN đang sống | Renderer coi `error` là đã dừng → hàng đổi về nút "▶ Chạy", bấm vào bị từ chối "Profile đang chạy". Phải dùng `running`. Đường canh IP (QĐ-17) đang mắc đúng lỗi này — xem QĐ-31 |
+| Tin "bộ test pass" khi bộ test đó KHÔNG có assertion nào | `crawl-modes.test.js` (13 kịch bản gốc) chỉ `console.log` rồi `exit(0)` — pass chỉ nghĩa "không ném lỗi", không phải "hành vi đúng". Phải có người đọc output, hoặc thêm khẳng định thật — xem QĐ-31 |
 | Kết luận "chế độ KHÁCH" từ MỘT lần đọc DOM rồi dừng cả profile | Trang TikTok lúc hydrate hiện nút Log in thoáng qua → báo khách OAN, dừng oan; nút 🔑 đọc lại 24s nên không bị, gây mâu thuẫn "🔑 nói đăng nhập mà ▶ nói khách" — xem QĐ-22 |
 | Thêm vòng chờ/đọc lại nhiều lần mà không nhận cờ `stop` | Bấm Dừng phải chờ hết cửa sổ (tới 20s) mới phản hồi — xem QĐ-22 |
 | Dùng lại `.result-table` (min-width 720px) cho bảng trong modal hẹp | Ép sinh thanh cuộn ngang, bó hết nội dung — modal cần bộ style riêng, xem QĐ-23 |
@@ -1102,3 +1528,16 @@ Lý do vẫn nên làm sau này:
 | Để mốc đọc tăng dần ở 2 nơi (main.js + sheets.cjs) | 2 mốc lệch nhau (bẫy QĐ-10) và 2 nơi cùng đọc sẽ cùng đẩy mốc → nhảy qua mất dòng chưa đọc. Phải để MỘT nơi + gộp lời gọi trùng — xem QĐ-09 |
 | Tính mốc đọc tăng dần bằng `links.length` (đã lọc dòng rỗng) | Mốc lệch dần mỗi khi Sheet có dòng rỗng → đọc lặp vô ích/bỏ sót. Phải dùng số dòng THÔ (`rawRows`) — xem QĐ-09 |
 | Tin layout "nhìn code thấy ổn" mà không render thật để đo | Bỏ sót cuộn ngang, `-webkit-line-clamp` cắt hở, dải trắng ở trạng thái rỗng — chụp ảnh + đo `scrollWidth-clientWidth` mới thấy, xem QĐ-23 |
+| Dùng UI Automation để điều khiển cửa sổ HMA VPN | GUI là WebView2 — cây UI Automation chỉ có 1 node, `BoundingRectangle=Empty`, 0 phần tử con. Không bấm được gì qua accessibility tree — xem QĐ-32 |
+| Điều khiển VPN qua Windows Service Control (`net stop/start`) | ACL của dịch vụ chỉ cấp Start/Stop cho SYSTEM + Administrators, user thường không làm được — không đồng nhất trên mọi máy trong dàn — xem QĐ-32 |
+| Dùng `Vpn_ConnectToOptimal_NmSvc` / tin `Vpn_GetOptimalGateway_NmSvc` để chọn server | "Optimal" = gần nhất theo ĐỊA LÝ máy đang chạy, không phải server phù hợp với profile. Đo thật trả về Việt Nam cho profile khai London — nối vào đó là tự tạo mâu thuẫn "IP nước này, giờ nước khác" nặng nhất có thể — xem QĐ-32 |
+| Chỉ dừng đúng profile bị feed cạn, để các profile khác tiếp tục chạy trong lúc đổi IP | IP là của CẢ MÁY — lúc VPN tắt để chuẩn bị bật lại, các profile khác vẫn gửi request bằng IP THẬT (không phải IP đã đăng ký) → mất phiên hàng loạt, tệ hơn hẳn 1 profile bị cạn ban đầu. Phải dừng HẾT rồi bật lại đúng nhóm — xem QĐ-32 |
+| Cho phép đổi IP dù quốc gia HMA đang nối không khớp nhãn profile, hoặc tự "sửa" giùm cho khớp | Không kiểm tra được nước IP thật đang phục vụ khu vực đó có đúng không — phải TỪ CHỐI và để người dùng tự sửa VPN trước, không đoán giùm — xem QĐ-32 |
+| Xoay sang city khác khi đổi IP, vì tưởng "cùng server ⇒ cùng IP" | Giả định SAI, đo thật bác bỏ: cùng gateway London cho `18.171.54.19` → `18.132.40.68` (HMA cấp IP từ POOL mỗi lần kết nối). Xoay city còn CÓ HẠI — đưa IP sang vùng địa lý khác, lệch vùng phiên đăng nhập đã quen. Chỉ tắt/bật lại là đủ — xem QĐ-32 |
+| Tin `systemKillSwitchActive: true` của HMA là đã chống rò rỉ | Cờ đó KHÔNG chặn IPv6. Đo thật: VPN tắt → IPv6 lọt ra `2405:4802:… (VN)` trong 241ms. Tên cờ nghe thuyết phục nên gần như đã kết luận sai — phải đo bằng cách gọi mạng thật lúc VPN tắt — xem QĐ-32 |
+| Tính `fd/fc` (ULA) hoặc `fe80` (link-local) là rò rỉ IPv6 | Chúng KHÔNG ra được internet. Tính cả ULA thì tính năng tự khoá mình trên mọi máy có **Tailscale** (`fd7a:…`) — chỉ tính global unicast `2000::/3` — xem QĐ-32 |
+| Kết luận "profile khác vẫn chạy mượt ⇒ an toàn" | Rò rỉ IPv6 IM LẶNG: không lỗi, không dừng, chỉ mất phiên SAU ĐÓ. "Chạy mượt" ≠ "an toàn" — xem QĐ-32 |
+| Đóng gói việc tắt IPv6 thành script `.ps1` trong repo | Windows Defender chặn hẳn ("file contains a virus or potentially unwanted software") vì sửa binding mạng — chặn cả chạy LẪN xoá file. Để lệnh trong tài liệu cho copy-paste — xem QĐ-32 |
+| BỎ HẲN link khi không đọc được số video, coi mọi ca như nhau | Ca "Something went wrong" là sound VẪN CÒN (header còn tên + số video), TikTok chỉ lỗi lúc dựng trang — bỏ là mất dữ liệu thật, và người dùng thấy mất RẤT NHIỀU. Chỉ bỏ hẳn khi sound CHẾT thật (`statusCode 10201`); còn sống thì sang tab chờ — xem QĐ-33 |
+| Nạp link ở tab chờ vào bộ lọc quét (`_collected`) hoặc `_knownLinks` của tab chính | Sẽ KHÔNG BAO GIỜ thử lại được, mà "Something went wrong" thường chỉ là lỗi tạm thời — đọc được ở phiên sau thì sound vào tab CHÍNH với dữ liệu đầy đủ. Chỉ nạp vào `_pendingKnown` để chặn ghi trùng — xem QĐ-33 |
+| Dùng ID sound NGẮN làm dữ liệu test khi kiểm lọc trùng | `_extractMusicId` đòi tối thiểu 8 chữ số; ID ngắn không trích được ID nên `normalizeKey` lùi về so nguyên văn URL → 2 slug khác ngôn ngữ của CÙNG sound thành 2 key khác nhau → khẳng định lọc trùng VÔ NGHĨA. Phải dùng ID 19 chữ số thật (lặp lại đúng bẫy QĐ-09) — xem QĐ-33 |

@@ -7,8 +7,10 @@
 //      tat 4 profile tren cung may de so sanh.
 //   2. Lan dau bat: cookie trong session.state.json phai duoc mang sang, khong thi 5 profile
 //      dang dang nhap tot bong dung thanh khach het.
-//   3. Tab dem PHAI dung chung context cua profile — mot thu muc user-data-dir chi cho MOT
-//      Chromium mo, mo them la "profile is already in use".
+//   3. Tab dem khi chay AN PHAI dung chung context cua profile — mot thu muc user-data-dir chi
+//      cho MOT Chromium mo, mo them PERSISTENT context nua la "profile is already in use".
+//      NHUNG khi chay HIEN thi phai TACH ra trinh duyet an rieng, khong thi nguoi dung thay
+//      tab /music/ nhap nhay trong cua so ho dang xem (bao loi 2026-08-05) — xem muc 11.
 //   4. releaseCountContext KHONG duoc dong context dung chung — dong la sap luon tab quet.
 //   5. Van tay (fingerprint) cua 2 che do phai y het nhau — lech van tay giua tab dem va tab
 //      chinh = "1 phien dang nhap, 2 thiet bi" → TikTok huy phien (QD-05).
@@ -279,6 +281,50 @@ console.log('\n=== Che do profile Chromium rieng ===\n');
   eq(info2.tiktokCookies, 0, 'dem 0 cookie tiktok');
   await browser.releaseProfileContext(dir3);
   ok(ctxD.closed && ctxG.closed, 'da dong het context cua muc 10');
+
+  // ── 11. Chay HIEN: tab dem KHONG duoc ke vao cua so nguoi dung dang xem ──
+  // Nguoi dung bao (2026-08-05): bam Chay thi cua so profile hien ra HAI tab — tab feed va tab
+  // `/music/original-sound-...` cua buoc dem — trong khi chi muon thay tab chinh.
+  // Truoc ban va: persistent LUON dung chung context nen tab dem buoc phai nam trong cua so do.
+  // Sau ban va: chi dung chung khi chay AN (khong ai thay, ma tiet kiem 1 instance); chay HIEN
+  // thi di trinh duyet an RIENG. Fake nem loi o chromium.launch() nen "nem loi" o day CHINH LA
+  // bang chung da di duong trinh duyet an rieng (cung cach muc 9 chung minh cho profile TAT).
+  console.log('\n11. Chay HIEN: tab dem tach ra trinh duyet an, khong ke vao cua so profile');
+  const dirVis = path.join(tmp, 'hien@hotmail.com(US)');
+  fs.mkdirSync(dirVis, { recursive: true });
+  fs.writeFileSync(path.join(dirVis, 'session.state.json'),
+    JSON.stringify({ cookies: SESSION_COOKIES, origins: [] }), 'utf8');
+
+  launches.length = 0;
+  const ctxVis = await browser.acquireProfileContext(dirVis, { headless: false, persistent: true });
+  eq(launches.length, 1, 'profile chay HIEN: van mo Chromium persistent rieng');
+  eq(launches[0].opts.headless, false, 'mo o che do HIEN dung nhu cai dat');
+
+  let visErr = '';
+  let visRes = null;
+  try { visRes = await browser.acquireCountContext(ctxVis, dirVis); }
+  catch (e) { visErr = e.message; }
+  ok(visErr.includes('KHONG duoc goi chromium.launch'),
+    'tab dem KHONG dung chung context nua -> di mo trinh duyet AN rieng');
+  ok(visRes === null, 'khong tra ve handle shared (khong con ke tab vao cua so profile)');
+  eq(launches.length, 1, 'KHONG mo them persistent context nao (khong dung khoa thu muc)');
+
+  // Chay AN thi van phai dung chung nhu cu — day la nua con lai cua quyet dinh, de-vo nhat khi
+  // ai do "don dep" bang cach tach ca hai truong hop (mat luon phan tiet kiem 1 instance).
+  const dirHid = path.join(tmp, 'an@hotmail.com(US)');
+  fs.mkdirSync(dirHid, { recursive: true });
+  fs.writeFileSync(path.join(dirHid, 'session.state.json'),
+    JSON.stringify({ cookies: SESSION_COOKIES, origins: [] }), 'utf8');
+  const ctxHid = await browser.acquireProfileContext(dirHid, { headless: true, persistent: true });
+  const cntHid = await browser.acquireCountContext(ctxHid, dirHid);
+  eq(cntHid.shared, true, 'chay AN thi VAN dung chung context (giu phan tiet kiem 1 instance)');
+  eq(cntHid.ctx, ctxHid, 'dung dung context cua profile do');
+  await browser.releaseCountContext(cntHid);
+  eq(ctxHid.closed, false, 'releaseCountContext KHONG dong context dung chung');
+
+  await browser.releaseProfileContext(dirVis);
+  await browser.releaseProfileContext(dirHid);
+  ok(ctxVis.closed && ctxHid.closed, 'da dong het context cua muc 11');
 
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
 

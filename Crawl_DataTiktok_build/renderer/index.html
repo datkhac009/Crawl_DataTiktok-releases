@@ -199,6 +199,20 @@
         </div>
 
         <div class="section">
+          <div class="section-title">Tên tab CHỜ KIỂM TAY (tuỳ chọn)</div>
+          <input type="text" id="sheetsPendingTab" class="input" placeholder="Total_Link_Voice_Pending" />
+          <div class="section-desc">
+            Link mà TikTok trả <b>"Something went wrong"</b> (sound vẫn còn nhưng app không đọc được số video)
+            sẽ được ghi sang tab này thay vì <b>bỏ mất</b>. Ghi 4 cột <b>A:D</b> như tab chính; cột
+            <b>Tình trạng (E)</b> để <b>TRỐNG</b> cho bạn tự điền.<br />
+            ⚠️ <b>Bạn phải tự tạo tab này trên Sheet trước</b> (app không tự tạo tab lạ). Để trống ô này = tắt,
+            link lỗi sẽ bị bỏ như cũ.<br />
+            Link ở tab chờ <b>vẫn được thử lại</b> ở phiên sau — đọc được số video thì nó vào tab chính với
+            dữ liệu đầy đủ, và không bị ghi trùng sang tab chờ lần nữa.
+          </div>
+        </div>
+
+        <div class="section">
           <div class="section-title">Service Account JSON</div>
           <textarea id="sheetsSa" class="input" rows="6" placeholder='Dán toàn bộ file JSON service account (có client_email, private_key)...'></textarea>
           <div class="section-desc">⚠️ Nhớ <b>chia sẻ Google Sheet</b> cho email <code>client_email</code> của service account với quyền <b>Editor</b>.</div>
@@ -390,6 +404,22 @@
             <span>request cùng lúc</span>
           </label>
           <div class="section-desc">Đây là cài đặt <b>chung toàn app</b> (không riêng từng profile). Càng nhỏ càng ít bị TikTok chặn trang đếm; khuyến nghị <b>2</b>. Chạy nhiều profile mà để cao dễ bị chặn (nghỉ 300s liên tục).</div>
+        </div>
+
+        <div class="section" id="cfgVpnSection">
+          <div class="section-title">Tự đổi IP khi TikTok cắt feed (toàn app)</div>
+          <label class="toggle-row" title="Khi phát hiện TikTok không cấp thêm video: dừng hết profile trên máy, tắt/bật lại HMA VPN để lấy IP mới, rồi tự chạy lại.">
+            <input type="checkbox" id="cfgVpnAutoCycle" />
+            <span>Tắt/bật lại HMA VPN rồi tự chạy lại profile</span>
+          </label>
+          <div class="section-desc">
+            Cài đặt <b>chung toàn app</b>. Mặc định <b>tắt</b>. Cần HMA VPN đã cài và <b>đã đăng nhập</b> trên máy này.<br />
+            ⚠️ Vì IP là của <b>cả máy</b>, mỗi lần đổi IP sẽ <b>dừng HẾT profile</b> đang chạy rồi bật lại lần lượt —
+            không thể đổi IP cho riêng một profile. Lúc VPN tắt máy dùng IP thật, nên để profile nào chạy cũng là mất phiên.<br />
+            Chỉ <b>tắt rồi bật lại đúng server đang dùng</b> — HMA cấp IP khác mỗi lần kết nối nên không cần đổi thành phố
+            (đo thật: cùng server London cho IP <code>18.171.54.19</code> → <code>18.132.40.68</code>).
+            Giới hạn: tối đa <b>6 lần/ngày</b>, cách nhau ít nhất <b>10 phút</b>.
+          </div>
         </div>
 
       </div>

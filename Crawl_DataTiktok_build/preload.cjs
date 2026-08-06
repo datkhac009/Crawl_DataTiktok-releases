@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld('api', {
   sheetsScanDuplicates: () => ipcRenderer.invoke('sheets-scan-duplicates'),
   sheetsCleanDuplicates: () => ipcRenderer.invoke('sheets-clean-duplicates'),
 
+  // HMA VPN — tắt/bật lại lấy IP mới khi TikTok cắt feed
+  vpnStatus: () => ipcRenderer.invoke('vpn-status'),
+  vpnCycle: (params) => ipcRenderer.invoke('vpn-cycle', params),
+  // Máy có rò rỉ IPv6 khi VPN tắt hay không → quyết định dừng RIÊNG 1 profile hay dừng HẾT.
+  vpnIpv6Risk: () => ipcRenderer.invoke('vpn-ipv6-risk'),
+
   // Lịch sử thu thập theo ngày
   historyGet: (limit) => ipcRenderer.invoke('history-get', limit),
   historyClear: () => ipcRenderer.invoke('history-clear'),

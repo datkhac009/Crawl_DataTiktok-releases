@@ -31,9 +31,10 @@ Lưu trong thư mục dữ liệu người dùng của Electron, không nằm c�
 | Khóa | Nội dung |
 |---|---|
 | `profile_settings` | Cài đặt **riêng từng profile**: chế độ, từ khóa, ẩn/hiện, bộ lọc, delay, thời lượng chu kỳ, danh sách link xem, `chromiumProfile` (profile Chromium riêng — [QĐ-28](DECISIONS.md))… |
-| `sheets_config` | Spreadsheet ID, tên tab, JSON Service Account, chu kỳ đồng bộ lọc trùng |
+| `sheets_config` | Spreadsheet ID, tên tab, **`pendingTab`** (tab chờ kiểm tay — [QĐ-33](DECISIONS.md), để trống = tắt), JSON Service Account, chu kỳ đồng bộ lọc trùng |
 | `count_concurrency` | Số luồng đếm video đồng thời (**chung toàn app**, không theo profile) |
 | `update_repo` | Repo GitHub phát hành (để trống = dùng mặc định) |
+| `vpn_auto_cycle` | Tự tắt/bật lại HMA VPN khi feed cạn rồi tự chạy lại profile (**chung toàn app**). Mặc định `false` — [QĐ-32](DECISIONS.md) |
 
 ## Các file trong thư mục profile
 
@@ -120,7 +121,8 @@ Sinh tự động, suy tất định từ tên thư mục profile nên **mất c
 | Nơi | Nội dung |
 |---|---|
 | Bảng trong app | Giữ tối đa 5000 dòng hiển thị; dữ liệu đầy đủ vẫn nằm trong bộ nhớ để xuất |
-| Google Sheet | 4 cột A–D: Tên sound, Link, Số video, Profile |
+| Google Sheet — tab chính | 4 cột A–D: Tên sound, Link, Số video, Profile |
+| Google Sheet — **tab chờ** ([QĐ-33](DECISIONS.md)) | Cùng 4 cột A–D, nhưng **Số video để TRỐNG** (không đọc được). Cột E "Tình trạng" app **không bao giờ ghi** — người dùng tự điền. Chỉ chứa link TikTok trả *"Something went wrong"* (sound còn sống mà không lấy được số video) |
 | Xuất Excel (CSV) | UTF-8 có BOM để Excel mở không lỗi font tiếng Việt |
 
 ## Dọn dữ liệu thừa

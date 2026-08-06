@@ -15,6 +15,9 @@ const crawler = require('./src/crawler.cjs');
 const sheets = require('./src/sheets.cjs');
 const sheetLock = require('./src/sheet-lock.cjs');
 const history = require('./src/history.cjs');
+const fingerprint = require('./src/fingerprint.cjs');
+const vpn = require('./src/vpn-hma.cjs');
+const ipGuard = require('./src/ip-guard.cjs');
 const { withDeadline } = require('./src/google-api.cjs');
 const updater = require('./src/updater.cjs');
 const { getLogsDir } = require('./src/paths.cjs');
@@ -322,7 +325,10 @@ ipcMain.handle('profile-start', async (_e, params) => {
   let sa = null;
   try { sa = sheetsCfg.saJson ? JSON.parse(sheetsCfg.saJson) : null; } catch (_) {}
   sheets.configure(
-    { enabled: !!sheetsCfg.enabled, spreadsheetId: sheetsCfg.spreadsheetId, tab: sheetsCfg.tab, sa },
+    {
+      enabled: !!sheetsCfg.enabled, spreadsheetId: sheetsCfg.spreadsheetId, tab: sheetsCfg.tab,
+      pendingTab: sheetsCfg.pendingTab, sa,
+    },
     (msg) => send('crawl-status', { profileId: null, status: 'sheet-error', msg: 'Google Sheet: ' + msg })
   );
 
@@ -347,6 +353,20 @@ ipcMain.handle('profile-start', async (_e, params) => {
           + ' — TẠM DỪNG đẩy tự động lên Sheet (tránh trùng), dữ liệu vẫn hiện trong bảng.'
           + ' App tự thử lại mỗi phút; muốn đẩy ngay thì bấm "Đẩy lên Sheet".',
       });
+    }
+
+    // Nạp link đã có trên TAB CHỜ để không ghi trùng (QĐ-33). Lỗi thì chỉ cảnh báo — tab chờ
+    // là tính năng phụ, không được làm hỏng cả lượt chạy. Chưa nạp được thì tệ nhất là ghi
+    // trùng vài dòng trên tab chờ, không ảnh hưởng dữ liệu chính.
+    if (sheets.isPendingEnabled()) {
+      const p = await sheets.seedPendingLinks();
+      if (p.ok) {
+        send('crawl-status', { profileId: null, status: 'info',
+          msg: `Tab chờ "${sheets.pendingTabName()}": đã nạp ${p.count} link để lọc trùng.` });
+      } else if (p.msg) {
+        send('crawl-status', { profileId: null, status: 'sheet-error',
+          msg: `Không đọc được tab chờ "${sheets.pendingTabName()}": ${p.msg}` });
+      }
     }
   }
 
@@ -373,6 +393,20 @@ ipcMain.handle('profile-start', async (_e, params) => {
       if (status === 'stopped' && profileId) {
         const f = folderOfProfile(profileId);
         if (f) sheetLock.release([f]).catch(() => {});
+      }
+    },
+    // onPending (QĐ-33): TikTok trả "Something went wrong" → không đọc được số video nhưng
+    // sound VẪN CÒN → ghi sang tab chờ để người kiểm tay, thay vì bỏ hẳn như trước.
+    // Cột "Tình trạng" (E) KHÔNG điền — người dùng tự ghi.
+    // Trả về true nếu thực sự xếp được vào hàng chờ, để log của crawler nói đúng việc đã làm
+    // (tắt tính năng / link đã có trên tab chờ → trả false, log vẫn ghi "Bỏ" như cũ).
+    (d) => {
+      if (!sheets.isPendingEnabled()) return false;
+      try {
+        return sheets.enqueuePending([d.name || '', d.url || '', d.count ?? '', d.profileName || '']);
+      } catch (e) {
+        console.warn('[pending] Xếp link vào tab chờ lỗi:', e.message);
+        return false;
       }
     }
   );
@@ -447,6 +481,104 @@ ipcMain.handle('sheets-clean-duplicates', async () => {
   catch (e) { return { ok: false, msg: e.message }; }
 });
 
+// ─────────────────────────────────────────
+// IPC: HMA VPN — tắt/bật lại để lấy IP mới khi TikTok cắt feed (QĐ-32)
+// ─────────────────────────────────────────
+ipcMain.handle('vpn-status', async () => {
+  try { return await vpn.status(); }
+  catch (e) { return { ok: false, msg: e.message }; }
+});
+
+// Có được phép chỉ dừng RIÊNG profile bị cắt feed, hay phải dừng HẾT? (2026-08-06)
+// Người dùng muốn chỉ dừng 1 profile ("các profile khác vẫn chạy mượt"). Điều đó CHỈ an toàn
+// khi máy không rò rỉ IPv6 lúc VPN tắt — xem ipv6LeakRisk() trong vpn-hma.cjs.
+// Rẻ (đọc os.networkInterfaces, không spawn gì) nên renderer gọi thoải mái trước mỗi lượt.
+ipcMain.handle('vpn-ipv6-risk', () => {
+  try { return vpn.ipv6LeakRisk(); }
+  catch (e) { return { risky: true, addresses: [], unknown: true, msg: e.message }; }
+});
+
+// Giới hạn nhịp đổi IP. Đổi quá dày cũng là tín hiệu bất thường với TikTok, và mỗi lượt đã
+// tốn thời gian dừng+bật lại cả dàn profile — không có lý do gì để nó chạy liên tục.
+const VPN_MIN_GAP_MS = 10 * 60 * 1000;
+const VPN_MAX_PER_DAY = 6;
+let _vpnLastAt = 0;
+let _vpnDayKey = '';
+let _vpnDayCount = 0;
+
+ipcMain.handle('vpn-cycle', async (_e, arg) => {
+  const profileId = arg && arg.profileId;
+
+  // ⛔ CHỐT AN TOÀN Ở TẦNG BACKEND, KHÔNG TIN RENDERER.
+  // Renderer có nhiệm vụ dừng profile trước khi gọi, nhưng nếu nó lỗi/bị reload giữa dòng thì
+  // lệnh này KHÔNG được phép chạy sai. Lớp phòng thủ thứ hai, cùng tinh thần với `withDeadline`
+  // ở profile-start (QĐ-19).
+  //
+  // ĐIỀU KIỆN phụ thuộc RÒ RỈ IPv6 (đo thật 2026-08-06 — xem ipv6LeakRisk):
+  //   • Máy CÓ IPv6 công khai → lúc VPN tắt, IPv6 đi thẳng ra IP thật (đo: lọt trong 241ms).
+  //     Profile nào còn chạy là lộ nước thật → BẮT BUỘC dừng hết.
+  //   • Máy KHÔNG có IPv6 công khai → lúc VPN tắt mọi request chỉ bị lỗi mạng, không lộ gì
+  //     → cho phép giữ các profile khác chạy (đúng cái người dùng muốn: chỉ dừng profile bị cắt).
+  const risk = vpn.ipv6LeakRisk();
+  if (risk.risky && crawler.isAnyRunning()) {
+    const addr = (risk.addresses[0] && risk.addresses[0].address) || '?';
+    const iface = (risk.addresses[0] && risk.addresses[0].iface) || '?';
+    return {
+      ok: false,
+      ipv6Risk: risk,
+      msg: `Không tắt VPN khi còn profile đang chạy: máy này CÓ IPv6 công khai (${iface}: ${addr})`
+        + ' nên lúc VPN tắt IPv6 sẽ đi thẳng ra IP thật và làm mất phiên. Hãy dừng hết profile'
+        + ' trước, hoặc tắt IPv6 trên máy (xem TROUBLESHOOTING mục 17) để chỉ cần dừng 1 profile.',
+    };
+  }
+
+  const now = Date.now();
+  const dayKey = new Date().toISOString().slice(0, 10);
+  if (dayKey !== _vpnDayKey) { _vpnDayKey = dayKey; _vpnDayCount = 0; }
+  if (now - _vpnLastAt < VPN_MIN_GAP_MS) {
+    const left = Math.ceil((VPN_MIN_GAP_MS - (now - _vpnLastAt)) / 60000);
+    return { ok: false, skipped: 'rate', msg: `Vừa đổi IP xong — chờ thêm ~${left} phút nữa mới đổi lại.` };
+  }
+  if (_vpnDayCount >= VPN_MAX_PER_DAY) {
+    return {
+      ok: false, skipped: 'rate',
+      msg: `Đã đổi IP ${_vpnDayCount} lần hôm nay (trần ${VPN_MAX_PER_DAY}). Đổi dày hơn cũng là`
+        + ' tín hiệu bất thường — nguyên nhân có thể ở chỗ khác (xem TROUBLESHOOTING mục 16).',
+    };
+  }
+
+  // Nhãn quốc gia của profile suy từ TÊN THƯ MỤC (cùng cách fingerprint.cjs làm) — để không
+  // bao giờ nối VPN vào nước khác với nước profile đang khai (QĐ-05).
+  let expectCountry = null;
+  if (profileId) {
+    const folder = folderOfProfile(profileId);
+    if (folder) expectCountry = fingerprint.countryOf(folder);
+  }
+
+  try {
+    // KHÔNG truyền `rotate: true` — chỉ tắt/bật lại đúng gateway cũ là đã đổi IP (HMA cấp IP từ
+    // pool mỗi lần kết nối; đo thật: cùng gateway London cho 18.171.54.19 → 18.132.40.68).
+    // Xoay city thêm chỉ đưa IP sang vùng địa lý khác, lệch với vùng phiên đăng nhập đã quen.
+    const r = await vpn.cycle({ expectCountry });
+    if (r.ok) {
+      _vpnLastAt = Date.now();
+      _vpnDayCount++;
+      // Buộc ip-guard đọc lại NGAY: nó cache 1 phút, không force thì profile khởi động lại có
+      // thể thấy IP cũ và tạm dừng oan (hoặc tệ hơn: tưởng đúng vùng khi chưa đúng).
+      let ip = null;
+      try { ip = await ipGuard.getPublicIp({ force: true }); } catch (_) {}
+      r.ip = ip;
+      r.msg += ip && ip.country ? ` IP mới: ${ip.ip || '?'} (${ip.country}).` : ' (chưa tra được IP mới.)';
+      console.log('[vpn]', r.msg);
+    } else {
+      console.warn('[vpn] Đổi IP không thành công:', r.msg);
+    }
+    return r;
+  } catch (e) {
+    return { ok: false, msg: 'Lỗi đổi IP: ' + e.message };
+  }
+});
+
 // ── Lịch sử thu thập theo ngày ──
 ipcMain.handle('history-get', (_e, limit) => {
   try { return { ok: true, days: history.getDays({ limit: limit || 60 }) }; }
@@ -474,9 +606,22 @@ ipcMain.handle('sheets-set-config', async (_e, cfg) => {
     await sheets.flushAll().catch(() => {});
 
     sheets.configure(
-      { enabled: !!cfg.enabled, spreadsheetId: cfg.spreadsheetId, tab: cfg.tab, sa },
+      {
+        enabled: !!cfg.enabled, spreadsheetId: cfg.spreadsheetId, tab: cfg.tab,
+        pendingTab: cfg.pendingTab, sa,
+      },
       (msg) => send('crawl-status', { profileId: null, status: 'sheet-error', msg: 'Google Sheet: ' + msg })
     );
+    // Bật tab chờ giữa phiên → nạp link đã có trên đó để không ghi trùng (QĐ-33).
+    if (sheets.isPendingEnabled()) {
+      const p = await sheets.seedPendingLinks();
+      send('crawl-status', {
+        profileId: null, status: p.ok ? 'info' : 'sheet-error',
+        msg: p.ok
+          ? `Tab chờ "${sheets.pendingTabName()}": đã nạp ${p.count} link để lọc trùng.`
+          : `Không đọc được tab chờ "${sheets.pendingTabName()}": ${p.msg || 'lỗi không rõ'}`,
+      });
+    }
 
     // Bật giữa phiên → nạp link cũ trên Sheet vào bộ lọc trùng (đầu phiên chưa nạp vì lúc đó Sheet tắt).
     if (cfg.enabled && sa && cfg.spreadsheetId) {

@@ -125,7 +125,12 @@ async function diagnoseFeed(page) {
     page.evaluate(_findNextButtonInPage).catch(() => null),
     new Promise(r => setTimeout(() => r(null), EVALUATE_TIMEOUT_MS)),
   ]);
-  base.nextBtn = btn ? btn.label : '';
+  // `nextBtn` chỉ mang nhãn của nút DÙNG ĐƯỢC (giữ đúng nghĩa cũ cho dòng log).
+  // 2 cờ mới tách rạch ròi 2 ca trước đây cùng ra chuỗi rỗng — xem _findNextButtonInPage.
+  base.nextBtn = (btn && !btn.disabled) ? btn.label : '';
+  base.nextBtnDisabled = !!(btn && btn.disabled);
+  base.nextBtnMissing = !btn;
+  base.nextBtnLabel = btn ? btn.label : '';
   return base;
 }
 
@@ -145,41 +150,90 @@ async function diagnoseFeed(page) {
 //     LUÔN có (vd data-e2e="like-icon") ⇒ loại được nguy cơ bấm nhầm gây like/follow/report;
 //   • `aria-disabled="true"` khi không dùng được (nút LÊN lúc đang ở đầu feed) ⇒ bỏ qua.
 // Trong cặp lên/xuống, nút XUỐNG nằm THẤP hơn → chọn nút thấp nhất.
-// Không tìm thấy thì trả null (KHÔNG bấm bừa nút khác — thà báo không làm được).
+//
+// ── TÁCH 2 CA TRƯỚC ĐÂY BỊ GỘP (2026-08-05) ──
+// Trước đây hàm này loại nút `aria-disabled="true"` ngay trong bộ lọc rồi trả `null`, nên
+// log chỉ in được một câu duy nhất `KHÔNG thấy nút kế tiếp` cho HAI tình huống có ý nghĩa
+// khác hẳn nhau:
+//   • KHÔNG có nút nào       → có thể TikTok đổi bố cục, hoặc trang chưa dựng xong.
+//   • CÓ nút nhưng đang TẮT  → chính TikTok đang nói "KHÔNG CÒN VIDEO NÀO NỮA". Đây là
+//     bằng chứng TRỰC TIẾP của feed cạn, và cuộn thêm bao nhiêu cũng vô ích.
+// Sự cố thật dẫn tới việc tách (2026-08-05): 1 máy ảo có profile còn đăng nhập tốt (nút 🔑
+// xác nhận) nhưng feed chỉ có 2 video; app quay vòng cách 1→2→3 gần 2 giờ, ra 0 sound hợp lệ,
+// mà log chỉ nói "KHÔNG thấy nút kế tiếp" nên không ai biết là feed cạn hay cơ chế cuộn hỏng.
+//
+// Trả về:
+//   null                         — không có nút nào (kể cả nút đang tắt)
+//   { x, y, label }              — nút DÙNG ĐƯỢC (bấm được)
+//   { disabled: true, label }    — có nút nhưng TikTok đang TẮT nó
 function _findNextButtonInPage() {
   const vh = window.innerHeight, vw = window.innerWidth;
-  const ok = (el) => {
-    if (el.getAttribute('aria-disabled') === 'true' || el.disabled) return false;
+  // HÌNH DẠNG/VỊ TRÍ hợp lệ — xét cho MỌI ứng viên, chưa quan tâm bật/tắt.
+  // ⚠ Điều kiện `data-e2e` là lớp an toàn THẬT: nút like/bình luận/chia sẻ LUÔN có data-e2e,
+  // loại chúng ra mới không có nguy cơ bấm nhầm gây like/follow/report. Giữ nguyên.
+  const shape = (el) => {
     if (el.hasAttribute('data-e2e') || el.querySelector('[data-e2e]')) return false;
     if (!el.querySelector('svg')) return false;
     const r = el.getBoundingClientRect();
     return r.width >= 20 && r.width <= 130 && r.height >= 20 && r.height <= 130
       && r.top >= 0 && r.bottom <= vh && r.left >= vw * 0.45;   // cụm nút ở nửa phải màn hình
   };
-  let list = Array.from(document.querySelectorAll('button.action-item')).filter(ok);
+  const isDisabled = (el) => el.getAttribute('aria-disabled') === 'true' || el.disabled;
+
+  let list = Array.from(document.querySelectorAll('button.action-item')).filter(shape);
   // Dự phòng nếu TikTok đổi class: chỉ nhận phần tử được đánh dấu rõ là mũi tên.
   if (!list.length) {
     list = Array.from(document.querySelectorAll(
       '[data-e2e*="arrow"], button[aria-label*="next" i], button[aria-label*="Tiếp" i]'))
       .filter(el => {
         const r = el.getBoundingClientRect();
-        return !el.disabled && el.getAttribute('aria-disabled') !== 'true'
-          && r.width >= 20 && r.height >= 20 && r.top >= 0 && r.bottom <= vh;
+        return r.width >= 20 && r.height >= 20 && r.top >= 0 && r.bottom <= vh;
       });
   }
   if (!list.length) return null;
-  let best = null, bestTop = -1;
-  for (const el of list) {
-    const r = el.getBoundingClientRect();
-    if (r.top > bestTop) { bestTop = r.top; best = el; }
-  }
-  const r = best.getBoundingClientRect();
-  const cls = String(best.className || '');
+
   // Nhãn NGẮN GỌN cho log: class đầy đủ của TUXButton rất dài, cắt 40 ký tự chỉ ra chuỗi
   // "TUXButton TUXButton--capsule TUXButton--" vô nghĩa.
-  const label = best.getAttribute('data-e2e') || best.getAttribute('aria-label')
-    || (cls.includes('action-item') ? 'action-item' : (cls.split(/\s+/)[0] || best.tagName));
-  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), label };
+  const labelOf = (el) => {
+    const cls = String(el.className || '');
+    return el.getAttribute('data-e2e') || el.getAttribute('aria-label')
+      || (cls.includes('action-item') ? 'action-item' : (cls.split(/\s+/)[0] || el.tagName));
+  };
+  const lowest = (arr) => {
+    let best = null, bestTop = -1;
+    for (const el of arr) {
+      const r = el.getBoundingClientRect();
+      if (r.top > bestTop) { bestTop = r.top; best = el; }
+    }
+    return best;
+  };
+
+  const usable = list.filter(el => !isDisabled(el));
+  if (!usable.length) return { disabled: true, label: labelOf(lowest(list)) };
+
+  const best = lowest(usable);
+  const r = best.getBoundingClientRect();
+  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), label: labelOf(best) };
+}
+
+// Số link video tối đa còn coi là "feed đã cạn". Feed khoẻ dựng nhiều video (đo thật: profile
+// khoẻ gặp 94 sound khác nhau/100 lần cuộn); feed bị siết chỉ còn 1-2 video và không bao giờ
+// nạp thêm.
+const MAX_STARVED_LINKS = 2;
+
+// TikTok KHÔNG CÒN CẤP VIDEO cho profile/IP này hay không — suy từ kết quả diagnoseFeed.
+//
+// ⚠ KHÔNG kết luận khi `diag` là null ("không đọc được trạng thái trang"): đó là tình huống
+// KHÔNG BIẾT, và cả app đi theo một triết lý duy nhất — chỉ kết luận khi CHẮC CHẮN (xem
+// ip-guard.cjs: 2 nhà cung cấp phải đồng thuận; session-watch.cjs: 'guest' phải ổn định 3 lần;
+// sheet-lock.cjs: lỗi mạng thì KHÔNG chặn). Báo oan ở đây sẽ làm profile khoẻ tự tạm dừng.
+//
+// Đây CHỈ là 1 trong 4 điều kiện — nơi gọi (runScanLoop) còn phải thấy feed đã kẹt, đã thử
+// đủ một vòng 3 cấp thoát kẹt không hiệu quả, và không phải chế độ khách.
+function looksStarved(diag) {
+  if (!diag) return false;
+  if (typeof diag.links !== 'number' || diag.links > MAX_STARVED_LINKS) return false;
+  return diag.nextBtnDisabled === true || diag.nextBtnMissing === true;
 }
 
 // ── Thoát kẹt theo cấp độ tăng dần (user chốt 2026-07-26, chỉnh lại 2026-07-27 theo log thật) ──
@@ -196,6 +250,9 @@ async function unstickFeed(page, level) {
         new Promise(r => setTimeout(() => r(null), EVALUATE_TIMEOUT_MS)),
       ]);
       if (!btn) return null;
+      // Nút đang TẮT thì TUYỆT ĐỐI không bấm: TikTok tắt nó vì không còn video để chuyển tới,
+      // bấm vào không có tác dụng gì. Nói rõ ra để log phân biệt được với "không có nút".
+      if (btn.disabled) return `KHÔNG bấm được: nút "${btn.label}" đang bị TikTok TẮT (hết video)`;
       await page.mouse.click(btn.x, btn.y);
       return `đã bấm nút "${btn.label}"`;
     }
@@ -217,14 +274,27 @@ async function unstickFeed(page, level) {
 
 // Xử lý 1 lần phát hiện kẹt: chẩn đoán → ghi log rõ nguyên nhân → can thiệp theo cấp độ.
 // allowReload=false cho chế độ 'current' (tab của NGƯỜI DÙNG — không bao giờ tự tải lại).
-// Trả true nếu đã TẢI LẠI (nơi gọi cần reset bộ đếm recycle).
+//
+// Trả `{ reloaded, diag }`:
+//   reloaded — đã TẢI LẠI trang (nơi gọi cần reset bộ đếm recycle)
+//   diag     — kết quả chẩn đoán (null nếu không đọc được trang). Trả ra ngoài để nơi gọi
+//              quyết định được việc LỚN HƠN một lần thoát kẹt: nhiều lần kẹt liên tiếp mà
+//              trang chỉ còn 1-2 video và nút kế tiếp đang tắt = feed cạn, phải đổi hướng
+//              thay vì quay vòng cách 1→2→3 vô hạn (xem looksStarved + runScanLoop).
 async function handleStuck(page, tracker, { profileId, onStatus, prefix, waitSelector, allowReload, stop, noHref }) {
   const diag = await diagnoseFeed(page);
   let level = tracker.nextStuckLevel();
   if (!allowReload && level === 3) level = 1;   // 'current': bỏ qua cấp tải lại, quay về cấp 1
+  // 3 CA cho nút kế tiếp, trước đây 2 ca cuối bị gộp thành cùng một câu (xem
+  // _findNextButtonInPage): "đang TẮT" nghĩa là chính TikTok nói hết video — khác hoàn toàn
+  // với "không tìm thấy nút" (có thể do đổi bố cục / trang chưa dựng xong).
+  const btnInfo = !diag ? ''
+    : diag.nextBtn ? `, thấy nút kế tiếp "${diag.nextBtn}"`
+    : diag.nextBtnDisabled ? `, nút kế tiếp "${diag.nextBtnLabel}" ĐANG BỊ TẮT (TikTok báo hết video)`
+    : ', KHÔNG thấy nút kế tiếp';
   const info = diag
     ? `${diag.links} link video, video tải ${diag.videoReady}/4, con trỏ ở ${diag.active}`
-      + (diag.nextBtn ? `, thấy nút kế tiếp "${diag.nextBtn}"` : ', KHÔNG thấy nút kế tiếp')
+      + btnInfo
       + (diag.overlay ? `, CÓ LỚP CHE "${diag.overlay}"` : '')
     : 'không đọc được trạng thái trang';
   const how = level === 1 ? 'bấm nút video kế tiếp của TikTok'
@@ -250,7 +320,7 @@ async function handleStuck(page, tracker, { profileId, onStatus, prefix, waitSel
     onStatus(profileId, 'running', `   ↳ ${prefix}${done || 'KHÔNG thực hiện được (không tìm thấy điều khiển phù hợp)'}.`);
   }
   tracker.clearStuck();
-  return reloaded;
+  return { reloaded, diag };
 }
 
 module.exports = {
@@ -258,7 +328,9 @@ module.exports = {
   diagnoseFeed,
   unstickFeed,
   handleStuck,
+  looksStarved,
   STUCK_SAME_SOUND,
   FEED_STATS_EVERY,
   STUCK_RECOVERED,
+  MAX_STARVED_LINKS,
 };

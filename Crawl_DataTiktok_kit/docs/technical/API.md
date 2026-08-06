@@ -1,6 +1,9 @@
 # API
 
-Ứng dụng **không có API server**. Phần này ghi lại 2 loại giao tiếp thực tế có trong app.
+> Cập nhật: 2026-08-05 — nguồn sự thật là `preload.cjs` (danh sách kênh) và `main.js`
+> (`ipcMain.handle`). Sửa 2 chỗ thì cập nhật lại file này.
+
+Ứng dụng **không có API server**. Phần này ghi lại 3 loại giao tiếp thực tế có trong app.
 
 ## 1. IPC nội bộ (renderer ↔ main)
 
@@ -8,15 +11,46 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 
 | Kênh | Chiều | Mục đích |
 |---|---|---|
+| `app-version`, `is-dev` | gọi | Version hiện tại; có phải bản dev (quyết định hiện nút 🔄 Reload) |
+| `restart-app`, `reload-window` | gửi | Khởi động lại app; nạp lại giao diện (chỉ dev) |
+| `profiles-list`, `profiles-add`, `profiles-update`, `profiles-delete` | gọi | CRUD profile (`config/profiles.json`) |
+| `profiles-import-path`, `profiles-list-folders`, `profiles-get-path` | gọi | Import folder từ ổ đĩa; liệt kê folder chưa gán; tra đường dẫn |
 | `profile-start` / `profile-stop` / `profile-soft-stop` | gọi | Chạy / dừng cứng / dừng mềm một profile |
-| `profiles-stop-all`, `crawl-running-ids` | gọi | Dừng tất cả, hỏi profile nào đang chạy |
+| `profiles-stop-all`, `crawl-running-ids` | gọi | Dừng tất cả; hỏi profile nào đang chạy (**nguồn sự thật** để renderer đồng bộ lại trạng thái sau khi nạp lại giao diện) |
+| `verify-logins` | gọi | 🔑 Kiểm tra đăng nhập THẬT nhiều profile (mở TikTok hỏi thẳng, ~20–30s/profile) |
 | `open-browser` / `close-browser` | gọi | Mở/đóng trình duyệt 🦊; trả kèm chẩn đoán phiên đăng nhập |
+| `browser-closed` | nhận | Người dùng tự đóng cửa sổ 🦊 |
 | `crawl-data` | nhận | Một sound đã qua bộ lọc → thêm dòng vào bảng |
-| `crawl-status` | nhận | Trạng thái profile. Có 3 loại đặc biệt: `counts` (số Quét/Đã check), `phase` (mốc chuyển pha để đếm ngược), `sheet-error` |
-| `sheets-*` | gọi | Đọc/ghi cấu hình, test kết nối, đẩy bù thủ công |
+| `crawl-status` | nhận | Trạng thái profile — **nhiều loại**, xem bảng dưới |
+| `sheets-get-config`, `sheets-set-config`, `sheets-test` | gọi | Đọc/ghi cấu hình Sheet; 🔌 Test kết nối (trả cả danh sách tab có thật) |
+| `sheets-push-manual` | gọi | ☁ Đẩy bù thủ công (tự lọc trùng, bấm nhiều lần không tạo trùng) |
+| `sheets-scan-duplicates`, `sheets-clean-duplicates` | gọi | 🧹 Dọn trùng: bước quét (chỉ đọc, để xem trước) và bước xoá thật |
 | `history-get`, `history-clear` | gọi | Đọc/xóa lịch sử thu thập theo ngày (`config/history.json`) |
+| `store-get`, `store-set` | gọi | Đọc/ghi electron-store (`profile_settings`, `count_concurrency`, `update_repo`…) |
+| `select-folder`, `export-results` | gọi | Hộp thoại chọn thư mục; xuất bảng dữ liệu ra CSV (UTF-8 BOM) |
 | `check-updates`, `download-and-update` | gọi | Kiểm tra & cài bản mới |
-| `download-progress`, `update-available` | nhận | Tiến trình tải bản cập nhật |
+| `update-get-repo`, `update-set-repo` | gọi | Repo GitHub phát hành (ô "Nâng cao" trong modal ⬆) |
+| `download-progress`, `update-available`, `update-not-available`, `update-error` | nhận | Tiến trình tải + kết quả kiểm tra cập nhật |
+| `vpn-status` | gọi | Đọc trạng thái HMA VPN hiện tại (chỉ đọc, không đổi gì) — [QĐ-32](DECISIONS.md) |
+| `vpn-ipv6-risk` | gọi | Máy có IPv6 công khai (rò rỉ khi VPN tắt) hay không → quyết định dừng RIÊNG 1 profile hay dừng HẾT. Rẻ, đồng bộ, không spawn gì |
+| `vpn-cycle` | gọi | Tắt/bật lại HMA VPN **đúng server đang dùng** để lấy IP mới từ pool (không đổi city — xem QĐ-32). Backend tự chặn nếu còn profile đang chạy + giới hạn nhịp (10 phút/lần, 6 lần/ngày) |
+
+### Các loại `crawl-status`
+
+`profileId = null` nghĩa là thông báo **cấp phiên** (không thuộc profile nào).
+
+| `status` | Kèm dữ liệu | Renderer làm gì |
+|---|---|---|
+| `running` | `msg` | Cập nhật badge trạng thái + ghi log 📄, đánh dấu hàng đang chạy |
+| `stopped` / `error` | `msg` | Bỏ đánh dấu đang chạy, xoá chip pha; `error` còn hiện toast |
+| `counts` | `scanned`, `checked`, `skippedDup` | **Kênh riêng, không kèm text** — chỉ cập nhật số, không đụng badge/log |
+| `phase` | `phaseLabel`, `nextLabel`, `deadlineAt` | Chip đếm ngược của chế độ chu kỳ (renderer tự tick mỗi giây) |
+| `verify` | `state`, `msg` | Kết quả 🔑. ⚠ **KHÔNG** dùng `running` cho việc này — xem cảnh báo trong `main.js` |
+| `feed-starved` | `msg` | TikTok không cấp thêm video cho profile ([QĐ-31](DECISIONS.md)) — vừa là log, vừa là tín hiệu để renderer tự đổi IP nếu đã bật ([QĐ-32](DECISIONS.md)). ⚠ **KHÔNG** dùng `error`/`running` — profile vẫn sống |
+| `sheet-rows` | `sheetRows`, `knownLinks` | Ghi vào **ô riêng** `#sheetRowsInfo` ([QĐ-29](DECISIONS.md)) |
+| `sheet-error` | `msg` | Hiện toast lỗi + ghi vào dòng thông báo |
+| `info` | `msg` | Thông báo cấp phiên (nạp link lọc trùng, tiến độ 🔑…) |
+| `all-done` | `msg` | Không còn profile nào chạy → tổng kết phiên; main.js xả nốt buffer Sheet |
 
 ## 2. Endpoint TikTok mà app phụ thuộc
 
@@ -28,8 +62,28 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 
 ## 3. Google Sheets API v4
 
-- Xác thực: Service Account, ký JWT RS256 → đổi lấy access token (cache 55 phút).
-- Ghi: `values:append` phạm vi `{tab}!A:Z`, `valueInputOption=RAW`.
-- Đọc để lọc trùng: `values.get` phạm vi `{tab}!B:B` (cột Link).
+Xác thực: Service Account, ký JWT RS256 → đổi lấy access token (cache 55 phút, dùng chung
+toàn app qua `google-api.cjs`).
 
-Chi tiết lý do chọn cách này: [DECISIONS.md](DECISIONS.md) mục QĐ-08.
+| Việc | Lời gọi | Ghi chú |
+|---|---|---|
+| Ghi dữ liệu | `values:append` `{tab}!A:Z` · `RAW` | `A:Z` **không** phải `A:D` — xem [QĐ-08](DECISIONS.md) |
+| Ghi **tab chờ** | `values:append` `{pendingTab}!A:Z` · `RAW` | Link TikTok trả *"Something went wrong"*. Chỉ 4 cột A:D, **cột E "Tình trạng" không bao giờ ghi** — [QĐ-33](DECISIONS.md) |
+| Đọc **tab chờ** để lọc trùng | `values.get` `{pendingTab}!B:B` | Nạp 1 lần đầu phiên. **Không** nạp vào bộ lọc quét → link chờ vẫn được thử lại phiên sau |
+| Đọc lọc trùng — **toàn bộ** | `values.get` `{tab}!B:B` | Đầu phiên + đồng bộ lại mốc (mặc định 10 phút/lần). Trần riêng 120s × 2 lần thử ([QĐ-20](DECISIONS.md)) |
+| Đọc lọc trùng — **tăng dần** | `values.get` `{tab}!B{n}:B` | Phần mới ở cuối, mỗi phút + **ngay trước mỗi lần ghi** ([QĐ-09](DECISIONS.md)) |
+| Dọn trùng — quét | `values.get` `{tab}!A:Z` | Đọc rộng để biết dòng nào có ghi chú tay ở cột E trở đi ([QĐ-20](DECISIONS.md)) |
+| Dọn trùng — xoá | `:batchUpdate` + `deleteDimension` | **Phải xoá theo thứ tự GIẢM DẦN** số dòng |
+| Test kết nối | `GET` spreadsheet `?fields=properties.title,sheets.properties.title` | Trả cả danh sách tab có thật |
+| Khoá liên máy — đọc/ghi | `values.get` + `values:batchUpdate` `'_locks'!A:E` | Nhịp tim mỗi 60s ([QĐ-19](DECISIONS.md)) |
+| Khoá liên máy — tạo tab | `:batchUpdate` + `addSheet` (`hidden: true`) / `updateSheetProperties` | Tab `_locks` tạo ở dạng **ẩn**; tab cũ chưa ẩn thì app tự ẩn lại |
+
+**Xử lý lỗi cần biết:**
+
+| HTTP | Nghĩa | App làm gì |
+|---|---|---|
+| `429`, hoặc `403` **có** chữ quota/rateLimit | Vượt giới hạn (60 req/phút **mỗi Service Account**) | Mở cầu dao, tạm ngưng 60s, **không mất dữ liệu** ([QĐ-24](DECISIONS.md)) |
+| `403` **không** có chữ quota | Chưa chia sẻ Sheet cho service account | Báo đúng lỗi thiếu quyền — **không** được nhầm thành quota |
+| `400` + `unable to parse range` | **Tên tab không tồn tại** | Dịch thành câu chỉ đúng chỗ sửa ([QĐ-26](DECISIONS.md)) |
+
+Chi tiết lý do chọn cách này: [DECISIONS.md](DECISIONS.md) — QĐ-08, QĐ-09, QĐ-19, QĐ-20, QĐ-24, QĐ-26.

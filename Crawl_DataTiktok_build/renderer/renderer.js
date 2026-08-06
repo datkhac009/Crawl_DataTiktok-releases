@@ -419,6 +419,33 @@ async function waitProfileWarmedUp(id) {
   return 'timeout';
 }
 
+// Bật lần lượt một NHÓM profile. DÙNG CHUNG cho "▶ Chạy đã chọn" và cho việc bật lại sau khi
+// đổi IP (handleFeedStarved) — tách ra để không có 2 bản sao logic bật-lần-lượt, đúng bài học
+// QĐ-10: có ≥2 bản sao của cùng một logic thì chúng SẼ lệch nhau.
+async function startProfilesStaggered(ids, { btn = null } = {}) {
+  const todo = ids.filter(id => !runningSet.has(id));
+  try {
+    for (let i = 0; i < todo.length; i++) {
+      const id = todo[i];
+      if (runningSet.has(id)) continue;   // vừa được bật bằng đường khác
+      if (btn && todo.length > 1) btn.textContent = `▶ Đang bật ${i + 1}/${todo.length}...`;
+      await startProfileById(id);         // tuần tự để seed Sheet chỉ đọc 1 lần
+      if (i === todo.length - 1) break;   // profile cuối → không cần chờ thêm
+      if (!runningSet.has(id)) continue;  // bật thất bại → sang profile kế tiếp ngay
+      $('crawlStatusMsg').textContent =
+        `Đang bật lần lượt ${i + 1}/${todo.length} — chờ "${nameOf(id)}" quét được rồi mới bật profile kế tiếp...`;
+      await waitProfileWarmedUp(id);
+    }
+  } finally {
+    // XÓA tin nhắn tiến trình khi xong lượt (2026-08-03): trước đây nó KẸT LẠI mãi ở
+    // "Đang bật lần lượt 2/5..." dù cả 5 profile đã chạy từ lâu — vừa sai vừa CHIẾM CHỖ của
+    // thông tin hữu ích hơn trên cùng dòng trạng thái đó.
+    const msg = $('crawlStatusMsg');
+    if (msg && msg.textContent.startsWith('Đang bật lần lượt')) msg.textContent = '';
+  }
+  return todo.length;
+}
+
 async function runSelected() {
   if (_runningSelectedBatch) return;   // đang bật lần lượt — chặn bấm chồng
   const ids = getCheckedIds();
@@ -438,30 +465,116 @@ async function runSelected() {
   _runningSelectedBatch = true;
   updateRunSelectedBtnState();
   try {
-    const todo = ids.filter(id => !runningSet.has(id));
-    for (let i = 0; i < todo.length; i++) {
-      const id = todo[i];
-      if (runningSet.has(id)) continue;   // vừa được bật bằng đường khác
-      if (btn && todo.length > 1) btn.textContent = `▶ Đang bật ${i + 1}/${todo.length}...`;
-      await startProfileById(id);         // tuần tự để seed Sheet chỉ đọc 1 lần
-      if (i === todo.length - 1) break;   // profile cuối → không cần chờ thêm
-      if (!runningSet.has(id)) continue;  // bật thất bại → sang profile kế tiếp ngay
-      $('crawlStatusMsg').textContent =
-        `Đang bật lần lượt ${i + 1}/${todo.length} — chờ "${nameOf(id)}" quét được rồi mới bật profile kế tiếp...`;
-      await waitProfileWarmedUp(id);
-    }
+    await startProfilesStaggered(ids, { btn });
   } finally {
     _runningSelectedBatch = false;
     if (btn) btn.textContent = btnText;
     updateRunSelectedBtnState();
-    // XÓA tin nhắn tiến trình khi xong lượt (2026-08-03): trước đây nó KẸT LẠI mãi ở
-    // "Đang bật lần lượt 2/5..." dù cả 5 profile đã chạy từ lâu — vừa sai vừa CHIẾM CHỖ của
-    // thông tin hữu ích hơn (đồng bộ Sheet, nạp link lọc trùng) trên cùng dòng trạng thái đó.
-    const msg = $('crawlStatusMsg');
-    // Xoá câu "Đang bật lần lượt N/M" còn kẹt lại — nó chỉ đúng TRONG LÚC đang bật lần lượt,
-    // để nguyên thì trông như app vẫn đang chờ (bug 2026-08-03). Số dòng Sheet có ô riêng nên
-    // không liên quan gì tới việc xoá này nữa.
-    if (msg && msg.textContent.startsWith('Đang bật lần lượt')) msg.textContent = '';
+  }
+}
+
+// ══════════════════════════════════════════
+// TỰ ĐỔI IP KHI TIKTOK CẮT FEED (QĐ-32)
+// ══════════════════════════════════════════
+// Người dùng chốt 2026-08-05: "profile nào bị TikTok chặn cuộn thì tắt bật lại HMA xong tự
+// chạy lại". Hai bản vá trước chỉ giảm thiệt hại; đổi IP là thứ duy nhất chạm gốc rễ.
+//
+// ── DỪNG RIÊNG 1 PROFILE hay DỪNG HẾT? Phụ thuộc RÒ RỈ IPv6 (2026-08-06) ──
+// Người dùng muốn chỉ dừng đúng profile bị cắt feed ("rerender HMA thì các profile khác vẫn
+// chạy mượt"). Quan sát đó ĐÚNG — chúng vẫn chạy. Nhưng "chạy mượt" khác "an toàn":
+//
+// Đo thật: đường hầm WireGuard của HMA chỉ định tuyến IPv4. Lúc VPN TẮT, IPv6 đi thẳng ra
+// internet bằng IP thật (`2405:4802:… (VN)`, lọt trong 241ms) trong khi profile vẫn khai múi
+// giờ London/Seoul/New York. Rò rỉ này IM LẶNG — không lỗi, không dừng, chỉ mất phiên SAU ĐÓ.
+// (`systemKillSwitchActive: true` của HMA KHÔNG chặn IPv6 — đã đo, đừng tin cờ đó.)
+//
+// Nên quyết định theo máy, không theo phỏng đoán:
+//   máy KHÔNG có IPv6 công khai → chỉ dừng profile bị cắt feed (đúng ý người dùng)
+//   máy CÓ  IPv6 công khai      → dừng hết, và nói rõ cách tắt IPv6 để lần sau chỉ dừng 1
+let _vpnAutoCycle = false;    // công tắc trong ⚙ (chung toàn app)
+let _vpnCycling = false;      // chống chạy chồng nhiều lượt
+
+async function handleFeedStarved(profileId) {
+  if (!_vpnAutoCycle || _vpnCycling) return;
+  _vpnCycling = true;
+  // Nhớ ĐÚNG nhóm đang chạy để bật lại y như cũ (không bật thừa profile người dùng đã tắt tay).
+  const wasAll = [...runningSet];
+
+  // Máy này có rò rỉ IPv6 lúc VPN tắt không → quyết định dừng bao nhiêu profile.
+  // Lỗi khi hỏi thì coi như CÓ rủi ro (dừng hết) — an toàn hơn là đoán bừa rồi mất phiên.
+  let risk = { risky: true };
+  try { risk = await api.vpnIpv6Risk(); } catch (_) {}
+  const stopOnlyOne = !risk.risky;
+
+  // Chỉ dừng 1 thì các profile còn lại vẫn chạy, nên chỉ ghi log vào đúng nhóm bị dừng.
+  const was = stopOnlyOne ? [profileId] : wasAll;
+  const say = (m) => {
+    $('crawlStatusMsg').textContent = m;
+    for (const id of was) appendLog(id, m);
+  };
+  try {
+    if (stopOnlyOne) {
+      const others = wasAll.filter(id => id !== profileId).length;
+      say(`⛔ "${nameOf(profileId)}" bị TikTok cắt feed — dừng RIÊNG profile này để đổi IP`
+        + (others
+          ? ` (máy không có IPv6 công khai nên ${others} profile kia chạy tiếp an toàn, chỉ bị`
+            + ' lỗi mạng vài giây lúc VPN tắt)...'
+          : ' (máy không có IPv6 công khai nên an toàn)...'));
+      await api.profileStop(profileId);
+    } else {
+      const addr = (risk.addresses && risk.addresses[0] && risk.addresses[0].address) || '?';
+      say(`⛔ "${nameOf(profileId)}" bị TikTok cắt feed — dừng ${wasAll.length} profile để đổi IP. `
+        + `Máy này CÓ IPv6 công khai (${addr}) nên lúc VPN tắt IPv6 sẽ lọt ra IP thật — profile `
+        + 'nào còn chạy là mất phiên. Tắt IPv6 trên máy (TROUBLESHOOTING mục 17) thì lần sau chỉ '
+        + 'cần dừng 1 profile.');
+      await api.profilesStopAll();
+    }
+
+    // Chờ BACKEND xác nhận đã dừng. Không tin `runningSet` của renderer — backend là nguồn sự
+    // thật duy nhất về profile nào đang chạy (bài học đồng bộ trạng thái 2026-07-28).
+    let still = [];
+    const t0 = Date.now();
+    while (Date.now() - t0 < 90000) {
+      await new Promise(r => setTimeout(r, 1000));
+      let running = [];
+      try { running = await api.crawlRunningIds(); } catch { running = []; }
+      // Dừng 1 profile: chỉ cần ĐÚNG nó đã dừng. Dừng hết: phải sạch hoàn toàn.
+      still = stopOnlyOne ? (running || []).filter(id => id === profileId) : (running || []);
+      if (!still.length) break;
+    }
+    if (still.length) {
+      say(`⚠ HỦY đổi IP: còn ${still.length} profile chưa dừng sau 90s. Tắt VPN lúc này sẽ để lọt`
+        + ' request bằng IP thật và làm mất phiên — thà không đổi IP.');
+      toast('Hủy đổi IP — còn profile chưa dừng.', 'err');
+      return;
+    }
+
+    say('Đang tắt HMA VPN rồi bật lại để lấy IP mới (nối lại đúng server cũ — HMA cấp IP khác'
+      + ' mỗi lần kết nối nên không cần đổi city)...');
+    const r = await api.vpnCycle({ profileId });
+
+    if (r && r.ok) {
+      say('✅ ' + r.msg);
+      toast('Đã đổi IP — đang chạy lại profile.', 'ok');
+    } else if (r && r.skipped === 'rate') {
+      // Bị giới hạn nhịp thì VPN KHÔNG bị đụng tới → vẫn đang bật, bật lại profile là an toàn.
+      say('⏭ ' + r.msg + ' Chạy lại profile với IP hiện tại.');
+    } else {
+      // Lỗi khác: VPN có thể ĐANG TẮT → TUYỆT ĐỐI không bật lại profile, sẽ chạy bằng IP thật.
+      say('⚠ Đổi IP thất bại: ' + ((r && r.msg) || 'không rõ lý do')
+        + ' — KHÔNG tự chạy lại profile vì VPN có thể đang tắt. Kiểm tra HMA rồi bấm ▶ chạy lại.');
+      toast('Đổi IP thất bại — KHÔNG tự chạy lại. Xem log.', 'err');
+      return;
+    }
+
+    // Bật lại đúng nhóm vừa dừng, lần lượt. Mỗi profile khi khởi động sẽ TỰ chờ ip-guard xác
+    // nhận IP đúng nhãn quốc gia trước khi mở trình duyệt (waitForCorrectCountry) — nên nếu VPN
+    // chưa kịp ổn định thì nó đứng chờ chứ không chạy sai vùng.
+    await startProfilesStaggered(was);
+  } catch (e) {
+    say('⚠ Lỗi trong lúc đổi IP: ' + e.message);
+  } finally {
+    _vpnCycling = false;
   }
 }
 
@@ -578,9 +691,12 @@ function openSettingsModal(ids) {
   // đang mở, KHÔNG phải store chung. Trước đây để chung nên mở ⚙ ở profile nào cũng thấy tick
   // sẵn → tưởng app tự bật hết.
   $('cfgChromiumProfile').checked = !!s.chromiumProfile;
-  // Số luồng đếm đồng thời là cài đặt CHUNG (global store), không theo profile.
-  api.storeGet(['count_concurrency']).then(r => {
+  // Số luồng đếm đồng thời + tự đổi IP là cài đặt CHUNG (global store), không theo profile.
+  // ⚠ Cả hai đều ghi rõ "(toàn app)" ngay trên tiêu đề mục — bài học QĐ-28: đặt cài đặt toàn app
+  // vào modal mở-từ-một-profile mà không nói rõ thì người dùng hiểu là của riêng profile đó.
+  api.storeGet(['count_concurrency', 'vpn_auto_cycle']).then(r => {
     $('cfgCountConcurrency').value = (r && r.count_concurrency) || 2;
+    $('cfgVpnAutoCycle').checked = !!(r && r.vpn_auto_cycle);
   });
   updateCfgModeUI();
   updateCfgHeadlessLabel();
@@ -621,9 +737,10 @@ async function saveCrawlSettings() {
   for (const id of crawlSettingsTargetIds) {
     profileSettings[id] = Object.assign({}, getSettings(id), s);
   }
-  // Lưu cài đặt CHUNG: số luồng đếm đồng thời toàn app (1–10).
+  // Lưu cài đặt CHUNG toàn app: số luồng đếm đồng thời (1–10) + tự đổi IP khi TikTok cắt feed.
   const cc = Math.max(1, Math.min(10, parseInt($('cfgCountConcurrency').value, 10) || 2));
-  await api.storeSet({ count_concurrency: cc });
+  _vpnAutoCycle = $('cfgVpnAutoCycle').checked;
+  await api.storeSet({ count_concurrency: cc, vpn_auto_cycle: _vpnAutoCycle });
   await saveProfileSettings();
   renderProfileTable();
   $('crawlSettingsModal').classList.remove('open');
@@ -824,6 +941,7 @@ async function loadSheetsConfig() {
     $('sheetsEnabled').checked = !!cfg.enabled;
     $('sheetsId').value = cfg.spreadsheetId || '';
     $('sheetsTab').value = cfg.tab || 'Data';
+    $('sheetsPendingTab').value = cfg.pendingTab || '';
     $('sheetsSa').value = cfg.saJson || '';
     $('sheetsReseedMin').value = cfg.reseedMinutes || 10;
   } catch {}
@@ -834,6 +952,8 @@ function readSheetsForm() {
     enabled: $('sheetsEnabled').checked,
     spreadsheetId: $('sheetsId').value.trim(),
     tab: $('sheetsTab').value.trim() || 'Data',
+    // Tab chờ kiểm tay (QĐ-33) — để trống = tắt.
+    pendingTab: $('sheetsPendingTab').value.trim(),
     saJson: $('sheetsSa').value.trim(),
     reseedMinutes: Math.max(1, parseFloat($('sheetsReseedMin').value) || 10),
   };
@@ -1164,6 +1284,15 @@ function initCrawlEvents() {
       // Kênh RIÊNG báo mốc kết thúc pha hiện tại (mode 'cycle') để renderer tự đếm ngược.
       profilePhase[s.profileId] = { label: s.phaseLabel, nextLabel: s.nextLabel, deadlineAt: s.deadlineAt };
       renderPhaseChip(s.profileId);
+    } else if (s.profileId && s.status === 'feed-starved') {
+      // TikTok cắt feed của profile này (QĐ-31). Status RIÊNG vừa là log cho người đọc vừa là
+      // tín hiệu máy. Giữ hàng ở trạng thái ĐANG CHẠY (profile vẫn sống, đang tạm dừng) — dùng
+      // 'error' ở đây sẽ làm hàng đổi về nút "▶ Chạy" dù profile chưa dừng.
+      updateRowStatus(s.profileId, 'running', s.msg);
+      appendLog(s.profileId, s.msg);
+      toast(`[${nameOf(s.profileId)}] TikTok cắt feed`
+        + (_vpnAutoCycle ? ' — đang đổi IP rồi chạy lại...' : ' — xem log 📄'), 'err');
+      if (_vpnAutoCycle) handleFeedStarved(s.profileId);
     } else if (s.profileId && s.status === 'verify') {
       // Kết quả "🔑 Kiểm tra đăng nhập" — KHÔNG phải trạng thái của luồng crawl.
       // TUYỆT ĐỐI không gọi setRowRunning ở đây: kiểm tra phiên không làm profile chạy.
@@ -1207,6 +1336,12 @@ async function init() {
   } catch {}
 
   await loadSettingsStore();
+  // Công tắc tự đổi IP là cài đặt toàn app — phải nạp NGAY lúc khởi động, không chờ tới lúc mở
+  // ⚙: sự kiện 'feed-starved' có thể tới trước khi người dùng mở modal lần nào.
+  try {
+    const g = await api.storeGet(['vpn_auto_cycle']);
+    _vpnAutoCycle = !!(g && g.vpn_auto_cycle);
+  } catch {}
   await loadProfiles();
   renderProfileTable();
 

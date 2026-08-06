@@ -47,7 +47,7 @@ const {
   countPenaltyUp, countPenaltyDown,
 } = require('./crawler/count-throttle.cjs');
 const { readActiveSound, readVideoCount, scrollFeed, recyclePage } = require('./crawler/page-read.cjs');
-const { makeFeedTracker, handleStuck } = require('./crawler/stuck.cjs');
+const { makeFeedTracker, handleStuck, looksStarved } = require('./crawler/stuck.cjs');
 const { checkLoginStateStable, makeLoginWatcher } = require('./crawler/session-watch.cjs');
 
 const TIKTOK_HOME = 'https://www.tiktok.com/';
@@ -84,8 +84,34 @@ const IP_RECHECK_MS = 5 * 60 * 1000;
 // thật 60 giây. Bản chạy thật KHÔNG set biến này nên luôn dùng 60s.
 const IP_PAUSE_RETRY_MS = Number(process.env.TTC_IP_RETRY_MS) || 60000;
 
+// ── FEED CẠN: TikTok không cấp thêm video cho profile/IP này (2026-08-05) ──
+// Sự cố thật: 1 máy ảo, profile CÒN đăng nhập (nút 🔑 xác nhận), nhưng trang chỉ có 2 video
+// và nút "video kế tiếp" bị TikTok TẮT. App quay vòng thoát kẹt cách 1→2→3 gần 2 giờ, ra
+// 0 sound hợp lệ. Bước ĐẾM đã có backoff (30s→2p→5p) từ lâu, còn vòng QUÉT thì KHÔNG có
+// backoff nào — đó là lỗ hổng.
+//
+// ⚠ Nói thẳng giới hạn: KHÔNG có cách nào trong code làm TikTok cấp thêm video. Cuộn không
+// thể cuộn tới cái không tồn tại. Đã cân và LOẠI: `window.scrollBy`/synthetic wheel event
+// (QĐ-13 — feed là băng chuyền CSS, `scrollIntoView` đã thất bại 100%, và React bỏ qua event
+// không trusted); điều hướng thẳng bằng href (chỉ có 1-2 href, hết); gọi thẳng API feed
+// (`item_list` cần tham số ký X-Bogus/msToken — đúng lý do QĐ-06 chọn NGHE response thay vì
+// GỌI endpoint). Vì vậy mục tiêu ở đây chỉ là: PHÁT HIỆN ĐÚNG, NGỪNG DỘI, và ĐỔI HƯỚNG.
+//
+// Số lần can thiệp thoát kẹt LIÊN TIẾP (không quét được sound mới nào ở giữa) đủ để coi là
+// đã thử hết một vòng 3 cấp mà không hiệu quả. Đếm lại từ 0 ngay khi feed cho ra 1 sound mới.
+const STUCK_CYCLE_FULL = 3;
+
+// Backoff khi feed cạn ở chế độ KHÔNG phải chu kỳ: 5 phút → 15 phút → 30 phút (giữ mức cuối).
+// Dài hơn hẳn backoff của bước đếm vì đây là siết ở tầng feed/IP, không phải rate-limit ngắn.
+// TTC_STARVE_RETRY_MS cho test ghi đè (cùng khuôn TTC_IP_RETRY_MS ở trên).
+const STARVE_WAITS = process.env.TTC_STARVE_RETRY_MS
+  ? [Number(process.env.TTC_STARVE_RETRY_MS)]
+  : [5 * 60000, 15 * 60000, 30 * 60000];
+
 // ── Vòng lặp crawl cho 1 profile (nhận cờ `stop` riêng) ──
-async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
+// `onPending` (QĐ-33): link TikTok trả "Something went wrong" — không đọc được số video nhưng
+// sound VẪN CÒN. Trả về true nếu đã xếp vào tab chờ (để log nói đúng việc đã làm).
+async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending) {
   const { minDelay, maxDelay, headless, minVideos, maxVideos, mode, keyword, originalOnly, blockImages, chromiumProfile } = opts;
   // 0 = tắt hẳn tự tải lại feed (người dùng chấp nhận rủi ro RAM để đổi lấy không gián đoạn).
   const recycleEvery = opts.recycleEvery === 0 ? 0 : (opts.recycleEvery || RECYCLE_EVERY_DEFAULT);
@@ -411,6 +437,12 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
   //   deadlineAt    mốc phải dừng (chỉ pha QUÉT của chu kỳ dùng; Infinity = chạy tới khi Dừng)
   //   onGuestMidRun xử lý riêng khi phát hiện tụt xuống chế độ khách giữa lúc chạy
   //   startMsg      dòng log mở đầu (null = nơi gọi đã tự báo trước khi vào vòng)
+  //
+  // TRẢ VỀ lý do kết thúc, để nơi gọi xử lý KHÁC NHAU cho từng chế độ:
+  //   undefined       — hết deadline / bị Dừng (đường bình thường)
+  //   'guest'         — tụt xuống chế độ khách giữa lúc chạy
+  //   'feed-starved'  — TikTok không cấp thêm video (chu kỳ: nhảy sang pha XEM;
+  //                     chế độ khác: tạm dừng có backoff rồi thử lại)
   async function runScanLoop({
     prefix = '',
     waitSelector = null,
@@ -427,6 +459,9 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
     const stop = scanStop;
     if (startMsg) onStatus(profile.id, 'running', startMsg);
     let scrolls = 0;
+    // Số lần can thiệp thoát kẹt LIÊN TIẾP mà feed không cho ra sound mới nào. Quét được 1
+    // sound mới là bằng chứng feed còn sống → đếm lại từ 0.
+    let stuckStreak = 0;
     const tracker = makeFeedTracker();
     // Truyền `stop` để lần đọc lại phiên (tới 20s) không làm nút Dừng phản hồi chậm.
     const watchLogin = enableWatchLogin ? makeLoginWatcher(page, profilePath, stop) : null;
@@ -469,6 +504,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
       try { data = await readActiveSound(page); } catch (_) {}
       const isNew = !!(data && data.href && addSound(data.href, data.name));
       if (isNew) {
+        stuckStreak = 0;   // feed cho ra sound mới = còn sống, không phải cạn
         onStatus(profile.id, 'running', prefix
           ? `${prefix}đã quét ${localCount} sound...`
           : `Đã quét ${localCount} sound...`);
@@ -483,12 +519,44 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
       if (stop.requested) break;
 
       if (stuck) {
-        const reloaded = await handleStuck(page, tracker, {
+        const { reloaded, diag } = await handleStuck(page, tracker, {
           profileId: profile.id, onStatus, prefix,
           waitSelector, allowReload, stop,
           noHref: !(data && data.href),
         });
         if (reloaded) scrolls = 0;
+        stuckStreak++;
+
+        // ── FEED CẠN? Cần ĐỦ CẢ 4 điều kiện mới kết luận ──
+        // (1) đang kẹt (đã có, mới vào được nhánh này)
+        // (2)+(3) trang chỉ còn ≤2 video VÀ không có nút "xuống" dùng được → looksStarved()
+        // (4) đã thử hết một vòng 3 cấp thoát kẹt mà feed vẫn không cho sound mới nào
+        // Thiếu bất kỳ điều nào là KHÔNG kết luận — feed vừa tải lại cũng có lúc tạm 1-2
+        // video, kết luận sớm sẽ làm profile khoẻ tự tạm dừng oan.
+        if (stuckStreak >= STUCK_CYCLE_FULL && looksStarved(diag)) {
+          // Điều kiện cuối: phải chắc KHÔNG phải chế độ khách. Tốn tới 20s nhưng chỉ chạy
+          // đúng 1 lần ở thời điểm đã bế tắc, và nếu là khách thì cách chữa khác hoàn toàn
+          // (bấm 🦊 đăng nhập lại) nên báo sai hướng là đẩy người dùng đi sai đường.
+          const s = await checkLoginStateStable(page, { stop });
+          if (stop.requested) break;
+          if (s === 'guest') {
+            if (onGuestMidRun) onGuestMidRun();
+            return 'guest';
+          }
+          // Status RIÊNG 'feed-starved' (không phải 'running'): nó vừa là dòng log cho người
+          // đọc, vừa là TÍN HIỆU MÁY để renderer quyết định có tắt/bật lại HMA VPN rồi chạy
+          // lại hay không (xem handleFeedStarved trong renderer.js). Gộp làm một message để
+          // không phát 2 lần cùng một việc.
+          // ⚠ KHÔNG dùng 'error': renderer coi 'error' là đã dừng → hàng đổi về nút "▶ Chạy"
+          // trong khi profile vẫn sống (cùng cái bẫy đã ghi ở runScanLoopWithStarveBackoff).
+          onStatus(profile.id, 'feed-starved',
+            `⛔ ${prefix}TikTok KHÔNG cấp thêm video cho profile này — trang chỉ còn `
+            + `${diag.links} video`
+            + (diag.nextBtnDisabled ? ' và nút "video kế tiếp" ĐANG BỊ TẮT' : ' và không có nút "video kế tiếp"')
+            + `, đã thử ${stuckStreak} lượt thoát kẹt đều không hiệu quả. Phiên đăng nhập vẫn TỐT`
+            + ' — cuộn thêm chỉ làm TikTok siết nặng hơn.');
+          return 'feed-starved';
+        }
         continue;   // vừa can thiệp để nhảy video → không cuộn thêm nhịp nữa
       }
 
@@ -503,6 +571,43 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
         await recyclePage(page, waitSelector, stop);
       }
     }
+  }
+
+  // ── Quét + TỰ TẠM DỪNG KHI FEED CẠN (cho chế độ KHÔNG phải chu kỳ) ──
+  // Chế độ chu kỳ có pha XEM để nhảy sang; For You / Tìm kiếm / Tab đang mở thì không, nên
+  // ở đây tạm dừng có backoff tăng dần rồi tải lại thử tiếp — theo đúng khuôn ip-guard
+  // (TẠM DỪNG chứ không dừng hẳn, vì siết thường tự hết sau một lúc; dừng hẳn là mất cả đêm
+  // sản lượng) và khuôn backoff của bước đếm.
+  //
+  // ⚠ Dùng status 'running' cho dòng tạm dừng, KHÔNG dùng 'error': renderer coi 'error' là
+  // đã dừng (setRowRunning(false) + xoá chip pha) nên hàng sẽ đổi về nút "▶ Chạy" trong khi
+  // profile VẪN đang sống → bấm vào bị từ chối "Profile đang chạy". (Đường canh IP hiện đang
+  // dùng 'error' cho thông báo TẠM DỪNG nên có đúng cái vênh này — không sửa ở đây để giữ
+  // phạm vi thay đổi hẹp, nhưng đừng lặp lại nó.)
+  //
+  // ⚠ KHÔNG tải lại trang khi allowReload === false (chế độ 'current' — tab của NGƯỜI DÙNG).
+  async function runScanLoopWithStarveBackoff(opts) {
+    for (let attempt = 0; !scanStop.requested; attempt++) {
+      const reason = await runScanLoop(opts);
+      if (reason !== 'feed-starved' || scanStop.requested) return reason;
+
+      const wait = STARVE_WAITS[Math.min(attempt, STARVE_WAITS.length - 1)];
+      onStatus(profile.id, 'running',
+        `⏸ ${opts.prefix || ''}Tạm dừng ${Math.round(wait / 60000) || 1} phút rồi thử lại.`
+        + ' Nếu lặp lại nhiều lần thì nguyên nhân ở NGOÀI app: đổi IP/VPN (khác thành phố/ASN,'
+        + ' không chỉ khác quốc gia) hoặc chuyển profile này sang chế độ Tìm kiếm — đó là đường'
+        + ' lấy video khác, For You bị siết không có nghĩa Tìm kiếm cũng bị.');
+      await interruptibleSleep(wait, scanStop);
+      if (scanStop.requested) return 'stopped';
+
+      if (opts.allowReload !== false) {
+        onStatus(profile.id, 'running', `${opts.prefix || ''}Hết giờ tạm dừng — tải lại feed rồi thử tiếp...`);
+        await recyclePage(page, opts.waitSelector, scanStop);
+      } else {
+        onStatus(profile.id, 'running', `${opts.prefix || ''}Hết giờ tạm dừng — thử đọc lại tab đang mở...`);
+      }
+    }
+    return 'stopped';
   }
 
   // ── Consumer chung: mở trang sound lấy số video → lọc → đẩy ra ──
@@ -642,12 +747,34 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
       localChecked++;
       emitCounts();
 
-      // Cả API lẫn DOM đều không ra số → BỎ LINK (không còn dòng '?' trong bảng/Sheet).
+      // Cả API lẫn DOM đều không ra số → KHÔNG vào dữ liệu chính (giữ QĐ-07: không có dòng
+      // '?' nào lọt vào bảng/Sheet).
+      //
+      // NHƯNG (2026-08-06, QĐ-33): sound CHƯA CHẾT thì không bỏ hẳn nữa — đẩy sang TAB CHỜ để
+      // người kiểm tay. Người dùng mở tay các link bị bỏ và thấy trang `/music/` hiện
+      // "Something went wrong": sound VẪN TỒN TẠI (header còn tác giả + số video), chỉ là TikTok
+      // lỗi lúc dựng trang. Bỏ hẳn là mất dữ liệu thật.
+      //
+      // Phân biệt 2 ca — KHÁC NHAU hoàn toàn về cách xử:
+      //   dead = true  → sound đã bị XÓA thật (API trả 400 + statusCode 10201, đã verify).
+      //                  Bỏ hẳn, KHÔNG đưa vào tab chờ: không có gì cho người kiểm.
+      //   dead = false → không đọc được số nhưng sound còn sống → TAB CHỜ.
       if (raw === null) {
+        let queued = false;
+        if (!dead && onPending) {
+          // Cột "Số video" để TRỐNG (không đọc được), cột "Tình trạng" (E) do NGƯỜI DÙNG tự
+          // điền nên tuyệt đối không ghi gì vào đó.
+          queued = !!onPending({
+            url: item.url, name: item.name, count: '',
+            profileId: profile.id, profileName: profile.name,
+          });
+        }
         if (!stop.requested) {
           onStatus(profile.id, 'running', dead
             ? `Bỏ "${item.name}" (sound đã bị xóa/không tồn tại)`
-            : `Bỏ "${item.name}" (không lấy được số video — API lẫn giao diện đều lỗi)`);
+            : queued
+              ? `⏳ "${item.name}" → tab CHỜ kiểm tay (TikTok lỗi trang, không đọc được số video)`
+              : `Bỏ "${item.name}" (không lấy được số video — API lẫn giao diện đều lỗi)`);
         }
       } else {
         // API trả number chính xác → dùng thẳng; DOM fallback trả text → parse "88.1K".
@@ -760,13 +887,28 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
       await page.bringToFront().catch(() => {});
 
       // Phiên chết giữa chừng → cắt cả chu kỳ (báo lỗi ở cuối khối cycle, không báo ở đây).
-      await runScanLoop({
+      const reason = await runScanLoop({
         prefix: 'Chu kỳ [Quét]: ',
         waitSelector: 'a[data-e2e="video-music"]',
         watchLogin: true,
         deadlineAt,
         onGuestMidRun: () => { guestDetected = true; },
       });
+
+      // FEED CẠN → KẾT THÚC PHA QUÉT SỚM, để cycleLoop đi tiếp sang nghỉ → pha XEM.
+      // Đây là cách xử lý TỐT NHẤT có sẵn, và nó dùng đúng máy móc đã có sẵn:
+      //   • hết dội TikTok ngay (thay vì quay vòng thoát kẹt hết phần còn lại của pha Quét —
+      //     đã đo thật: gần 2 giờ cho ra 0 sound hợp lệ);
+      //   • pha XEM là hoạt động GIỐNG NGƯỜI THẬT nhất app có (mở link sound, xem 40-70%
+      //     thời lượng, thỉnh thoảng like) nên có cơ hội để TikTok nới lại;
+      //   • hết pha Xem thì vòng sau TỰ THỬ QUÉT LẠI — đúng nghĩa "chạy lại", nhưng cách nhau
+      //     hàng chục phút thay vì vài giây như dừng-rồi-chạy-lại (càng dội càng bị siết sâu).
+      // KHÔNG đặt guestDetected: phiên vẫn tốt, không được cắt cả chu kỳ.
+      if (reason === 'feed-starved' && !stop.requested) {
+        onStatus(profile.id, 'running',
+          'Chu kỳ [Quét]: kết thúc pha QUÉT SỚM vì TikTok không cấp thêm video — chuyển sang '
+          + 'pha XEM luôn. Vòng sau sẽ tự thử quét lại.');
+      }
     }
 
     // ── Pha XEM: lặp qua danh sách viewLinks (lặp lại từ đầu nếu hết mà chưa hết giờ) ──
@@ -931,7 +1073,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
     // và TUYỆT ĐỐI không tự tải lại định kỳ để xả RAM (recycle:false) vì đó là tab họ đang xem.
     // Đua loop với tín hiệu Dừng: stop → resolve ngay, không chờ loop tháo gỡ (loop nền tự thoát).
     await Promise.race([Promise.all([
-      runScanLoop({ waitSelector: null, allowReload: false, recycle: false }),
+      runScanLoopWithStarveBackoff({ waitSelector: null, allowReload: false, recycle: false }),
       countLoop(),
     ]), stop.promise]);
     stop.stoppedEmitted = true;
@@ -1005,7 +1147,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
     // nên selector phải nhận cả 2 dạng (xem readActiveSound).
     // Đua loop với tín hiệu Dừng: stop → resolve ngay, không chờ loop tháo gỡ (loop nền tự thoát).
     await Promise.race([Promise.all([
-      runScanLoop({
+      runScanLoopWithStarveBackoff({
         prefix: `Tìm "${keyword}": `,
         waitSelector: 'a[data-e2e="video-music"], a[aria-label][href*="/music/"]',
         startMsg: 'Bắt đầu thu thập...',
@@ -1062,7 +1204,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
   await page.bringToFront().catch(() => {});
 
   await Promise.race([Promise.all([
-    runScanLoop({
+    runScanLoopWithStarveBackoff({
       waitSelector: 'a[data-e2e="video-music"]',
       watchLogin: true,
       startMsg: 'Bắt đầu thu thập...',
@@ -1079,7 +1221,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop) {
 // ── Bắt đầu 1 profile (độc lập). Trả {ok,msg}. ──
 // params: { profileId, mode, keyword, minDelay, maxDelay, headless, minVideos, originalOnly,
 //           chromiumProfile, seedUrls }
-function startProfile(params, onData, onStatus) {
+function startProfile(params, onData, onStatus, onPending) {
   const profileId = params.profileId;
   if (!profileId) return { ok: false, msg: 'Thiếu profileId.' };
   if (_active.has(profileId)) return { ok: false, msg: 'Profile đang chạy.' };
@@ -1152,7 +1294,7 @@ function startProfile(params, onData, onStatus) {
   };
 
   // Chạy nền — KHÔNG await. Mỗi profile độc lập.
-  crawlOneProfile(profile, opts, onData, onStatus, stop)
+  crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
     .catch(e => onStatus(profileId, 'error', e.message))
     .finally(async () => {
       _active.delete(profileId);

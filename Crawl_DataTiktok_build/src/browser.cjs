@@ -828,12 +828,29 @@ function _ensureSharedHeadless() {
 // profilePath: dùng ĐÚNG vân tay của profile — tab đếm xài CHUNG cookie với tab chính, nếu
 // trình bày vân tay khác thì TikTok thấy "1 phiên đăng nhập, 2 thiết bị" → dễ bị hủy phiên.
 async function acquireCountContext(seedContext, profilePath) {
-  // ⚠ Persistent: MỘT thư mục Chromium profile chỉ được MỘT Chromium mở tại một thời điểm —
-  // mở thêm trình duyệt ẩn trên cùng thư mục sẽ báo "profile is already in use". Nên tab đếm
-  // dùng CHUNG context của profile. Lợi thêm: không phải mở 1 instance riêng để đếm, bù lại
-  // một phần RAM mà chế độ này tốn thêm. Đánh đổi: nếu chạy CHẾ ĐỘ HIỆN thì tab đếm sẽ hiện
-  // trong chính cửa sổ của profile (chạy ẩn thì không thấy gì).
-  if (seedContext && _isPersistentRunning(profilePath)) {
+  // ── Persistent + chạy ẨN: dùng CHUNG context của profile ──
+  // MỘT thư mục Chromium profile chỉ được MỘT Chromium mở tại một thời điểm, nên KHÔNG thể mở
+  // thêm một persistent context nữa trên cùng thư mục ("profile is already in use"). Chạy ẩn
+  // thì không ai thấy tab đếm, mà dùng chung lại tiết kiệm đúng 1 instance Chromium → giữ.
+  //
+  // ── Persistent + chạy HIỆN: PHẢI TÁCH ra trình duyệt ẩn riêng (sửa 2026-08-05) ──
+  // Người dùng báo: bấm Chạy thì cửa sổ profile hiện ra HAI tab — tab feed và tab
+  // `/music/original-sound-...` của bước đếm — và chỉ muốn thấy tab chính. Trước đây chế độ
+  // này luôn dùng chung context nên tab đếm buộc phải nằm trong cửa sổ đang xem.
+  //
+  // ⚠ Lý do QĐ-27 nêu để bắt dùng chung ("mở thêm trình duyệt ẩn trên cùng thư mục sẽ báo
+  // profile is already in use") KHÔNG áp dụng cho đường này: `_ensureSharedHeadless()` gọi
+  // `chromium.launch()` — một Chromium RIÊNG với user-data-dir tạm của Playwright — rồi
+  // `_newProfileContext()` chỉ ĐỌC `fingerprint.json`, TUYỆT ĐỐI không mở `persistDir`. Cookie
+  // được copy từ context đang chạy, y hệt cách chế độ thường vẫn làm. Không có tranh chấp khóa.
+  //
+  // Chi phí: `_sharedHeadless` là MỘT instance dùng chung cho MỌI profile (không phải mỗi
+  // profile một cái), nên tốn thêm đúng 1 instance cho cả app.
+  //
+  // Vân tay vẫn khớp: cùng đi qua `_newProfileContext(…, profilePath)` nên tab đếm trình bày
+  // cùng thiết bị với tab chính — bắt buộc, vì hai bên xài chung cookie (QĐ-05).
+  const running = _profileCtx.get(profilePath);
+  if (seedContext && running && running.persistent && running.headless) {
     return { ctx: seedContext, shared: true };
   }
   const shared = await _ensureSharedHeadless();
