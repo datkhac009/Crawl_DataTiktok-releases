@@ -1320,7 +1320,7 @@ hoạt động"*. Quan sát đó **đúng** — nên phải đo thật thay vì 
 
 ```
 HMA BẬT : IPv4 → 13.40.11.3 (GB)         IPv6 → bị chặn (EACCES)        ✅ an toàn
-HMA TẮT : IPv6 → 2405:4802:… (VN)  lọt ra chỉ trong 241ms               ❌ RÒ RỈ
+HMA TẮT : IPv6 → 2001:db8:… (VN)  lọt ra chỉ trong 241ms               ❌ RÒ RỈ
 ```
 
 Đường hầm WireGuard của HMA **chỉ định tuyến IPv4**. Khi VPN tắt, IPv6 mở ra và đi thẳng ra
@@ -1534,7 +1534,7 @@ chữ số thật** — hiện đang dùng đúng 2 ID lấy từ ảnh người
 | Chỉ dừng đúng profile bị feed cạn, để các profile khác tiếp tục chạy trong lúc đổi IP | IP là của CẢ MÁY — lúc VPN tắt để chuẩn bị bật lại, các profile khác vẫn gửi request bằng IP THẬT (không phải IP đã đăng ký) → mất phiên hàng loạt, tệ hơn hẳn 1 profile bị cạn ban đầu. Phải dừng HẾT rồi bật lại đúng nhóm — xem QĐ-32 |
 | Cho phép đổi IP dù quốc gia HMA đang nối không khớp nhãn profile, hoặc tự "sửa" giùm cho khớp | Không kiểm tra được nước IP thật đang phục vụ khu vực đó có đúng không — phải TỪ CHỐI và để người dùng tự sửa VPN trước, không đoán giùm — xem QĐ-32 |
 | Xoay sang city khác khi đổi IP, vì tưởng "cùng server ⇒ cùng IP" | Giả định SAI, đo thật bác bỏ: cùng gateway London cho `18.171.54.19` → `18.132.40.68` (HMA cấp IP từ POOL mỗi lần kết nối). Xoay city còn CÓ HẠI — đưa IP sang vùng địa lý khác, lệch vùng phiên đăng nhập đã quen. Chỉ tắt/bật lại là đủ — xem QĐ-32 |
-| Tin `systemKillSwitchActive: true` của HMA là đã chống rò rỉ | Cờ đó KHÔNG chặn IPv6. Đo thật: VPN tắt → IPv6 lọt ra `2405:4802:… (VN)` trong 241ms. Tên cờ nghe thuyết phục nên gần như đã kết luận sai — phải đo bằng cách gọi mạng thật lúc VPN tắt — xem QĐ-32 |
+| Tin `systemKillSwitchActive: true` của HMA là đã chống rò rỉ | Cờ đó KHÔNG chặn IPv6. Đo thật: VPN tắt → IPv6 lọt ra `2001:db8:… (VN)` trong 241ms. Tên cờ nghe thuyết phục nên gần như đã kết luận sai — phải đo bằng cách gọi mạng thật lúc VPN tắt — xem QĐ-32 |
 | Tính `fd/fc` (ULA) hoặc `fe80` (link-local) là rò rỉ IPv6 | Chúng KHÔNG ra được internet. Tính cả ULA thì tính năng tự khoá mình trên mọi máy có **Tailscale** (`fd7a:…`) — chỉ tính global unicast `2000::/3` — xem QĐ-32 |
 | Kết luận "profile khác vẫn chạy mượt ⇒ an toàn" | Rò rỉ IPv6 IM LẶNG: không lỗi, không dừng, chỉ mất phiên SAU ĐÓ. "Chạy mượt" ≠ "an toàn" — xem QĐ-32 |
 | Đóng gói việc tắt IPv6 thành script `.ps1` trong repo | Windows Defender chặn hẳn ("file contains a virus or potentially unwanted software") vì sửa binding mạng — chặn cả chạy LẪN xoá file. Để lệnh trong tài liệu cho copy-paste — xem QĐ-32 |

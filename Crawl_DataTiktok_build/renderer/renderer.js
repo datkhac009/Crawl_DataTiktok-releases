@@ -484,7 +484,7 @@ async function runSelected() {
 // chạy mượt"). Quan sát đó ĐÚNG — chúng vẫn chạy. Nhưng "chạy mượt" khác "an toàn":
 //
 // Đo thật: đường hầm WireGuard của HMA chỉ định tuyến IPv4. Lúc VPN TẮT, IPv6 đi thẳng ra
-// internet bằng IP thật (`2405:4802:… (VN)`, lọt trong 241ms) trong khi profile vẫn khai múi
+// internet bằng IP thật (`2001:db8:… (VN)`, lọt trong 241ms) trong khi profile vẫn khai múi
 // giờ London/Seoul/New York. Rò rỉ này IM LẶNG — không lỗi, không dừng, chỉ mất phiên SAU ĐÓ.
 // (`systemKillSwitchActive: true` của HMA KHÔNG chặn IPv6 — đã đo, đừng tin cờ đó.)
 //

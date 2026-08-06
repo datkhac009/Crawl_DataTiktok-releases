@@ -113,7 +113,7 @@ async function isAvailable() { return !!(await hostPath()); }
 //
 // Đường hầm WireGuard của HMA chỉ định tuyến IPv4. Đo trên máy người dùng:
 //   HMA BẬT : IPv4 → 13.40.11.3 (GB)        · IPv6 → bị chặn (EACCES)   ✅ an toàn
-//   HMA TẮT : IPv6 → 2405:4802:… (VN) lọt ra chỉ trong 241ms            ❌ RÒ RỈ
+//   HMA TẮT : IPv6 → 2001:db8:… (VN) lọt ra chỉ trong 241ms            ❌ RÒ RỈ
 //
 // ⚠ `systemKillSwitchActive: true` của HMA **KHÔNG** chặn IPv6 — đã đo, đừng tin vào cờ đó.
 //

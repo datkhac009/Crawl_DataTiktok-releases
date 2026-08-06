@@ -226,18 +226,22 @@ console.log('\n=== Dieu khien HMA VPN ===\n');
 
   // ── 8b. ipv6LeakRisk: quyet dinh dung RIENG 1 profile hay dung HET ──
   // Do that 2026-08-06: duong ham WireGuard cua HMA chi dinh tuyen IPv4. Luc VPN TAT, IPv6 di
-  // thang ra IP that (2405:4802:... VN, lot trong 241ms) du systemKillSwitchActive=true.
+  // thang ra IP that (2001:db8:... VN, lot trong 241ms) du systemKillSwitchActive=true.
   // Ham nay sai la mat phien ca dan may -> phai co khang dinh.
   console.log('\n8b. ipv6LeakRisk: nhan dien IPv6 cong khai (quyet dinh dung 1 hay dung het)');
   const osMod = require('os');
   const realNetIf = osMod.networkInterfaces;
   const fakeNet = (map) => { osMod.networkInterfaces = () => map; };
 
-  // Ca THAT tren may nguoi dung: Ethernet giu IPv6 cong khai 2405:... -> CO rui ro.
+  // ⚠ DUNG DAI TAI LIEU `2001:db8::/32` (RFC 3849). TUYET DOI khong dan IPv6 THAT cua may vao
+  // day: repo nay PUBLIC, ma IPv6 khong co NAT nen mot dia chi day du la dia chi truy cap duoc
+  // TRUC TIEP tu internet (da tung lo mot lan, phai sua lai). `2001:db8:` van bat dau bang '2'
+  // nen van kiem dung nhanh global unicast 2000::/3.
+  // Ca THAT tren may nguoi dung: Ethernet giu IPv6 cong khai -> CO rui ro.
   fakeNet({
     Ethernet: [
       { family: 'IPv4', address: '192.168.1.10', internal: false },
-      { family: 'IPv6', address: '2405:4802:1cfa:3f10:78ac:653:aeb7:e5d', internal: false },
+      { family: 'IPv6', address: '2001:db8:1cfa:3f10::e5d', internal: false },
     ],
     Tailscale: [{ family: 'IPv6', address: 'fd7a:115c:a1e0::3f32:3234', internal: false }],
   });
@@ -271,7 +275,7 @@ console.log('\n=== Dieu khien HMA VPN ===\n');
 
   // Node moi tra family dang SO (6) thay vi chuoi 'IPv6' — phai nhan ca hai, neu khong thi
   // ham am tham luon tra "khong rui ro" va app dung 1 profile trong khi dang ro ri that.
-  fakeNet({ Ethernet: [{ family: 6, address: '2405:4802::1', internal: false }] });
+  fakeNet({ Ethernet: [{ family: 6, address: '2001:db8::1', internal: false }] });
   eq(vpn.ipv6LeakRisk().risky, true, 'nhan ca family dang SO (6), khong chi chuoi "IPv6"');
 
   osMod.networkInterfaces = realNetIf;   // tra lai ban that

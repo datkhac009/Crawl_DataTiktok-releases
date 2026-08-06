@@ -524,7 +524,7 @@ App **tự kiểm máy có rò rỉ IPv6 hay không** rồi chọn:
 
 ```
 HMA BẬT : IPv4 → 13.40.11.3 (GB)          IPv6 → bị chặn (EACCES)      ✅ an toàn
-HMA TẮT : IPv6 → 2405:4802:… (VN)  lọt ra chỉ trong 241ms              ❌ RÒ RỈ
+HMA TẮT : IPv6 → 2001:db8:… (VN)  lọt ra chỉ trong 241ms              ❌ RÒ RỈ
 ```
 
 `systemKillSwitchActive: true` của HMA **KHÔNG** chặn IPv6 — đã đo, **đừng tin cờ đó**.
