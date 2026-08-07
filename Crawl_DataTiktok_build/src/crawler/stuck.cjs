@@ -15,6 +15,20 @@ const { scrollFeed, recyclePage } = require('./page-read.cjs');
 const STUCK_SAME_SOUND = 20;    // đọc trúng cùng 1 sound bấy nhiêu lần LIÊN TIẾP = coi như KẸT
 const FEED_STATS_EVERY = 100;   // cứ bấy nhiêu lần cuộn thì báo cáo thống kê 1 lần
 
+// ── TRẦN THỜI GIAN đọc trúng cùng 1 sound (2026-08-06) ──
+// Vì sao cần thêm bên cạnh việc đếm lần: nhịp cuộn giờ **TỰ GIÃN** theo áp lực hàng đợi (tới ×4 —
+// xem queuePressureFactor trong crawler.cjs), nên 20 lần đọc có thể mất **tới 5 phút** mới tới
+// ngưỡng. Đếm bằng đồng hồ thì thời gian phản ứng KHÔNG phụ thuộc nhịp cuộn nữa.
+//
+// ⚠ Vẫn đòi tối thiểu STUCK_SAME_MIN lần đọc: người dùng có thể đặt delay rất lớn (vd 30s), lúc đó
+// 90 giây chỉ vừa đủ 3 lần đọc — kết luận kẹt từ 1–2 lần đọc là báo oan.
+//
+// ⚠ CỐ Ý đo "cùng 1 sound bao lâu", KHÔNG đo "bao lâu không có sound MỚI": người dùng đã nạp
+// 173.000 link để lọc trùng, nên feed khoẻ vẫn có thể hàng phút không ra sound mới nào — đo cái đó
+// là báo oan hàng loạt (đúng bài học của chính bộ tracker này, xem chú thích đầu file).
+const STUCK_SAME_MS = 90000;
+const STUCK_SAME_MIN = 5;
+
 // Trần chờ page.evaluate() khi chẩn đoán/thoát kẹt. (2026-07-30) TRƯỚC ĐÂY 5000ms — quá
 // ngắn khi nhiều profile CÙNG chế độ ẩn/hiện dùng CHUNG 1 Chromium (QĐ-02): 5 context cùng
 // tải nặng trang TikTok (React SPA) một lúc trên VPS giới hạn CPU có thể khiến evaluate()
@@ -34,6 +48,7 @@ const STUCK_RECOVERED = 5;
 
 function makeFeedTracker() {
   let lastHref = null, sameCount = 0, stuckLevel = 0, progressRun = 0;
+  let sameSince = Date.now();   // từ lúc nào bắt đầu đọc trúng `lastHref` (cho trần thời gian)
   let seen = new Set(), scrolls = 0, fresh = 0;
   return {
     // Ghi nhận 1 vòng cuộn. Trả true nếu nghi feed đang KẸT (cần can thiệp thoát kẹt).
@@ -50,12 +65,15 @@ function makeFeedTracker() {
       if (href === lastHref) {
         sameCount++;
       } else {
-        lastHref = href; sameCount = 1;
+        lastHref = href; sameCount = 1; sameSince = Date.now();
         // Chỉ hạ cấp độ khi đọc được SOUND THẬT khác trước (không phải chỉ đổi từ/sang
         // null) — feed chạy lại ỔN ĐỊNH nghĩa là có sound mới, không phải chỉ hết null.
         if (href && ++progressRun >= STUCK_RECOVERED) stuckLevel = 0;
       }
-      return sameCount >= STUCK_SAME_SOUND;
+      // KẸT nếu đủ MỘT trong hai: đủ số lần đọc, HOẶC đã quá lâu trên cùng 1 sound (xem
+      // STUCK_SAME_MS — cần thiết vì nhịp cuộn tự giãn làm cách đếm-lần phản ứng chậm).
+      return sameCount >= STUCK_SAME_SOUND
+        || (sameCount >= STUCK_SAME_MIN && Date.now() - sameSince >= STUCK_SAME_MS);
     },
     // Cấp độ thoát kẹt kế tiếp: 1 → 2 → 3 → quay lại 1 (xoay vòng thay vì kẹt mãi ở cấp 3,
     // vì sau khi tải lại thì cấp 1/2 lại có cơ hội hiệu quả).
@@ -73,7 +91,10 @@ function makeFeedTracker() {
     // sẽ tưởng feed ĐÃ TIẾN → hạ stuckLevel về 0 → leo thang kẹt mãi ở cách 1, không bao
     // giờ lên cách 2/3 (bug đã bị test bắt lúc triển khai). Giữ lastHref thì lần kẹt sau
     // mới phân biệt được "vẫn đúng video cũ" (leo cấp) với "đã sang video mới" (hết kẹt).
-    clearStuck() { sameCount = 0; progressRun = 0; },
+    // ⚠ PHẢI reset cả `sameSince`: không reset thì sau lần can thiệp đầu tiên, đồng hồ vẫn tính
+    // từ lúc cũ → vòng đọc kế tiếp đã quá 90s → báo kẹt NGAY, không cho cách vừa thử có cơ hội
+    // tỏ hiệu quả. Đúng cái bẫy mà chính chú thích này đã cảnh báo với `lastHref`.
+    clearStuck() { sameCount = 0; progressRun = 0; sameSince = Date.now(); },
   };
 }
 
@@ -330,6 +351,8 @@ module.exports = {
   handleStuck,
   looksStarved,
   STUCK_SAME_SOUND,
+  STUCK_SAME_MS,
+  STUCK_SAME_MIN,
   FEED_STATS_EVERY,
   STUCK_RECOVERED,
   MAX_STARVED_LINKS,

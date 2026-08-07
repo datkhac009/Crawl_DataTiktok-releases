@@ -65,12 +65,23 @@ const HARNESS = `
   // Phu thuoc rieng cua watchVpnTunnel
   const VPN_COOLDOWN_MS = 60 * 1000;
   let _tunnelPrev = undefined;
-  let _vpnCycling = false;
   let _tunnelFake = { up: false, address: null };
+  let _vpnCycling = false;
+  let _vpnDownGroup = [];
+  const stopAllCalls = [];
+  const groupRetries = [];
+  // scheduleGroupRetry GIA — chi ghi lai lan goi. Ban that keo theo fireGroupRetry +
+  // startProfilesStaggered, khong thuoc pham vi test nay (co test rieng o starve-restart).
+  const scheduleGroupRetry = (ids, waitMs) => { groupRetries.push({ ids: [...ids], waitMs }); };
   const profileLogs = { p1: [], p2: [], p3: [] };
   const logs = [];
   const toasts = [];
-  const api = { vpnTunnel: async () => _tunnelFake };
+  let _ipv6Fake = { risky: false };
+  const api = {
+    vpnTunnel: async () => _tunnelFake,
+    vpnIpv6Risk: async () => _ipv6Fake,
+    profilesStopAll: async () => { stopAllCalls.push([...runningSet]); runningSet.clear(); },
+  };
   const appendLog = (id, m) => logs.push(m);
   const toast = (m, k) => toasts.push({ m, k });
   ${FNS}
@@ -79,8 +90,12 @@ const HARNESS = `
     setCooldown: (ms) => { _vpnCooldownUntil = ms ? Date.now() + ms : 0; },
     setRunLock: (v, reason) => { _vpnRunLock = v; if (reason) _vpnLockReason = reason; },
     setBatch: (v) => { _runningSelectedBatch = v; },
-    setCycling: (v) => { _vpnCycling = v; },
     setRunning: (ids) => { runningSet.clear(); for (const i of ids) runningSet.add(i); },
+    setIpv6: (v) => { _ipv6Fake = v; },
+    setCycling: (v) => { _vpnCycling = v; },
+    running: () => [...runningSet],
+    stopAllCalls: () => stopAllCalls.slice(),
+    groupRetries: () => groupRetries.slice(),
     apply: () => applyVpnCooldown(),
     locked: () => vpnRunLocked(),
     left: () => vpnCooldownLeft(),
@@ -94,8 +109,9 @@ const HARNESS = `
     },
     reset: () => {
       _tunnelPrev = undefined; _vpnCooldownUntil = 0; _vpnRunLock = false;
-      _vpnCycling = false; _vpnLockReason = 'cycling';
+      _vpnLockReason = 'cycling'; _vpnCycling = false; _vpnDownGroup = [];
       logs.length = 0; toasts.length = 0;
+      stopAllCalls.length = 0; groupRetries.length = 0;
     },
     logs: () => logs.slice(),
     toasts: () => toasts.slice(),
@@ -256,18 +272,6 @@ function ok(cond, label, detail) {
   });
   ok(r.left === 9, `poll lai khi khong co gi doi -> giu nguyen 9s, khong nhay ve 60s (that: ${r.left})`);
 
-  console.log('\n### APP dang tu doi IP -> bo canh phai DUNG NGOAI (chi mot chu so huu)');
-  r = await page.evaluate(async () => {
-    T.reset();
-    await T.tunnel(true, '10.252.32.18');
-    T.setCycling(true);                        // handleFeedStarved dang chay
-    T.setRunLock(true, 'cycling');
-    await T.tunnel(false, null);               // VPN tat vi CHINH APP tat
-    return { reason: T.locked() ? 'cycling-giu-nguyen' : 'da-mo-khoa', left: T.left() };
-  });
-  ok(r.reason === 'cycling-giu-nguyen' && r.left === 0,
-    'app dang doi IP -> bo canh khong dat dem nguoc, de handleFeedStarved tu lo', JSON.stringify(r));
-
   console.log('\n### CANH BAO khi TAT HMA ma profile CON DANG CHAY');
   r = await page.evaluate(async () => {
     T.reset();
@@ -276,10 +280,92 @@ function ok(cond, label, detail) {
     await T.tunnel(false, null);
     return { toasts: T.toasts(), logs: T.logs() };
   });
-  ok(r.toasts.some(t => /IP thật/i.test(t.m) && t.k === 'err'),
-    'con profile chay ma VPN tat -> toast DO canh bao dung IP that', JSON.stringify(r.toasts));
-  ok(r.logs.some(m => /2 profile ĐANG CHẠY/.test(m)),
-    'log noi dung SO profile dang chay can dung ngay', JSON.stringify(r.logs));
+  // Toast chi noi NGAN; chi tiet (co IPv6 hay khong, dia chi nao) nam trong log 📄 vi toast bien
+  // mat sau vai giay, khong doc kip cau dai.
+  ok(r.toasts.some(t => /DỪNG HẾT 2 profile/.test(t.m) && t.k === 'err'),
+    'VPN tat con profile chay -> toast DO, noi dang dung HET bao nhieu', JSON.stringify(r.toasts));
+  ok(r.logs.some(m => /ĐANG DỪNG HẾT 2 profile/.test(m)),
+    'log noi dung SO profile bi dung het', JSON.stringify(r.logs));
+
+  // Hai ca can MUC KHAN CAP khac nhau — gop lai la bat nguoi dung tu doan:
+  //   khong co IPv6 cong khai -> profile chi bi loi mang tam thoi
+  //   CO IPv6 cong khai       -> duong ham HMA chi dinh tuyen IPv4, nen IPv6 di THANG ra internet
+  //                              bang IP THAT (do that: lot trong 241ms) => dang LO NUOC THAT
+  r = await page.evaluate(async () => {
+    T.reset(); T.setRunning(['p1', 'p3']);
+    T.setIpv6({ risky: true, addresses: [{ iface: 'Ethernet', address: '2001:db8::1' }] });
+    await T.tunnel(true, '10.252.32.18');
+    await T.tunnel(false, null);
+    return { logs: T.logs() };
+  });
+  ok(r.logs.some(m => /LỘ IP THẬT/.test(m) && m.includes('2001:db8::1')),
+    'may CO IPv6 cong khai -> canh bao dang LO IP THAT, kem dia chi cu the', JSON.stringify(r.logs));
+  r = await page.evaluate(async () => {
+    T.reset(); T.setRunning(['p1', 'p3']);
+    T.setIpv6({ risky: false, addresses: [] });
+    await T.tunnel(true, '10.252.32.18');
+    await T.tunnel(false, null);
+    return { logs: T.logs() };
+  });
+  ok(r.logs.some(m => /chỉ bị lỗi mạng/.test(m)) && !r.logs.some(m => /LỘ IP THẬT/.test(m)),
+    'may DA TAT IPv6 -> noi ro chi la loi mang, KHONG bao dong oan', JSON.stringify(r.logs));
+
+  // ════════════════════════════════════════════════════════════════════════
+  // TAT HMA -> DUNG HET, khong chi canh bao (nguoi dung chot 2026-08-06)
+  // ════════════════════════════════════════════════════════════════════════
+  // *"khi toi tat HMA thi van thay cac profile chay... Tat HMA la dung het luon khong cho chay"*.
+  // Canh bao la vo nghia khi ho TREO MAY: moi giay profile con chay la mot giay gui request bang
+  // IP THAT.
+  console.log('\n### TAT HMA -> DUNG HET profile (khong chi canh bao)');
+  r = await page.evaluate(async () => {
+    T.reset(); T.setRunning(['p1', 'p2', 'p3']);
+    await T.tunnel(true, '10.252.32.18');   // moc: dang bat
+    await T.tunnel(false, null);            // nguoi dung tat HMA
+    return { stopAll: T.stopAllCalls(), running: T.running ? T.running() : null, logs: T.logs(), toasts: T.toasts() };
+  });
+  ok(r.stopAll.length === 1, `da goi profilesStopAll DUNG 1 lan (that: ${r.stopAll.length})`);
+  ok(r.stopAll[0] && r.stopAll[0].length === 3,
+    'dung ca 3 profile dang chay', JSON.stringify(r.stopAll));
+  ok(r.logs.some(m => /ĐANG DỪNG HẾT 3 profile/.test(m)),
+    'log noi ro dang dung HET bao nhieu profile', JSON.stringify(r.logs));
+  ok(r.toasts.some(t => /DỪNG HẾT/.test(t.m) && t.k === 'err'), 'toast do bao dang dung het');
+
+  console.log('\n### TAT HMA ma KHONG co profile nao chay -> KHONG goi dung het vo ich');
+  r = await page.evaluate(async () => {
+    T.reset(); T.setRunning([]);
+    await T.tunnel(true, '10.252.32.18');
+    await T.tunnel(false, null);
+    return { stopAll: T.stopAllCalls() };
+  });
+  ok(r.stopAll.length === 0, 'khong co gi chay -> khong goi profilesStopAll', JSON.stringify(r.stopAll));
+
+  console.log('\n### VPN LEN LAI -> hen chay lai DUNG nhom vua bi dung vi VPN tat');
+  // Nguoi dung treo may, VPN tut luc 3h sang: neu khong tu bat lai thi mat ca dem.
+  r = await page.evaluate(async () => {
+    T.reset(); T.setRunning(['p1', 'p2']);
+    await T.tunnel(true, '10.252.32.18');
+    await T.tunnel(false, null);              // dung het + nho nhom
+    await T.tunnel(true, '10.252.40.7');      // VPN len lai
+    return { retries: T.groupRetries() };
+  });
+  ok(r.retries.length === 1, `hen chay lai DUNG 1 lan (that: ${r.retries.length})`);
+  ok(r.retries[0] && r.retries[0].ids.length === 2 && r.retries[0].ids.includes('p1') && r.retries[0].ids.includes('p2'),
+    'hen dung nhom 2 profile vua bi dung', JSON.stringify(r.retries));
+  ok(r.retries[0] && r.retries[0].waitMs === 60000,
+    `cho dung 59s (VPN_COOLDOWN_MS) roi moi bat (that: ${r.retries[0] && r.retries[0].waitMs})`);
+
+  console.log('\n### APP dang tu doi IP -> bo canh KHONG hen (cycleIpAndRestart tu lo)');
+  // Hai duong cung bat mot nhom = bat 2 lan. Bo canh phai nhuong khi app dang lai.
+  r = await page.evaluate(async () => {
+    T.reset(); T.setRunning(['p1']);
+    await T.tunnel(true, '10.252.32.18');
+    T.setCycling(true);                       // cycleIpAndRestart dang chay
+    await T.tunnel(false, null);
+    await T.tunnel(true, '10.252.40.7');
+    return { retries: T.groupRetries() };
+  });
+  ok(r.retries.length === 0,
+    'app dang tu doi IP -> bo canh KHONG hen chay lai (tranh bat 2 lan)', JSON.stringify(r.retries));
   // Tra runningSet ve nhu ban dau cho cac buoc sau (neu co).
   await page.evaluate(() => T.setRunning(['p3']));
 
@@ -291,20 +377,36 @@ function ok(cond, label, detail) {
   ok(/vpnRunLocked\(\)/.test(fn('toggleProfile')),
     'toggleProfile() tu chan khi dang doi IP — khong chi dua vao `disabled` cua nut');
   ok(/vpnRunLocked\(\)/.test(fn('runSelected')), 'runSelected() cung tu chan');
-  ok(/_vpnCancelRestart\s*=\s*true/.test(fn('stopProfileById')),
-    'stopProfileById() HUY viec tu chay lai — de nut "■ Dừng" tren TUNG HANG cung huy duoc, '
-    + 'khong chi rieng "Dừng đã chọn"');
-  ok(!/_vpnCancelRestart\s*=\s*true/.test(fn('stopSelected')),
-    'stopSelected() KHONG lap lai logic huy (mot cho duy nhat — QĐ-10)');
-  const wait = fn('waitBeforeRestart');
-  ok(/finally\s*\{[\s\S]*_vpnCooldownUntil\s*=\s*0/.test(wait),
-    'waitBeforeRestart() mo khoa trong `finally` — bo sot la nut KET KHOA VINH VIEN khi bi huy giua chung');
-  ok(/applyVpnCooldown\(\)/.test(wait), 'waitBeforeRestart() cap nhat nut moi giay (khong chi ghi dong trang thai)');
+  // ── CAT FEED -> DUNG DUNG PROFILE DO, KHONG DUNG VAO VPN (nguoi dung chot bo 2026-08-06) ──
+  // Ly do bo tinh nang tu doi IP: IP la cua CA MAY, nen doi IP giua luc 4 profile khac dang quet
+  // lam chung chuyen tu IP A sang IP B GIUA PHIEN — dung khuon "tai khoan bi chiem" (QD-15).
+  // Con dung HET profile truoc khi doi thi moi lan MOT profile bi cat la ca dan phai nghi.
   const starved = fn('handleFeedStarved');
-  ok(/finally\s*\{[\s\S]*_vpnRunLock\s*=\s*false/.test(starved),
-    'handleFeedStarved() mo khoa trong `finally` — che moi duong `return` som (bi gioi han nhip, doi IP that bai)');
-  ok(/_vpnRunLock\s*=\s*false[\s\S]*startProfilesStaggered/.test(starved),
-    'mo khoa TRUOC khi tu bat lai tung profile — dung yeu cau "het 59s thi hien Chạy"');
+  ok(/stopProfileById\(profileId\)/.test(starved),
+    'cat feed -> DUNG dung profile do');
+  ok(!/vpnCycle|profilesStopAll|startProfilesStaggered|vpnIpv6Risk/.test(starved),
+    'TUYET DOI khong dung vao VPN, khong dung profile khac, khong tu chay lai');
+  ok(!/_vpnRunLock|_vpnCooldownUntil/.test(starved),
+    'khong khoa nut Chay — nguoi dung phai bam chay lai duoc ngay sau khi ho tu xu IP');
+  ok(/nameOf\(profileId\)/.test(starved) && /appendLog/.test(starved),
+    'noi RO profile nao bi dung, va ghi vao log 📄 cua chinh profile do');
+  // ── DUONG DOI IP (cong tac BAT): LUON dung HET, khong co nhanh "chi dung 1" ──
+  // Nguoi dung chot 2026-08-06 sau khi chi ra lo hong ma phep do IPv6 KHONG che duoc: 4 profile kia
+  // dang quet tren IP A bi chuyen sang IP B GIUA PHIEN, dung khuon "tai khoan bi chiem" (QD-15).
+  const cyc = fn('cycleIpAndRestart');
+  ok(/api\.profilesStopAll\(\)/.test(cyc), 'duong doi IP goi profilesStopAll (dung HET)');
+  ok(!/api\.profileStop\(/.test(cyc) && !/stopOnlyOne/.test(cyc),
+    'TUYET DOI khong con nhanh "chi dung 1 profile" — do la lo hong da bi bo');
+  ok(!/vpnIpv6Risk/.test(cyc),
+    'khong con hoi ipv6LeakRisk de quyet dinh dung 1 hay dung het — luon dung het nen khong can');
+  ok(/await api\.crawlRunningIds\(\)/.test(cyc),
+    'cho BACKEND xac nhan da dung sach truoc khi tat VPN (khong tin runningSet cua renderer)');
+  ok(/waitBeforeRestart\(was\)[\s\S]*startProfilesStaggered\(was\)/.test(cyc),
+    'cho IP nguoi TRUOC roi moi bat lai ca nhom, bat lan luot');
+  ok(/scheduleGroupRetry/.test(cyc),
+    'doi IP that bai -> HEN THU LAI ca nhom (nguoi dung treo may, bo mac la mat ca dem)');
+  ok(/_vpnAutoCycle/.test(fn('handleFeedStarved')),
+    'handleFeedStarved re nhanh theo cong tac: BAT -> doi IP, TAT -> dung rieng + nghi 5/15/30');
 
   const watch = fn('watchVpnTunnel');
   ok(/api\.vpnTunnel\(\)/.test(watch) && !/api\.vpnStatus\(/.test(watch),
@@ -312,8 +414,13 @@ function ok(cond, label, detail) {
     + '(spawn VpnNM.exe + cho 600ms -> poll 2s/lan la 1800 tien trinh/gio)');
   ok(/_tunnelPrev === undefined/.test(watch),
     'lan poll dau chi LAY MOC — khong thi may dang tat HMA se bi khoa nut ngay khi mo app');
-  ok(/if\s*\(_vpnCycling\)\s*return/.test(watch),
-    'app dang tu doi IP thi bo canh dung ngoai (chi MOT chu so huu viec khoa)');
+  ok(/api\.profilesStopAll\(\)/.test(watch),
+    'TAT HMA -> bo canh DUNG HET profile, khong chi canh bao (nguoi dung chot: "Tat HMA la dung '
+    + 'het luon khong cho chay")');
+  ok(/if \(_vpnCycling\)/.test(watch),
+    'app dang tu doi IP thi bo canh KHONG hen chay lai — cycleIpAndRestart tu lo, tranh bat 2 lan');
+  ok(/_vpnDownGroup/.test(watch),
+    'nho nhom bi dung vi VPN tat de tu bat lai khi VPN len (VPN tut luc 3h sang van phuc hoi)');
   ok(/startVpnWatcher\(\)/.test(fn('init')),
     'startVpnWatcher() duoc goi trong init() — khong thi ca tinh nang khong bao gio chay');
   ok(/if\s*\(_vpnWatcherOn\)\s*return/.test(fn('startVpnWatcher')),

@@ -33,8 +33,9 @@ Lưu trong thư mục dữ liệu người dùng của Electron, không nằm c�
 | `profile_settings` | Cài đặt **riêng từng profile**: chế độ, từ khóa, ẩn/hiện, bộ lọc, delay, thời lượng chu kỳ, danh sách link xem, `chromiumProfile` (profile Chromium riêng — [QĐ-28](DECISIONS.md))… |
 | `sheets_config` | Spreadsheet ID, tên tab, **`pendingTab`** (tab chờ kiểm tay — [QĐ-33](DECISIONS.md); **để trống = dùng mặc định `Total_Link_Voice_Pending`**, không phải tắt), JSON Service Account, chu kỳ đồng bộ lọc trùng |
 | `count_concurrency` | Số luồng đếm video đồng thời (**chung toàn app**, không theo profile) |
+| `count_mode` | Chế độ đếm số video, **riêng từng máy**: `fast` (mặc định — API 8s, ngân sách đọc giao diện 2.5s/5s có trần cứng, thử lại 1 lượt) hoặc `patient` (API 20s, ngân sách 30s, không thử lại — đúng khuôn bản 0.1.63). ⚠️ Máy ảo yếu **phải** để `fast`: `patient` làm 1 sound lỗi chiếm slot đếm toàn app ~28s → hàng đợi đầy → **vòng quét đứng** — [QĐ-34](DECISIONS.md) |
 | `update_repo` | Repo GitHub phát hành (để trống = dùng mặc định) |
-| `vpn_auto_cycle` | Tự tắt/bật lại HMA VPN khi feed cạn rồi tự chạy lại profile (**chung toàn app**). Mặc định `false` — [QĐ-32](DECISIONS.md) |
+| `vpn_auto_cycle` | Khi TikTok cắt feed: **dừng HẾT profile** → tắt/bật lại HMA VPN → chờ 59s → tự chạy lại cả nhóm (**chung toàn app**). Mặc định `false`; tắt thì cắt feed chỉ dừng đúng profile đó rồi tự bật lại sau 5/15/30 phút — [QĐ-32](DECISIONS.md) |
 | `show_count_tab` | **Chỉ để chẩn đoán**: cho tab đếm `/music/` hiện thành **một tab trong CÙNG cửa sổ profile** (dùng chung context nên **không mở browser thứ hai**, không tốn thêm RAM). Mặc định `false`. Đừng bật khi chạy dài — tab đó nhấp nháy liên tục. Chỉ thấy khi profile chạy ở chế độ **hiện** — [QĐ-33](DECISIONS.md) |
 
 ## Các file trong thư mục profile

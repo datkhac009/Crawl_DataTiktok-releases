@@ -495,6 +495,10 @@ function configure(cfg, onError) {
     _pendingKnown.clear();
     _pendingSeeded = false;
     _pendingTabMissing = false;
+    // Mốc dòng của tab CŨ vô nghĩa với tab mới → xoá để lần đọc tới đọc lại TOÀN BỘ.
+    // Quên dòng này thì mốc cũ (vd 500) làm lần đọc đầu của tab mới bỏ qua 500 dòng đầu → mọi
+    // link trong đó bị coi là mới → ghi trùng hàng loạt.
+    _pendingNextRow = 0;
   }
   // Đổi sang Sheet/tab KHÁC thì mốc dòng cũ vô nghĩa → phải quên đi để lần sau đọc lại toàn bộ.
   // ⚠ CHỈ khi thực sự đổi: configure() được gọi lại ở MỖI lần bấm Chạy, reset vô điều kiện là
@@ -708,6 +712,13 @@ let _pendingBuffer = [];
 let _pendingTimer = null;
 let _pendingChain = Promise.resolve();
 let _pendingWritten = 0; // số dòng đã ghi sang tab chờ trong phiên (hiện ra UI)
+// Mốc dòng để ĐỌC TĂNG DẦN phần máy khác vừa ghi (0 = chưa biết → phải đọc toàn bộ).
+// ⚠ Vì sao cần (sửa 2026-08-06 sau khi người dùng gửi ảnh tab chờ đầy dòng trùng): trước đây tab
+// chờ chỉ nạp danh sách ĐÚNG MỘT LẦN đầu phiên. Chạy 5 máy thì máy này không bao giờ thấy link
+// máy kia ghi sau đó → mỗi máy đều tưởng link còn mới và ghi thêm một dòng. Tab CHÍNH không bị
+// vì nó đọc lại tăng dần + đọc lại ngay trước mỗi lần ghi (QĐ-09). Giờ tab chờ dùng đúng bộ máy đó.
+let _pendingNextRow = 0;
+let _pendingRefreshInFlight = null;
 
 // Tên tab chờ MẶC ĐỊNH khi người dùng chưa điền ô nào (2026-08-06).
 //
@@ -746,16 +757,37 @@ function pendingCount() {
 // được số video thật thì nó vào tab CHÍNH với dữ liệu đầy đủ (tốt hơn hẳn nằm mãi ở tab chờ).
 // Ghi trùng vẫn không xảy ra vì `_pendingKnown` chặn ở cửa ghi.
 async function seedPendingLinks() {
+  return refreshPendingKnown({ full: true });
+}
+
+// Đọc lại danh sách link trên tab chờ. Bản sao ĐÚNG KHUÔN `refreshKnownLinks` của tab chính
+// (QĐ-09) — không dùng chung được vì hai tab có mốc dòng và bộ nhớ link riêng, nhưng mọi cái bẫy
+// thì y hệt, nên chú thích ở đây nhắc lại cho khỏi sửa lệch:
+//   • Mốc kế tiếp phải tính bằng `rawRows` (số dòng THÔ), KHÔNG dùng `links.length` — `links` đã
+//     lọc bỏ dòng rỗng nên mốc sẽ lệch dần rồi bỏ sót link.
+//   • Đang bị chặn quota thì KHÔNG gọi thêm (càng dội càng bị chặn sâu); hết cooldown đọc tiếp
+//     từ đúng mốc nên không mất dòng nào.
+//   • Gộp lời gọi đang bay để 2 nơi cùng gọi không thành 2 request.
+async function refreshPendingKnown({ full = false } = {}) {
   if (!isPendingEnabled()) return { ok: false, skipped: "off" };
+  if (quota.isCoolingDown()) return { ok: false, skipped: "quota" };
+  if (_pendingRefreshInFlight) return _pendingRefreshInFlight;
   const tab = pendingTabName();
-  try {
-    const { links } = await readLinkColumn(_cfg.spreadsheetId, tab, _cfg.sa, { startRow: 1 });
-    for (const u of links) {
+  const cfg = _cfg;
+  const doFull = full || _pendingNextRow <= 0;
+  const from = doFull ? 1 : _pendingNextRow;
+  _pendingRefreshInFlight = (async () => {
+    const r = await readLinkColumn(cfg.spreadsheetId, tab, cfg.sa, { startRow: from });
+    for (const u of r.links) {
       const k = normalizeKey(u);
       if (k) _pendingKnown.add(k);
     }
+    _pendingNextRow = doFull ? r.rawRows + 1 : from + r.rawRows;
     _pendingSeeded = true;
-    return { ok: true, count: _pendingKnown.size, tab };
+    return { ok: true, count: _pendingKnown.size, added: r.links.length, tab, full: doFull };
+  })();
+  try {
+    return await _pendingRefreshInFlight;
   } catch (e) {
     // TAB KHÔNG TỒN TẠI → ngưng tính năng cho cả phiên. Phát hiện NGAY ở đầu phiên (rẻ, 1 lần
     // gọi API) thay vì để mỗi lô ghi tự thất bại rồi ngập log. `readLinkColumn` đã dịch lỗi khó
@@ -765,6 +797,8 @@ async function seedPendingLinks() {
       return { ok: false, missingTab: tab, msg: e.message };
     }
     return { ok: false, msg: e.message };
+  } finally {
+    _pendingRefreshInFlight = null;
   }
 }
 
@@ -772,6 +806,11 @@ async function seedPendingLinks() {
 // KHÔNG được điền, để người dùng tự ghi.
 function enqueuePending(row) {
   if (!isPendingEnabled()) return false;
+  // CHƯA nạp được danh sách link cũ trên tab chờ → KHÔNG biết link nào đã có, ghi lúc này chỉ để
+  // tạo trùng. Cổng này copy đúng `if (!_seeded) return` của tab chính; thiếu nó thì một lần đọc
+  // Sheet thất bại (mạng chớp) là cả phiên ghi lại từ đầu toàn bộ link — nguyên nhân góp phần vào
+  // ảnh tab chờ đầy dòng trùng người dùng gửi 2026-08-06.
+  if (!_pendingSeeded) return false;
   const key = normalizeKey(row && row[1]);
   if (!key) return false;
   // Đã có trên tab chờ (từ phiên trước hoặc máy khác) → không ghi trùng.
@@ -810,20 +849,51 @@ function flushPending() {
     }
     return _pendingChain;
   }
-  const rows = _pendingBuffer;
+  // Lọc lần nữa ngay lúc lấy lô ra khỏi buffer: link có thể đã lên tab chờ bằng đường khác trong
+  // lúc nó nằm chờ (máy khác vừa ghi, ta vừa đọc lại thấy).
+  const rows = _pendingBuffer.filter((r) => {
+    const k = normalizeKey(r && r[1]);
+    return !(k && _pendingKnown.has(k));
+  });
   _pendingBuffer = [];
+  if (!rows.length) return _pendingChain;
   const cfg = _cfg;
   const tab = pendingTabName();
+  let toWrite = rows;
   _pendingChain = _pendingChain
     .then(async () => {
-      await appendRows(cfg.spreadsheetId, tab, rows, cfg.sa);
-      for (const r of rows) {
+      // ── ĐỌC MỚI NHẤT NGAY TRƯỚC KHI GHI ──
+      // Đúng khuôn tab chính (QĐ-09) và là lớp quyết định để chống trùng LIÊN MÁY: 2 máy cùng gặp
+      // một link lỗi, máy A ghi trước, máy B đọc phần đuôi ngay trước khi ghi nên thấy dòng của A
+      // rồi tự bỏ. Không có bước này thì cửa hở rộng bằng CẢ PHIÊN (tab chờ trước đây chỉ nạp
+      // danh sách 1 lần lúc bắt đầu) — đúng nguyên nhân ảnh tab chờ đầy dòng trùng.
+      // Rẻ: chỉ đọc vài dòng mới kể từ mốc, không đọc lại toàn bộ tab.
+      // Lỗi mạng ở bước này KHÔNG được chặn việc ghi — thà chấp nhận cửa hở như cũ còn hơn nghẽn.
+      try {
+        await refreshPendingKnown();
+      } catch (e) {
+        console.warn("[pending] Không đọc được phần mới trước khi ghi (vẫn ghi):", e.message);
+      }
+      toWrite = rows.filter((r) => {
+        const k = normalizeKey(r && r[1]);
+        return !(k && _pendingKnown.has(k));
+      });
+      const dropped = rows.length - toWrite.length;
+      if (dropped > 0) {
+        console.log(`[pending] Bỏ ${dropped} dòng trước khi ghi — máy khác vừa ghi lên trước.`);
+      }
+      if (!toWrite.length) return;
+      await appendRows(cfg.spreadsheetId, tab, toWrite, cfg.sa);
+      for (const r of toWrite) {
         const k = normalizeKey(r && r[1]);
         if (k) _pendingKnown.add(k);
       }
-      _pendingWritten += rows.length;
+      _pendingWritten += toWrite.length;
+      // Đẩy mốc đọc lên: dòng mình vừa ghi cũng nằm ở cuối tab, không cộng thì lần đọc tăng dần
+      // kế tiếp sẽ đọc lại chính mấy dòng vừa ghi (vô ích, và làm mốc lệch dần).
+      if (_pendingNextRow > 0) _pendingNextRow += toWrite.length;
       console.log(
-        `[pending] Đã ghi ${rows.length} link lỗi sang tab "${tab}" (tổng phiên: ${_pendingWritten}).`,
+        `[pending] Đã ghi ${toWrite.length} link lỗi sang tab "${tab}" (tổng phiên: ${_pendingWritten}).`,
       );
     })
     .catch((e) => {
@@ -844,7 +914,9 @@ function flushPending() {
       // Lỗi khác (mạng, quota…) → KHÔNG bỏ rơi lô: trả về đầu buffer để thử lại (cùng nguyên tắc
       // với flush() chính).
       console.error("[pending] Ghi tab chờ lỗi:", e.message);
-      _pendingBuffer = rows.concat(_pendingBuffer);
+      // Trả lại đúng lô ĐÃ THỬ GHI (`toWrite`), không phải `rows`: những dòng bị lọc bỏ vì máy
+      // khác vừa ghi thì không được đưa trở lại hàng chờ, nếu không lần sau lại thử ghi trùng.
+      _pendingBuffer = toWrite.concat(_pendingBuffer);
       if (!_pendingTimer) {
         _pendingTimer = setTimeout(() => {
           _pendingTimer = null;
@@ -882,6 +954,7 @@ module.exports = {
   pendingTabName,
   pendingCount,
   seedPendingLinks,
+  refreshPendingKnown,
   enqueuePending,
   flushPending,
 };

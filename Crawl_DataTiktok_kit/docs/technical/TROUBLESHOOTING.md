@@ -424,7 +424,7 @@ trước) — trước v0.1.61 thì nó quay vòng vô hạn, đã đo được 
 
 ### Cách xử lý, theo thứ tự
 
-0. **Bật "Tự đổi IP" trong ⚙ nếu máy có cài HMA VPN** — xem mục 17 ngay dưới đây. Đây là cách
+0. **Đổi IP bằng tay** (dừng hết profile → tắt/bật HMA → chờ 59s → chạy lại) — xem mục 17 ngay dưới đây. Đây là cách
    duy nhất chạm tới **gốc rễ** (đổi IP thật); các cách còn lại chỉ là vòng qua.
 1. **Đổi profile đó sang chế độ Tìm kiếm** (đổi ngay ở cột **Chế độ** trên bảng, không cần vào ⚙).
    Đây là đường **có thật** để lướt tiếp: khi mở video từ một **lưới** (kết quả tìm kiếm,
@@ -567,28 +567,64 @@ Xem [QĐ-33](DECISIONS.md). Vài điểm cần biết:
 
 ---
 
-## 17. Tự đổi IP khi TikTok cắt feed — bật/tắt lại HMA VPN rồi tự chạy lại profile
+## 17. TikTok cắt feed → DỪNG profile đó rồi TỰ BẬT LẠI. (Tự đổi IP đã BỎ)
 
-**Yêu cầu:** đã cài **HMA VPN** trên máy này và **đang đăng nhập** (đã kết nối ít nhất 1 lần).
-Bật ở ⚙ Cài đặt crawl → mục **"Tự đổi IP khi TikTok cắt feed"** → tick
-**"Tắt/bật lại HMA VPN rồi tự chạy lại profile"**. Đây là cài đặt **chung toàn app**, mặc định
-**TẮT**.
-
-### Xảy ra như thế nào khi bật
-
-Khi một profile bất kỳ báo **feed cạn** (mục 16):
+Khi một profile báo **feed cạn** (mục 16), app **dừng đúng profile đó** rồi **tự bật lại** — người
+dùng treo máy qua đêm nên không thể bấm tay:
 
 ```
-⛔ "tên profile" bị TikTok cắt feed — dừng 5 profile để đổi IP (IP là của cả máy nên
-   phải dừng hết, không thể dừng riêng 1 profile)...
-Đang tắt HMA VPN rồi bật lại để lấy IP mới (nối lại đúng server cũ — HMA cấp IP khác
-   mỗi lần kết nối nên không cần đổi city)...
-✅ HMA đã tắt/bật lại (London) — GB. IP mới: 18.132.40.68 (GB).
+⛔ "tên profile" bị TikTok cắt feed (lần 1 liên tiếp) — DỪNG profile này,
+   sẽ TỰ BẬT LẠI sau 5p0s.
+⏱ Hết giờ nghỉ — tự bật lại "tên profile" (lần cắt liên tiếp thứ 1).
 ```
 
-rồi **chờ 1 phút cho IP mới nguội**, sau đó tự chạy lại đúng nhóm profile vừa dừng, **lần lượt**
-(như nút ▶ Chạy đã chọn, QĐ-21).
+Badge hàng đó đếm ngược từng giây (`⏸ Bị cắt feed — tự bật lại sau 4p12s`) — vòng chờ im lặng luôn
+bị báo là "app treo" (bài học QĐ-21), mà lần này chờ tới 30 phút.
 
+| Cơ chế | Chi tiết |
+|---|---|
+| Nghỉ bao lâu | **5 → 15 → 30 phút** theo số lần bị cắt **liên tiếp**, giữ mức 30. Cùng thang với backoff cũ của backend |
+| Khi nào chuỗi về 0 | Thu được **1 sound hợp lệ** (`crawl-data`) = feed đã hồi. Cố ý **không** dùng status `running` — status đó còn phát trong lúc thoát kẹt/backoff nên không chứng minh feed đã hồi |
+| Bấm ▶ Chạy lúc đang chờ | Chạy **ngay**, huỷ hẹn. `streak` **được giữ** để lần cắt sau vẫn nghỉ dài hơn |
+| Bấm ■ Dừng lúc đang chờ | **Huỷ** hẹn hoàn toàn — người dùng đã tiếp quản |
+| VPN đang tắt lúc tới giờ | **Không bật** (sẽ chạy IP thật). Kiểm lại **mỗi 5 giây**, VPN lên là bật |
+| Nhiều profile cùng bị cắt | Mỗi profile có hẹn **riêng**, không ăn theo nhau |
+
+**Vì sao DỪNG rồi BẬT LẠI, không phải "tạm dừng tại chỗ"** (backend vốn có backoff 5/15/30 phút):
+dựng lại context nghĩa là trang feed mới, cookie nạp lại, vân tay áp lại → TikTok thấy một phiên
+**mở mới** thay vì một phiên đang bị siết cố cào tiếp. Và bật lại đi qua `waitForCorrectCountry`
+(ip-guard, QĐ-17) nên nếu trong lúc bạn ngủ mà VPN tụt thì profile **tự chờ đúng vùng** chứ không
+chạy sai nước — "tạm dừng tại chỗ" không có bước này.
+
+⚠️ **Việc dừng này ĐÈ LÊN logic cũ của backend**: chế độ Quét ⇄ Xem không còn cắt sang pha Xem, và
+chế độ khác không còn tự backoff tại chỗ. Cắt feed là dừng + hẹn bật lại, ở **mọi chế độ**.
+
+### ⛔ Vì sao BỎ tính năng "tự tắt/bật lại HMA VPN rồi tự chạy lại"
+
+Bỏ ngày **2026-08-06** theo yêu cầu người dùng, và lập luận của họ đúng: **IP là của CẢ MÁY**, không
+của riêng một profile. Chỉ có hai cấu hình khả dĩ, cả hai đều tệ:
+
+| Cách | Vấn đề |
+|---|---|
+| Chỉ dừng profile bị cắt rồi đổi IP luôn | 4 profile kia bắt đầu quét trên **IP A** rồi **giữa phiên bị chuyển sang IP B** — đúng khuôn "tài khoản bị chiếm" mà QĐ-15 gọi là nguyên nhân số 1 khiến TikTok hủy phiên |
+| Dừng HẾT profile rồi mới đổi IP | Mỗi lần **một** profile bị cắt là **cả dàn phải nghỉ** + chờ 59 giây + bật lại lần lượt. Đắt hơn nhiều so với mất một profile |
+
+Không có cấu hình nào vừa an toàn vừa đáng giá → bỏ hẳn thay vì để lại một công tắc nguy hiểm.
+
+**Đã xoá khỏi app:** mục "Tự đổi IP khi TikTok cắt feed" trong ⚙, kênh IPC `vpn-cycle`, khóa cấu
+hình `vpn_auto_cycle`. `src/vpn-hma.cjs` vẫn còn hàm `cycle()` kèm test (trong đó là kiến thức đo
+thật rất đắt) nhưng **không còn nơi nào gọi** — đừng nối lại mà chưa đọc QĐ-32.
+
+**✅ Vẫn giữ:** việc **canh HMA do BẠN tự tắt/bật** + khóa nút Chạy 59 giây (phần ngay dưới). Đó là
+tính năng khác: nó chỉ **phản ánh** trạng thái VPN lên nút bấm, **không bao giờ tự đụng vào VPN**.
+
+### Nếu muốn đổi IP khi bị cắt feed
+
+Làm tay, theo đúng thứ tự này để không phá phiên của profile khác:
+
+1. **Dừng hết profile** trên máy đó (nút "■ Dừng ô đã chọn" sau khi tick tất cả)
+2. Tắt rồi bật lại HMA — app tự phát hiện và khóa nút Chạy, đếm ngược 59 giây
+3. Hết đếm ngược → bấm **▶ Chạy** lại
 ### Nút "▶ Chạy" bị khóa trong lúc đổi IP — đúng như vậy, không phải app treo
 
 Từ 2026-08-06, nút **"▶ Chạy"** (cả trên từng hàng và nút "▶ Chạy ô đã chọn") **bị khóa** suốt quá
@@ -601,7 +637,7 @@ trình, và nhãn nút cho biết đang ở pha nào:
 | `⏳ 59s` → `⏳ 1s` | Chờ IP mới nguội | Tránh 5 phiên cũ đồng loạt xuất hiện trên IP vừa đổi (TikTok coi là "tài khoản bị chiếm", QĐ-15) |
 | `▶ Chạy` | Xong | Mở khóa ngay khi hết đếm ngược, **trước** cả lúc app tự bật lại — bấm tay được luôn nếu muốn |
 
-**Khóa cả khi BẠN tự tắt/bật HMA**, không riêng lúc app tự đổi IP. App canh đường hầm HMA
+**App canh HMA do BẠN tự tắt/bật** (app không bao giờ tự đụng vào VPN). App đọc đường hầm HMA
 **2 giây/lần** (đọc `os.networkInterfaces()` — 2.1ms/lần, không spawn tiến trình) nên biết ngay:
 
 - Bạn bấm **OFF** trên HMA → nút đổi thành `⛔ VPN tắt`. Nếu còn profile đang chạy, app cảnh báo rõ
@@ -651,7 +687,7 @@ HMA TẮT : IPv6 → 2001:db8:… (VN)  lọt ra chỉ trong 241ms              
 
 Rò rỉ này **im lặng**: profile vẫn chạy mượt, không lỗi gì — chỉ mất phiên **sau đó**. Đó là lý
 do nó không bao giờ bị truy ra. Nó xảy ra **mỗi lần VPN tắt**, kể cả VPN tụt tự nhiên lúc 3h
-sáng, không riêng gì lúc app tự đổi IP.
+sáng — app không bao giờ tự đụng vào VPN.
 
 ### Tắt IPv6 để chỉ cần dừng 1 profile (nên làm trên MỌI máy)
 

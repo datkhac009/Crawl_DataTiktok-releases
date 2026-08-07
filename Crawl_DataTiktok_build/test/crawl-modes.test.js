@@ -202,7 +202,7 @@ function installMocks(page, profileName) {
 
 // ── Chay 1 kich ban ──
 async function run({ name, mode, sounds, loginState, runMs, ipScript = ['ok'], profileName,
-                     links, navButton, countApi, countDom, extra = {} }) {
+                     links, navButton, countApi, countDom, countMode, extra = {} }) {
   // Xoa cache crawler de moi kich ban co trang thai phien sach
   for (const k of Object.keys(require.cache)) {
     if (k.includes('crawler') || k.includes('browser.cjs') || k.includes('profiles.cjs')
@@ -213,6 +213,8 @@ async function run({ name, mode, sounds, loginState, runMs, ipScript = ['ok'], p
   installIpGuardMock(ipScript);
   installThrottleSpy();
   const crawler = require(path.join(SRC, 'crawler.cjs'));
+  // Che do dem la trang thai MODULE (nhu setCountConcurrency) -> dat sau khi require, truoc khi chay.
+  if (countMode) crawler.setCountMode(countMode);
 
   const msgs = [];
   const data = [];
@@ -407,6 +409,23 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
   });
   results.push(okNoRetry);
 
+  // ── CHE DO DEM: 'patient' (= quy trinh ban 0.1.63) vs 'fast' ──
+  // Nguoi dung chay 5 may voi CUNG mot .exe, ma may manh va may ao can danh doi NGUOC NHAU. Cong
+  // tac nay la cach duy nhat lam duoc ca hai — nen phai kiem no THAT SU doi hanh vi.
+  const patientBothFail = await run({
+    name: 'CHE DO patient: KHONG thu lai (dung nhu ban 0.1.63)',
+    mode: 'foryou', sounds: [SOUND_A], runMs: 9000, countMode: 'patient',
+    countApi: [API_ODD, API_OK], countDom: [null, null],
+  });
+  results.push(patientBothFail);
+
+  const fastRetries = await run({
+    name: 'CHE DO fast: CO thu lai -> cuu duoc sound ma patient bo mat',
+    mode: 'foryou', sounds: [SOUND_A], runMs: 9000, countMode: 'fast',
+    countApi: [API_ODD, API_OK], countDom: [null, null],
+  });
+  results.push(fastRetries);
+
   // Cong tac tat: doi bien moi truong roi chay lai — run() xoa cache crawler nen hang so duoc
   // doc lai. Phai TRA LAI ngay sau do, khong thi cac kich ban sau bi anh huong.
   process.env.TTC_COUNT_ATTEMPTS = '1';
@@ -501,15 +520,100 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
     `TTC_COUNT_ATTEMPTS=1 -> TAT duoc viec thu lai (that: ${retryOff.calls.musicGoto})`);
   ok(retryOff.pending.length === 1, 'tat thu lai -> van vao tab cho nhu cu, khong mat link');
 
+  console.log('### KHANG DINH: NHIP CUON TU GIAN theo ap luc hang doi (chong "dung feed")');
+  // Truoc day vong quet chay HET TOC roi DUNG HAN khi hang doi day 20/20 — hanh vi bat/tat do la
+  // thu gay ra hien tuong "cu dung mai o 1 video" (nguoi dung gui anh: 4 profile ket 8 phut).
+  // Gio giu duoc mot bat bien: TU khop toc do voi buoc dem, KHONG bao gio dung han khi chua day.
+  // ⚠ KHONG dung bien `src` o day: no duoc khai bao (const) o muc TRAN CHO API PHIA DUOI, nen
+  // truy cap som la ReferenceError vung chet (TDZ). Doc rieng.
+  const crawlerSrc = require('fs').readFileSync(path.join(SRC, 'crawler.cjs'), 'utf8');
+  const pf = crawlerSrc.match(/function queuePressureFactor\(\)[\s\S]*?\n  \}/);
+  ok(!!pf, 'co ham queuePressureFactor()');
+  const factor = pf ? new Function('soundQueue', 'QUEUE_MAX',
+    pf[0].replace('function queuePressureFactor()', 'return (function()') + ')()') : null;
+  const F = (n) => factor({ length: n }, 20);
+  ok(F(0) === 1 && F(9) === 1, `duoi 50% hang doi -> nhip BINH THUONG (that: ${F(0)}, ${F(9)})`);
+  ok(F(15) > F(10) && F(20) > F(15), `cang day cang cham, TANG DAN (10:${F(10)} 15:${F(15)} 20:${F(20)})`);
+  ok(F(20) === 4, `day 20/20 -> x4, KHONG phai dung han (that: ${F(20)})`);
+  ok(F(30) === 4, `vuot tran cung chi x4, khong tang vo han (that: ${F(30)})`);
+  ok(/rand\(minDelay, maxDelay\) \* queuePressureFactor\(\)/.test(crawlerSrc),
+    'he so duoc AP vao dung nhip cuon cua vong quet');
+  ok(/while \(soundQueue\.length >= QUEUE_MAX/.test(crawlerSrc),
+    'VAN giu nguong day lam chot chong hang doi phinh vo han — chi la gio rat it khi toi');
+
+  console.log('### KHANG DINH: PHAT HIEN KET co ca TRAN THOI GIAN (nhip gian lam dem-lan cham)');
+  const stuckSrc = require('fs').readFileSync(path.join(SRC, 'crawler', 'stuck.cjs'), 'utf8');
+  const { makeFeedTracker, STUCK_SAME_MS, STUCK_SAME_MIN } = require(path.join(SRC, 'crawler', 'stuck.cjs'));
+  ok(STUCK_SAME_MS === 90000 && STUCK_SAME_MIN === 5, 'tran 90s, toi thieu 5 lan doc');
+  // Duong dem-lan cu phai con nguyen
+  let tr = makeFeedTracker(); let firedAt = 0;
+  for (let i = 0; i < 20; i++) if (tr.track('/music/a', false)) { firedAt = i + 1; break; }
+  ok(firedAt === 20, `duong dem-lan VAN hoat dong: bao ket o lan doc thu 20 (that: ${firedAt})`);
+  // Duong THOI GIAN: it lan doc nhung qua lau -> phai bao ket
+  const realNow = Date.now;
+  let fake = realNow();
+  try {
+    tr = makeFeedTracker();
+    Date.now = () => fake;
+    for (let i = 0; i < 4; i++) tr.track('/music/b', false);
+    fake += STUCK_SAME_MS + 5000;
+    ok(tr.track('/music/b', false) === true,
+      `${STUCK_SAME_MIN} lan doc + qua ${STUCK_SAME_MS / 1000}s tren cung 1 sound -> bao ket`);
+    // KHONG bao oan khi delay rat lon (moi 2 lan doc)
+    tr = makeFeedTracker();
+    fake = realNow();
+    tr.track('/music/c', false);
+    fake += STUCK_SAME_MS + 5000;
+    ok(tr.track('/music/c', false) === false,
+      'chi 2 lan doc du da qua 90s -> KHONG bao ket (nguoi dung co the dat delay rat lon)');
+    // clearStuck phai reset dong ho, khong thi lan doc ke tiep bao ket NGAY
+    tr = makeFeedTracker();
+    fake = realNow();
+    for (let i = 0; i < 6; i++) tr.track('/music/d', false);
+    fake += STUCK_SAME_MS + 5000;
+    tr.track('/music/d', false);       // bao ket
+    tr.clearStuck();                    // da can thiep
+    for (let i = 0; i < 5; i++) tr.track('/music/d', false);   // du STUCK_SAME_MIN lan, nhung dong ho moi
+    ok(tr.track('/music/d', false) === false,
+      'clearStuck() reset dong ho -> cho cach vua thu co co hoi to hieu qua, khong bao ket ngay');
+  } finally {
+    Date.now = realNow;   // PHAI tra lai, khong thi cac test sau chay tren dong ho gia
+  }
+  ok(/clearStuck\(\) \{ sameCount = 0; progressRun = 0; sameSince = Date\.now\(\); \}/.test(stuckSrc),
+    'clearStuck() reset ca sameSince (kiem tren ma nguon, khong chi hanh vi)');
+  ok(/sameCount >= STUCK_SAME_MIN && Date\.now\(\) - sameSince >= STUCK_SAME_MS/.test(stuckSrc),
+    'dieu kien thoi gian DOI ca hai: du so lan toi thieu VA qua tran thoi gian');
+
+  console.log('### KHANG DINH: CHE DO DEM that su doi hanh vi (khong chi la cai dat trang tri)');
+  // Day la BANG CHUNG cong tac hoat dong: CUNG mot kich ban (luot 1 statusCode la, luot 2 API tot),
+  // 'patient' bo mat sound con 'fast' cuu duoc.
+  ok(patientBothFail.calls.musicGoto === 1,
+    `patient -> chi 1 luot doc, KHONG thu lai (that: ${patientBothFail.calls.musicGoto})`);
+  ok(patientBothFail.data.length === 0 && patientBothFail.pending.length === 1,
+    'patient -> sound vao TAB CHO (dung nhu ban 0.1.63: khong co co hoi thu lai)',
+    JSON.stringify({ data: patientBothFail.data.length, pending: patientBothFail.pending.length }));
+  ok(fastRetries.calls.musicGoto === 2,
+    `fast -> thu lai, 2 luot doc (that: ${fastRetries.calls.musicGoto})`);
+  ok(fastRetries.data.length === 1 && fastRetries.data[0].count === 4321,
+    'fast -> CUU DUOC dung sound ma patient bo mat, voi so dung 4321',
+    JSON.stringify(fastRetries.data.map(d => d.count)));
+  ok(fastRetries.pending.length === 0, 'fast -> khong phai vao tab cho nua');
+
   console.log('### KHANG DINH: TRAN CHO API va DOM phai co gioi han THAT');
   // Tren may ao, TikTok tra trang loi => API `api/music/detail/` KHONG BAO GIO chay => moi luot
   // dot tron tran cho. Tran 20s x 2 luot = 40s/sound, la phan TON NHAT trong con so 132s/sound
   // do duoc. Kiem tren MA NGUON vi mock tra response ngay lap tuc, khong do duoc tran that.
   const src = require('fs').readFileSync(path.join(SRC, 'crawler.cjs'), 'utf8');
-  ok(/COUNT_API_WAIT_MS/.test(src) && !/timeout:\s*20000\s*\}\)/.test(src),
-    'tran cho api/music/detail/ KHONG con hardcode 20000');
-  ok(/COUNT_API_WAIT_MS\s*=\s*Math\.max\(1000,\s*Number\(process\.env\.TTC_COUNT_API_MS\)\s*\|\|\s*8000\)/.test(src),
-    'tran cho API = 8s, chinh duoc bang TTC_COUNT_API_MS khong can build lai');
+  ok(/timeout: cfg\.apiWaitMs/.test(src) && !/timeout:\s*20000\s*\}\)/.test(src),
+    'tran cho api/music/detail/ lay theo CHE DO, khong hardcode o cho goi');
+  ok(/const COUNT_MODE_DEFAULT = 'fast'/.test(src),
+    'MAC DINH la \"fast\" — chon sai o may manh chi mat chut co hoi, chon sai o may yeu la DUNG FEED');
+  ok(/fast:\s*\{\s*apiWaitMs: 8000,\s*domBudgetMs: \[2500, 5000\],\s*attempts: 2/.test(src),
+    'che do fast: API 8s, ngan sach 2.5s/5s, 2 luot');
+  ok(/patient:\s*\{\s*apiWaitMs: 20000,\s*domBudgetMs: \[30000, 30000\],\s*attempts: 1/.test(src),
+    'che do patient: API 20s, ngan sach 30s, 1 luot (dung khuon v0.1.63)');
+  ok(/const cfg = _countCfg\(\)/.test(src) && /for \(let attempt = 1; attempt <= cfg\.attempts/.test(src),
+    'chot thong so MOT LAN cho moi sound — doi cai dat giua dong khong lam sound dang chay doi luat');
   const prSrc = require('fs').readFileSync(path.join(SRC, 'crawler', 'page-read.cjs'), 'utf8');
   ok(/function readVideoCount\(page,\s*timeoutMs\s*=\s*5000\)/.test(prSrc),
     'readVideoCount nhan tran cho TUNG lan goi');

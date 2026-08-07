@@ -48,6 +48,10 @@ function installGapiMock() {
       }
       // Doc cot B (link) cua mot tab
       if (method === 'GET' && url.includes('/values/')) {
+        // Gia lap LOI MANG khi doc lai. Phai lam qua httpScript, KHONG ghi de thuoc tinh
+        // `httpRequest` cua module: sheets.cjs da destructure ham do luc require nen gan lai
+        // thuoc tinh khong co tac dung (da mac loi nay khi viet test).
+        if (httpScript.readFails) throw new Error('gia lap loi mang khi doc');
         const rows = (httpScript.existing && httpScript.existing[tabOf()]) || [];
         return { status: 200, body: JSON.stringify({ values: rows.map(l => [l]) }) };
       }
@@ -156,6 +160,7 @@ console.log('\n=== Tab CHO KIEM TAY (link "Something went wrong") ===\n');
   sheets.configure(cfg(''), null);
   eq(sheets.isPendingEnabled(), true, 'o trong -> VAN BAT (khong con tat am tham)');
   eq(sheets.pendingTabName(), PENDING_TAB, 'o trong -> lay dung ten mac dinh Total_Link_Voice_Pending');
+  await sheets.seedPendingLinks();   // main.js luon nap truoc khi crawl (cong `_pendingSeeded`)
   eq(sheets.enqueuePending(['x', URL_DEFAULT, '', 'p']), true, 'o trong -> van nhan link');
   await sheets.flushPending();
   eq(appendsTo(PENDING_TAB).length, 1, 'ghi sang tab mac dinh');
@@ -206,8 +211,14 @@ console.log('\n=== Tab CHO KIEM TAY (link "Something went wrong") ===\n');
   requests = [];
   httpScript = { existing: { OtherPending: [] } };
   sheets.configure({ ...cfg('OtherPending') }, null);
+  // Doi tab -> phai NAP LAI danh sach truoc khi ghi (dung nhu main.js lam sau khi luu cau hinh).
+  // Truoc 2026-08-06 enqueuePending khong co cong `_pendingSeeded` nen ghi duoc ngay — chinh cho
+  // hong do: mot lan doc Sheet that bai la ca phien ghi lai tu dau => tab cho day dong trung.
+  eq(sheets.enqueuePending(['x', URL_A, '', 'p']), false,
+    'CHUA nap danh sach tab moi -> TU CHOI ghi (khong doan bua la link con moi)');
+  await sheets.seedPendingLinks();
   eq(sheets.enqueuePending(['x', URL_A, '', 'p']), true,
-    'link cua tab CU khong con bi coi la trung o tab MOI');
+    'nap xong -> link cua tab CU khong con bi coi la trung o tab MOI');
   await sheets.flushPending();
   eq(appendsTo('OtherPending').length, 1, 'ghi sang dung tab MOI');
 
@@ -218,6 +229,7 @@ console.log('\n=== Tab CHO KIEM TAY (link "Something went wrong") ===\n');
   sheets.configure(cfg('P2'), null);
   let errMsg = '';
   sheets.configure({ ...cfg('P2') }, (m) => { errMsg = m; });
+  await sheets.seedPendingLinks();
   eq(sheets.enqueuePending(['a', 'https://www.tiktok.com/music/original-sound-7600000000000000777', '', 'p']), true, 'nhan link');
   await sheets.flushPending();
   ok(/P2/.test(errMsg), 'bao loi co ten tab cho', errMsg);
@@ -227,6 +239,66 @@ console.log('\n=== Tab CHO KIEM TAY (link "Something went wrong") ===\n');
   await sleep(60);
   await sheets.flushPending();
   eq(appendsTo('P2').length, 1, 'lo bi loi da duoc GHI LAI, khong mat');
+
+  // ── 7. CHONG TRUNG LIEN MAY: doc lai TANG DAN + doc lai NGAY TRUOC KHI GHI ──
+  // Loi that (nguoi dung gui anh tab cho day dong trung, 2026-08-06): tab cho truoc day chi nap
+  // danh sach DUNG MOT LAN luc bat dau phien. Chay 5 may thi may nay khong bao gio thay link may
+  // kia ghi SAU DO -> moi may deu tuong link con moi va ghi them mot dong. Tab CHINH khong bi vi
+  // no co dung 2 co che duoi (QD-09). Gio tab cho dung y het.
+  console.log('\n7. Chong trung LIEN MAY: doc tang dan + doc lai ngay truoc khi ghi');
+  const T7 = 'P7';
+  const ID_7A = '7600000000000000701';
+  const ID_7B = '7600000000000000702';
+  const U7A = `https://www.tiktok.com/music/original-sound-${ID_7A}`;
+  const U7B = `https://www.tiktok.com/music/original-sound-${ID_7B}`;
+  requests = [];
+  // Tab cho da co 3 dong san (phien truoc) -> moc doc tiep = dong 4. Cо san du lieu moi kiem duoc
+  // duong DOC TANG DAN: tab rong thi moc = 1, ma doc tu dong 1 chinh la doc ca cot (khong phan
+  // biet duoc voi "doc lai toan bo").
+  httpScript = { existing: { [T7]: [
+    'https://www.tiktok.com/music/original-sound-7600000000000000801',
+    'https://www.tiktok.com/music/original-sound-7600000000000000802',
+    'https://www.tiktok.com/music/original-sound-7600000000000000803',
+  ] } };
+  sheets.configure(cfg(T7), null);
+  const s7 = await sheets.seedPendingLinks();
+  ok(s7.ok, 'nap danh sach dau phien (3 dong san co)');
+  eq(s7.count, 3, 'dem dung 3 link da co');
+
+  // MAY KHAC ghi U7A len tab cho SAU khi may nay da nap xong. Doc TANG DAN se doc tu dong 4 nen
+  // chi thay dong moi nay — dung nhu that.
+  httpScript.existing[T7] = [U7A];
+  // May nay cung gap U7A -> enqueue duoc (chua biet), nhung LUC GHI phai doc lai va TU BO.
+  eq(sheets.enqueuePending(['x', U7A, '', 'p']), true, 'chua biet -> nhan vao hang cho');
+  requests = [];
+  await sheets.flushPending();
+  eq(appendsTo(T7).length, 0,
+    'doc lai NGAY TRUOC KHI GHI -> thay may khac vua ghi roi -> TU BO, khong ghi trung');
+  ok(requests.some(r => r.method === 'GET' && decodeURIComponent(r.url).includes(`${T7}!B`)),
+    'co that su doc lai tab cho truoc khi ghi');
+
+  // Doc TANG DAN: lan doc thu 2 phai bat dau tu MOC (B2 tro di), khong doc lai tu dau.
+  const incUrl = requests.filter(r => r.method === 'GET')
+    .map(r => decodeURIComponent(r.url)).find(u => u.includes(`${T7}!B`));
+  ok(/!B[2-9]\d*:B/.test(incUrl || ''),
+    `doc TANG DAN tu moc, khong doc lai toan bo (${incUrl ? incUrl.split('/values/')[1] : '?'})`);
+
+  // Link that su moi -> van ghi binh thuong (khong chan oan).
+  eq(sheets.enqueuePending(['y', U7B, '', 'p']), true, 'link that su moi -> nhan');
+  requests = [];
+  await sheets.flushPending();
+  eq(appendsTo(T7).length, 1, 'link moi VAN duoc ghi (khong chan oan)');
+
+  // Doc lai loi mang KHONG duoc chan viec ghi — tha cua ho nhu cu con hon nghen du lieu.
+  const ID_7C = '7600000000000000703';
+  const U7C = `https://www.tiktok.com/music/original-sound-${ID_7C}`;
+  eq(sheets.enqueuePending(['z', U7C, '', 'p']), true, 'nhan link moi');
+  requests = [];
+  httpScript.readFails = true;
+  await sheets.flushPending();
+  httpScript.readFails = false;
+  ok(requests.some(r => r.method === 'GET'), 'da thu doc lai (va bi loi)');
+  eq(appendsTo(T7).length, 1, 'doc lai LOI -> VAN GHI (khong nghen du lieu)');
 
   console.log(`\n${fail === 0 ? '✅' : '❌'} ${pass} dat, ${fail} truot\n`);
   process.exit(fail === 0 ? 0 : 1);

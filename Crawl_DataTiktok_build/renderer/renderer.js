@@ -24,9 +24,9 @@ let _runningSelectedBatch = false;
 // TDZ như trên: applyVpnCooldown() được gọi từ renderProfiles()/updateRunSelectedBtnState().
 let _vpnCooldownUntil = 0;
 // Khóa nút Chạy trong SUỐT giai đoạn nguy hiểm của việc đổi IP: từ lúc phát hiện feed cạn, qua
-// lúc VPN bị tắt, tới hết đếm ngược. Tách riêng khỏi `_vpnCycling` vì `_vpnCycling` còn kéo dài
-// qua cả lúc app bật lại từng profile — lúc đó VPN đã ổn định nên PHẢI mở nút lại (người dùng
-// chốt: *"hết 59s thì hiện Chạy để cho chạy lại"*).
+// lúc VPN bị tắt, tới hết đếm ngược 59s (người dùng chốt: *"hết 59s thì hiện Chạy để cho chạy
+// lại"*). App KHÔNG BAO GIỜ tự đụng vào VPN nữa (bỏ 2026-08-06) nên mọi chuyển tiếp VPN đều do
+// người dùng, và bộ canh HMA là chủ duy nhất của cờ này.
 let _vpnRunLock = false;
 // Vì sao đang khoá — chỉ để chọn nhãn hiện trên nút. 'cycling' = app đang tắt/bật lại VPN;
 // 'vpn-off' = VPN đang TẮT (người dùng tự tắt / VPN tụt). Hai ca này người dùng phải xử khác nhau
@@ -389,6 +389,11 @@ function resetProfileCounts(id) {
 // ── Bắt đầu / dừng 1 profile ──
 async function startProfileById(id) {
   if (runningSet.has(id)) return;
+  // Bấm Chạy trong lúc đang đếm ngược = "chạy ngay, khỏi chờ". Huỷ hẹn để không có 2 đường cùng bật.
+  // KHÔNG xoá `streak`: nếu vẫn bị cắt tiếp thì lần nghỉ sau vẫn phải dài hơn.
+  const keep = _starve[id] && _starve[id].streak;
+  cancelStarveRestart(id);
+  if (keep) _starve[id] = { streak: keep, until: 0, tick: null };
   // Profile ĐẦU TIÊN của phiên → làm mới bảng. Backend song song cũng reset bộ đếm
   // và nạp lại link cũ từ Sheet vào bộ nhớ để lọc trùng (main.js đọc Sheet khi
   // chưa có profile nào chạy). Nếu thêm profile vào phiên đang chạy thì giữ nguyên bảng.
@@ -445,16 +450,17 @@ async function startProfileById(id) {
 }
 
 async function stopProfileById(id) {
+  // NGƯỜI DÙNG bấm Dừng = họ tiếp quản → huỷ hẹn tự-bật-lại-sau-khi-bị-cắt-feed, kể cả khi profile
+  // đang trong lúc đếm ngược (lúc đó nó KHÔNG nằm trong runningSet nên phải xoá TRƯỚC dòng return
+  // bên dưới, không thì bấm Dừng lúc đang chờ sẽ không huỷ được gì).
+  // ⚠ handleFeedStarved cũng gọi hàm này, nhưng nó đặt hẹn SAU khi await xong nên không tự xoá.
+  cancelStarveRestart(id, 'người dùng bấm Dừng');
+  // Người dùng bấm Dừng = tiếp quản → huỷ luôn hẹn chạy lại CẢ NHÓM (sau đổi IP / sau VPN tụt).
+  // Không huỷ thì app tự bật lại đúng nhóm họ vừa tắt.
+  cancelGroupRetry('người dùng bấm Dừng');
+  if (_vpnCycling) _vpnCancelRestart = true;
+  _vpnDownGroup = [];
   if (!runningSet.has(id)) return;
-  // Người dùng chủ động dừng trong lúc app đang đổi IP → HUỶ việc tự chạy lại, nếu không app sẽ
-  // tự bật lại đúng profile họ vừa tắt. Đặt ở ĐÂY (không ở stopSelected) để cả nút "■ Dừng" trên
-  // từng hàng và nút "Dừng đã chọn" đều được che — trước đây chỉ stopSelected làm việc này nên
-  // dừng bằng nút hàng vẫn bị bật lại. handleFeedStarved gọi api.profileStop TRỰC TIẾP nên
-  // không tự huỷ lượt của chính nó.
-  if (_vpnCycling) {
-    _vpnCancelRestart = true;
-    toast('Đã huỷ việc tự chạy lại sau đổi IP.', 'ok');
-  }
   appendLog(id, 'Đang dừng...');
   // Đặt badge TRƯỚC await: backend phát 'stopped' gần như tức thì, nếu đặt sau await thì
   // dòng này GHI ĐÈ mất thông báo "Đã dừng." vừa nhận được → badge kẹt ở "Đang dừng..."
@@ -571,43 +577,74 @@ async function runSelected() {
   }
 }
 
-// ══════════════════════════════════════════
-// TỰ ĐỔI IP KHI TIKTOK CẮT FEED (QĐ-32)
-// ══════════════════════════════════════════
-// Người dùng chốt 2026-08-05: "profile nào bị TikTok chặn cuộn thì tắt bật lại HMA xong tự
-// chạy lại". Hai bản vá trước chỉ giảm thiệt hại; đổi IP là thứ duy nhất chạm gốc rễ.
+// ══════════════════════════════════════════════════════════════════════════
+// TIKTOK CẮT FEED → 2 ĐƯỜNG, cả hai đều TỰ CHẠY LẠI (QĐ-32)
+// ══════════════════════════════════════════════════════════════════════════
+// Người dùng treo máy qua đêm (*"nhiều khi tôi treo máy nên không thể ấn Chạy thủ công được"*) nên
+// MỌI đường đều phải tự phục hồi — dừng hẳn mà không ai bấm lại là mất cả đêm sản lượng.
 //
-// ── DỪNG RIÊNG 1 PROFILE hay DỪNG HẾT? Phụ thuộc RÒ RỈ IPv6 (2026-08-06) ──
-// Người dùng muốn chỉ dừng đúng profile bị cắt feed ("rerender HMA thì các profile khác vẫn
-// chạy mượt"). Quan sát đó ĐÚNG — chúng vẫn chạy. Nhưng "chạy mượt" khác "an toàn":
+//   Công tắc "Tự đổi IP" BẬT  → DỪNG HẾT profile → tắt/bật lại HMA VPN → chờ 59s → chạy lại cả nhóm
+//   Công tắc TẮT              → dừng ĐÚNG profile đó → nghỉ 5/15/30 phút → tự bật lại chính nó
 //
-// Đo thật: đường hầm WireGuard của HMA chỉ định tuyến IPv4. Lúc VPN TẮT, IPv6 đi thẳng ra
-// internet bằng IP thật (`2001:db8:… (VN)`, lọt trong 241ms) trong khi profile vẫn khai múi
-// giờ London/Seoul/New York. Rò rỉ này IM LẶNG — không lỗi, không dừng, chỉ mất phiên SAU ĐÓ.
-// (`systemKillSwitchActive: true` của HMA KHÔNG chặn IPv6 — đã đo, đừng tin cờ đó.)
+// ── ⚠ VÌ SAO LUÔN DỪNG HẾT (không có tuỳ chọn "chỉ dừng 1") ──
+// Bản đầu cho phép chỉ dừng 1 profile nếu máy không rò rỉ IPv6. Người dùng chỉ ra đúng lỗ hổng mà
+// phép đo IPv6 KHÔNG che được: 4 profile kia vẫn đang chạy, chúng bắt đầu phiên quét trên IP A rồi
+// GIỮA CHỪNG bị chuyển sang IP B. Với TikTok, một phiên đang hoạt động bỗng đổi IP giữa lúc quét là
+// đúng khuôn "tài khoản bị chiếm" mà QĐ-15 gọi là nguyên nhân số 1 khiến nó huỷ phiên.
+// Rò rỉ IPv6 chỉ là MỘT trong hai vấn đề; "đổi IP giữa phiên" là vấn đề còn lại và nó xảy ra kể cả
+// khi không có IPv6 nào. Nên nhánh "dừng 1" bị xoá hẳn, không để làm tuỳ chọn.
+// Backend (`ipcMain.handle('vpn-cycle')`) cũng chốt lại: còn profile nào chạy là TỪ CHỐI đổi IP.
 //
-// Nên quyết định theo máy, không theo phỏng đoán:
-//   máy KHÔNG có IPv6 công khai → chỉ dừng profile bị cắt feed (đúng ý người dùng)
-//   máy CÓ  IPv6 công khai      → dừng hết, và nói rõ cách tắt IPv6 để lần sau chỉ dừng 1
-let _vpnAutoCycle = false;    // công tắc trong ⚙ (chung toàn app)
-let _vpnCycling = false;      // chống chạy chồng nhiều lượt
+// ── Vì sao DỪNG rồi BẬT LẠI, không "tạm dừng tại chỗ" (backend vốn có backoff 5/15/30 phút) ──
+//   • Dựng lại context = trang feed mới, cookie nạp lại, vân tay áp lại → TikTok thấy một phiên
+//     MỞ MỚI thay vì một phiên đang bị siết cố cào tiếp.
+//   • Bật lại đi qua `waitForCorrectCountry` (ip-guard, QĐ-17) → VPN tụt lúc không ai trông thì
+//     profile TỰ CHỜ đúng vùng chứ không chạy sai nước. "Tạm dừng tại chỗ" không có bước này.
+//
+// ── VPN TẮT (do người dùng, hay tự tụt) → CŨNG DỪNG HẾT ──
+// Người dùng báo 2026-08-06: *"khi tôi tắt HMA thì vẫn thấy các profile chạy... Tắt HMA là dừng hết
+// luôn không cho chạy"*. Bản trước chỉ CẢNH BÁO, không dừng — mà cảnh báo thì vô nghĩa khi họ treo
+// máy: mỗi giây profile còn chạy là một giây gửi request bằng IP THẬT.
+// Cùng một nguyên tắc với đoạn trên: VPN tắt = không profile nào được chạy, không có ngoại lệ.
+// Xem `watchVpnTunnel` ở khối dưới.
 
 // Thời gian để IP mới "nguội" trước khi cho profile chạy lại (người dùng chốt: ~1 phút).
-// Không đặt ngắn hơn: mục đích chính là để 5 phiên đăng nhập cũ không đồng loạt xuất hiện trên
-// một IP vừa mới đổi trong vài giây.
 const VPN_COOLDOWN_MS = 60 * 1000;
 
-// Người dùng bấm Dừng/Dừng mềm trong lúc đang chờ → phải huỷ, không được cứ thế bật lại.
-// Không có cờ stop riêng ở renderer, nên suy từ việc người dùng có bấm gì không: nếu họ chủ
-// động bật lại profile nào trong lúc chờ thì coi như họ đã tự lo, ta dừng can thiệp.
+let _vpnAutoCycle = false;   // công tắc trong ⚙ (chung toàn app)
+let _vpnCycling = false;     // đang chạy một lượt đổi IP → chống chạy chồng
+
+// Người dùng bấm Dừng trong lúc app đang chờ → phải huỷ, không được cứ thế bật lại.
 let _vpnCancelRestart = false;
 function scanStopRequested() { return _vpnCancelRestart; }
 
-// Đếm ngược có hiển thị, huỷ được. Ghi vào dòng trạng thái mỗi giây để người dùng thấy rõ app
-// đang CHỜ CÓ CHỦ ĐÍCH, không phải treo (đúng bài học QĐ-21: vòng chờ im lặng bị báo là bug).
+// Nhóm profile bị app dừng vì VPN TẮT — để tự bật lại khi VPN lên (xem watchVpnTunnel).
+let _vpnDownGroup = [];
+
+// Nghỉ bao lâu trước khi tự bật lại, TĂNG DẦN theo số lần bị cắt LIÊN TIẾP: 5 → 15 → 30 phút
+// (giữ mức cuối). Cùng thang với backoff cũ của backend — đó là con số đã dùng thật, không phải
+// đoán mới. Tăng dần vì bị cắt lại ngay nghĩa là TikTok đang siết nặng: thử dày chỉ siết thêm.
+// ⚠ KHÔNG dùng process.env ở đây: renderer chạy trong sandbox (contextIsolation) nên `process`
+// không tồn tại — viết vào là ReferenceError làm chết cả giao diện.
+const STARVE_RESTART_WAITS = [5 * 60000, 15 * 60000, 30 * 60000];
+
+// profileId -> { streak, until, tick }  (streak = số lần bị cắt LIÊN TIẾP, để tăng dần thời gian)
+const _starve = {};
+
+// Xoá hẹn bật lại. Gọi khi NGƯỜI DÙNG tự can thiệp (bấm Chạy / bấm Dừng) — họ đã tiếp quản thì app
+// không được tự ý bật lại nữa.
+function cancelStarveRestart(id, why) {
+  const st = _starve[id];
+  if (!st) return;
+  if (st.tick) clearInterval(st.tick);
+  delete _starve[id];
+  if (why) appendLog(id, `Đã huỷ hẹn tự chạy lại (${why}).`);
+}
+
+// Đếm ngược có hiển thị, huỷ được. Ghi vào dòng trạng thái mỗi giây để người dùng thấy rõ app đang
+// CHỜ CÓ CHỦ ĐÍCH, không phải treo (bài học QĐ-21: vòng chờ im lặng bị báo là bug).
 async function waitBeforeRestart(ids) {
-  // Mốc dùng CHUNG cho dòng trạng thái và cho nút Chạy — một nguồn sự thật, không thể lệch nhau
-  // (nút hiện 0s mà vẫn khóa, hoặc hết chờ mà nút vẫn khóa).
+  // Mốc dùng CHUNG cho dòng trạng thái và cho nút Chạy — một nguồn sự thật, không thể lệch nhau.
   _vpnCooldownUntil = Date.now() + VPN_COOLDOWN_MS;
   try {
     for (;;) {
@@ -617,75 +654,53 @@ async function waitBeforeRestart(ids) {
       const m = `⏳ Chờ ${left}s cho IP mới ổn định rồi mới chạy lại ${ids.length} profile`
         + ' (tránh TikTok coi là đăng nhập dồn dập trên IP vừa đổi)...';
       $('crawlStatusMsg').textContent = m;
-      // Chỉ ghi log mỗi 15s cho khỏi ngập log 📄.
       if (left % 15 === 0) for (const id of ids) appendLog(id, m);
       await new Promise(r => setTimeout(r, 1000));
     }
   } finally {
-    // Mở khóa nút kể cả khi bị huỷ giữa chừng hoặc ném lỗi — bỏ sót chỗ này là nút Chạy
-    // KẸT KHÓA VĨNH VIỄN cho tới lần vẽ lại bảng kế tiếp.
+    // Mở khóa kể cả khi bị huỷ giữa chừng hoặc ném lỗi — bỏ sót là nút Chạy KẸT KHÓA vĩnh viễn.
     _vpnCooldownUntil = 0;
     applyVpnCooldown();
-    updateRunSelectedBtnState();   // trả nút tổng về đúng trạng thái theo ô đang tick
+    updateRunSelectedBtnState();
   }
 }
 
-async function handleFeedStarved(profileId) {
-  if (!_vpnAutoCycle || _vpnCycling) return;
+// ── ĐƯỜNG ĐỔI IP: dừng HẾT → tắt/bật lại HMA → chờ 59s → chạy lại cả nhóm ──
+// ⚠ LUÔN dừng HẾT, không có nhánh "chỉ dừng 1" (xem lý do ở đầu khối): IP là của cả máy, nên để
+// profile nào chạy tiếp là nó bị đổi IP GIỮA PHIÊN.
+async function cycleIpAndRestart(profileId) {
+  if (_vpnCycling) return;
   _vpnCycling = true;
   _vpnCancelRestart = false;   // bắt đầu lượt mới → xoá cờ huỷ của lượt trước
-  _vpnRunLock = true;          // khóa nút Chạy NGAY — từ đây VPN sắp bị tắt
+  _vpnRunLock = true;          // khoá nút Chạy NGAY — từ đây VPN sắp bị tắt
   _vpnLockReason = 'cycling';
   applyVpnCooldown();
   // Nhớ ĐÚNG nhóm đang chạy để bật lại y như cũ (không bật thừa profile người dùng đã tắt tay).
-  const wasAll = [...runningSet];
-
-  // Máy này có rò rỉ IPv6 lúc VPN tắt không → quyết định dừng bao nhiêu profile.
-  // Lỗi khi hỏi thì coi như CÓ rủi ro (dừng hết) — an toàn hơn là đoán bừa rồi mất phiên.
-  let risk = { risky: true };
-  try { risk = await api.vpnIpv6Risk(); } catch (_) {}
-  const stopOnlyOne = !risk.risky;
-
-  // Chỉ dừng 1 thì các profile còn lại vẫn chạy, nên chỉ ghi log vào đúng nhóm bị dừng.
-  const was = stopOnlyOne ? [profileId] : wasAll;
+  const was = [...runningSet];
   const say = (m) => {
     $('crawlStatusMsg').textContent = m;
     for (const id of was) appendLog(id, m);
   };
   try {
-    if (stopOnlyOne) {
-      const others = wasAll.filter(id => id !== profileId).length;
-      say(`⛔ "${nameOf(profileId)}" bị TikTok cắt feed — dừng RIÊNG profile này để đổi IP`
-        + (others
-          ? ` (máy không có IPv6 công khai nên ${others} profile kia chạy tiếp an toàn, chỉ bị`
-            + ' lỗi mạng vài giây lúc VPN tắt)...'
-          : ' (máy không có IPv6 công khai nên an toàn)...'));
-      await api.profileStop(profileId);
-    } else {
-      const addr = (risk.addresses && risk.addresses[0] && risk.addresses[0].address) || '?';
-      say(`⛔ "${nameOf(profileId)}" bị TikTok cắt feed — dừng ${wasAll.length} profile để đổi IP. `
-        + `Máy này CÓ IPv6 công khai (${addr}) nên lúc VPN tắt IPv6 sẽ lọt ra IP thật — profile `
-        + 'nào còn chạy là mất phiên. Tắt IPv6 trên máy (TROUBLESHOOTING mục 17) thì lần sau chỉ '
-        + 'cần dừng 1 profile.');
-      await api.profilesStopAll();
-    }
+    say(`⛔ "${nameOf(profileId)}" bị TikTok cắt feed — DỪNG HẾT ${was.length} profile để đổi IP.`
+      + ' IP là của cả máy nên không thể đổi cho riêng một profile: để profile nào chạy tiếp là nó'
+      + ' bị đổi IP giữa phiên, đúng thứ TikTok dùng để hủy phiên.');
+    await api.profilesStopAll();
 
-    // Chờ BACKEND xác nhận đã dừng. Không tin `runningSet` của renderer — backend là nguồn sự
+    // Chờ BACKEND xác nhận đã dừng SẠCH. Không tin `runningSet` của renderer — backend là nguồn sự
     // thật duy nhất về profile nào đang chạy (bài học đồng bộ trạng thái 2026-07-28).
     let still = [];
     const t0 = Date.now();
     while (Date.now() - t0 < 90000) {
       await new Promise(r => setTimeout(r, 1000));
-      let running = [];
-      try { running = await api.crawlRunningIds(); } catch { running = []; }
-      // Dừng 1 profile: chỉ cần ĐÚNG nó đã dừng. Dừng hết: phải sạch hoàn toàn.
-      still = stopOnlyOne ? (running || []).filter(id => id === profileId) : (running || []);
+      try { still = (await api.crawlRunningIds()) || []; } catch { still = []; }
       if (!still.length) break;
     }
     if (still.length) {
       say(`⚠ HỦY đổi IP: còn ${still.length} profile chưa dừng sau 90s. Tắt VPN lúc này sẽ để lọt`
         + ' request bằng IP thật và làm mất phiên — thà không đổi IP.');
       toast('Hủy đổi IP — còn profile chưa dừng.', 'err');
+      scheduleGroupRetry(was, STARVE_RESTART_WAITS[0]);
       return;
     }
 
@@ -700,44 +715,37 @@ async function handleFeedStarved(profileId) {
       // Bị giới hạn nhịp thì VPN KHÔNG bị đụng tới → vẫn đang bật, bật lại profile là an toàn.
       say('⏭ ' + r.msg + ' Chạy lại profile với IP hiện tại.');
     } else {
-      // Lỗi khác: VPN có thể ĐANG TẮT → TUYỆT ĐỐI không bật lại profile, sẽ chạy bằng IP thật.
+      // Lỗi khác: VPN có thể ĐANG TẮT → TUYỆT ĐỐI không bật lại ngay, sẽ chạy bằng IP thật.
+      // Nhưng cũng KHÔNG bỏ mặc: người dùng treo máy, nên hẹn thử lại cả nhóm. `fireGroupRetry`
+      // chỉ bật khi VPN đã ổn định (bộ canh HMA giữ cờ khoá suốt lúc VPN tắt).
       say('⚠ Đổi IP thất bại: ' + ((r && r.msg) || 'không rõ lý do')
-        + ' — KHÔNG tự chạy lại profile vì VPN có thể đang tắt. Kiểm tra HMA rồi bấm ▶ chạy lại.');
-      toast('Đổi IP thất bại — KHÔNG tự chạy lại. Xem log.', 'err');
+        + ' — KHÔNG bật lại ngay vì VPN có thể đang tắt. Sẽ tự thử lại sau khi VPN ổn định.');
+      toast('Đổi IP thất bại — sẽ tự thử lại. Xem log 📄.', 'err');
+      scheduleGroupRetry(was, STARVE_RESTART_WAITS[0]);
       return;
     }
 
     // ── CHỜ CHO IP "NGUỘI" TRƯỚC KHI CHẠY LẠI (người dùng chốt 2026-08-06) ──
-    // Yêu cầu: *"khi bật lại HMA thì set khoảng 1 phút, hết 1 phút thì profile mới được chạy —
-    // để tránh TikTok chặn profile vì spam đăng nhập liên tục"*.
-    //
-    // Vì sao đúng: sau khi đổi IP, 5 profile khởi động lại gần như cùng lúc trên MỘT IP vừa mới
-    // xuất hiện. Với TikTok đó là 5 phiên đăng nhập cũ bỗng chuyển sang một IP mới trong vài
-    // giây — đúng khuôn "tài khoản bị chiếm" mà QĐ-15 nói là nguyên nhân số 1 khiến nó hủy phiên.
-    // Chờ 1 phút cho đường mạng/định tuyến ổn định rồi mới vào là rẻ (mất 1 phút sản lượng) so
-    // với mất phiên cả nhóm.
-    //
-    // Việc chờ này ĐỘC LẬP với `startProfilesStaggered` (bật lần lượt, QĐ-21): cái đó giãn các
-    // profile ra để không tranh CPU, còn cái này giãn CẢ NHÓM ra khỏi thời điểm IP vừa đổi.
+    // 5 profile khởi động lại gần như cùng lúc trên MỘT IP vừa mới xuất hiện = 5 phiên đăng nhập cũ
+    // bỗng chuyển sang IP mới trong vài giây — đúng khuôn "tài khoản bị chiếm" (QĐ-15).
+    // Việc chờ này ĐỘC LẬP với `startProfilesStaggered` (QĐ-21): cái đó giãn các profile ra để không
+    // tranh CPU, còn cái này giãn CẢ NHÓM ra khỏi thời điểm IP vừa đổi.
     if (!scanStopRequested()) await waitBeforeRestart(was);
     if (scanStopRequested()) { say('Đã hủy chạy lại (người dùng bấm dừng trong lúc chờ).'); return; }
 
-    // HẾT GIỜ CHỜ → MỞ KHÓA nút Chạy ngay, trước khi app tự bật lại. VPN đã ổn định nên bấm tay
-    // lúc này là an toàn, và người dùng chốt đúng hành vi này.
+    // HẾT GIỜ CHỜ → MỞ KHÓA nút Chạy ngay, trước khi app tự bật lại (người dùng chốt: *"hết 59s thì
+    // hiện Chạy để cho chạy lại"*).
     _vpnRunLock = false;
     applyVpnCooldown();
     updateRunSelectedBtnState();
 
-    // Bật lại đúng nhóm vừa dừng, lần lượt. Mỗi profile khi khởi động sẽ TỰ chờ ip-guard xác
-    // nhận IP đúng nhãn quốc gia trước khi mở trình duyệt (waitForCorrectCountry) — nên nếu VPN
-    // chưa kịp ổn định thì nó đứng chờ chứ không chạy sai vùng.
     await startProfilesStaggered(was);
   } catch (e) {
     say('⚠ Lỗi trong lúc đổi IP: ' + e.message);
+    scheduleGroupRetry(was, STARVE_RESTART_WAITS[0]);
   } finally {
-    // MỞ KHÓA nút Chạy ở đây là bắt buộc, kể cả trên mọi đường `return` sớm phía trên (bị giới
-    // hạn nhịp, đổi IP thất bại, hủy giữa chừng). Thiếu 2 dòng dưới thì nút kẹt "⏳ đổi IP" mãi
-    // và người dùng không còn cách nào bật profile bằng tay.
+    // MỞ KHÓA ở đây là bắt buộc, kể cả trên mọi đường `return` sớm phía trên. Thiếu là nút kẹt
+    // "⏳ đổi IP" mãi và người dùng không còn cách nào bật profile bằng tay.
     _vpnCycling = false;
     _vpnRunLock = false;
     _vpnCooldownUntil = 0;
@@ -746,6 +754,156 @@ async function handleFeedStarved(profileId) {
   }
 }
 
+// ── HẸN THỬ LẠI CẢ NHÓM ──
+// Dùng khi đường đổi IP không đi tới đích (đổi IP thất bại, còn profile chưa dừng, VPN tụt...).
+// Vì sao cần: người dùng TREO MÁY. Bỏ mặc nhóm ở trạng thái dừng = mất cả đêm sản lượng mà không ai
+// thấy. Một hẹn cho CẢ NHÓM (không phải mỗi profile một hẹn) để chúng không cùng bật một lúc.
+let _groupRetry = null;   // { ids, until, tick }
+function cancelGroupRetry(why) {
+  if (!_groupRetry) return;
+  if (_groupRetry.tick) clearInterval(_groupRetry.tick);
+  const ids = _groupRetry.ids;
+  _groupRetry = null;
+  if (why) for (const id of ids) appendLog(id, `Đã huỷ hẹn chạy lại cả nhóm (${why}).`);
+}
+function scheduleGroupRetry(ids, waitMs) {
+  cancelGroupRetry();
+  if (!ids || !ids.length) return;
+  _groupRetry = { ids: [...ids], until: Date.now() + waitMs, tick: null };
+  const render = () => {
+    const cur = _groupRetry;
+    if (!cur) return;
+    const left = cur.until - Date.now();
+    if (left > 0) {
+      for (const id of cur.ids) {
+        if (!runningSet.has(id)) updateRowStatus(id, 'stopped', `⏸ Chờ chạy lại sau ${formatCountdown(left)}`);
+      }
+      return;
+    }
+    clearInterval(cur.tick);
+    cur.tick = null;
+    fireGroupRetry();
+  };
+  _groupRetry.tick = setInterval(render, 1000);
+  render();
+}
+async function fireGroupRetry() {
+  const cur = _groupRetry;
+  if (!cur) return;
+  // VPN chưa ổn định → chưa bật, kiểm lại mỗi 5 giây (VPN tắt là do người dùng nên có thể hết bất
+  // cứ lúc nào; hẹn thưa làm nhóm nằm chờ vô ích sau khi VPN đã lên).
+  if (vpnRunLocked()) {
+    cur.until = Date.now() + 5000;
+    for (const id of cur.ids) {
+      if (!runningSet.has(id)) updateRowStatus(id, 'stopped', '⏸ Chờ VPN ổn định rồi chạy lại...');
+    }
+    cur.tick = setInterval(() => {
+      const c = _groupRetry;
+      if (!c) return;
+      if (Date.now() >= c.until) { clearInterval(c.tick); c.tick = null; fireGroupRetry(); }
+    }, 1000);
+    return;
+  }
+  const ids = cur.ids.filter(id => !runningSet.has(id));
+  _groupRetry = null;
+  if (!ids.length) return;
+  for (const id of ids) appendLog(id, '⏱ Hết giờ chờ — tự chạy lại cả nhóm.');
+  try {
+    await startProfilesStaggered(ids);
+  } catch (e) {
+    for (const id of ids) appendLog(id, '⚠ Chạy lại cả nhóm thất bại: ' + e.message);
+    scheduleGroupRetry(ids, STARVE_RESTART_WAITS[STARVE_RESTART_WAITS.length - 1]);
+  }
+}
+
+async function handleFeedStarved(profileId) {
+  if (!runningSet.has(profileId)) return;   // đã dừng bằng đường khác
+  // Công tắc BẬT → đường đổi IP (dừng HẾT + tắt/bật HMA + chạy lại cả nhóm).
+  // Công tắc TẮT → đường nhẹ bên dưới (dừng riêng profile đó + nghỉ 5/15/30 phút).
+  if (_vpnAutoCycle) return cycleIpAndRestart(profileId);
+  const prev = _starve[profileId];
+  // `streak` phải sống qua lần dừng: đếm số lần bị cắt LIÊN TIẾP để giãn thời gian nghỉ.
+  const streak = ((prev && prev.streak) || 0) + 1;
+  const waitMs = STARVE_RESTART_WAITS[Math.min(streak - 1, STARVE_RESTART_WAITS.length - 1)];
+
+  // Dùng formatCountdown (đã có, dùng chung với chip pha chu kỳ) thay vì `Math.round(ms/60000)`:
+  // cách cũ ra "0 phút" với mọi khoảng dưới 30 giây — vô nghĩa, và test đã bắt đúng lỗi này.
+  const waitTxt = formatCountdown(waitMs);
+  const m = `⛔ "${nameOf(profileId)}" bị TikTok cắt feed (lần ${streak} liên tiếp) — DỪNG profile`
+    + ` này, sẽ TỰ BẬT LẠI sau ${waitTxt}.`;
+  $('crawlStatusMsg').textContent = m;
+  appendLog(profileId, m);
+  toast(`"${nameOf(profileId)}" bị cắt feed — tự bật lại sau ${waitTxt}.`, 'err');
+
+  try {
+    await stopProfileById(profileId);
+  } catch (e) {
+    appendLog(profileId, '⚠ Lỗi khi dừng profile bị cắt feed: ' + e.message);
+  }
+  // ⚠ Đặt hẹn SAU khi dừng: `stopProfileById` xoá mọi hẹn đang có (người dùng bấm Dừng thì phải
+  // huỷ hẹn), nên đặt trước sẽ bị chính nó xoá mất.
+  scheduleStarveRestart(profileId, waitMs, streak);
+}
+
+function scheduleStarveRestart(id, waitMs, streak) {
+  cancelStarveRestart(id);
+  const st = { streak, until: Date.now() + waitMs, tick: null };
+  _starve[id] = st;
+  // Đếm ngược HIỆN RA badge trạng thái mỗi giây. Vòng chờ im lặng luôn bị báo là "app treo"
+  // (bài học QĐ-21) — mà lần này còn chờ tới 30 phút.
+  const render = () => {
+    const cur = _starve[id];
+    if (!cur) return;
+    const left = cur.until - Date.now();
+    if (left > 0) {
+      updateRowStatus(id, 'stopped',
+        `⏸ Bị cắt feed — tự bật lại sau ${formatCountdown(left)}`);
+      return;
+    }
+    clearInterval(cur.tick);
+    cur.tick = null;
+    fireStarveRestart(id);
+  };
+  st.tick = setInterval(render, 1000);
+  render();
+}
+
+async function fireStarveRestart(id) {
+  const st = _starve[id];
+  if (!st) return;                          // đã bị huỷ
+  if (runningSet.has(id)) { delete _starve[id]; return; }   // người dùng đã tự bật
+  // VPN đang tắt / đang trong 59s chờ IP nguội → KHÔNG bật (sẽ chạy bằng IP thật, hoặc dồn đăng
+  // nhập lên IP vừa đổi). Hẹn lại sau 30 giây rồi kiểm tiếp — không bỏ luôn ý định bật lại.
+  if (vpnRunLocked()) {
+    // Kiểm lại mỗi 5 giây — VPN tắt là do NGƯỜI DÙNG nên có thể hết bất cứ lúc nào; hẹn thưa
+    // (vd 30s) làm profile nằm chờ vô ích sau khi VPN đã lên. 5 giây đủ nhạy mà không tốn gì
+    // (chỉ đọc một cờ trong bộ nhớ, không gọi IPC).
+    st.until = Date.now() + 5000;
+    updateRowStatus(id, 'stopped', '⏸ Bị cắt feed — chờ VPN ổn định rồi tự bật lại...');
+    appendLog(id, 'Tới giờ tự bật lại nhưng VPN đang tắt/đang chờ IP nguội — kiểm lại sau 5s.');
+    st.tick = setInterval(() => {
+      const cur = _starve[id];
+      if (!cur) return;
+      if (Date.now() >= cur.until) { clearInterval(cur.tick); cur.tick = null; fireStarveRestart(id); }
+    }, 1000);
+    return;
+  }
+  // GIỮ `streak` để lần cắt kế tiếp nghỉ dài hơn. Nó chỉ được xoá khi profile quét lại được bình
+  // thường (xem chỗ nhận status 'running' có số sound mới) hoặc khi người dùng tự can thiệp.
+  const streak = st.streak;
+  if (st.tick) clearInterval(st.tick);
+  delete _starve[id];
+  appendLog(id, `⏱ Hết giờ nghỉ — tự bật lại "${nameOf(id)}" (lần cắt liên tiếp thứ ${streak}).`);
+  try {
+    await startProfileById(id);
+    // Bật xong thì khôi phục `streak` để lần cắt sau còn giãn tiếp. `startProfileById` không biết
+    // gì về starve nên phải tự đặt lại ở đây.
+    if (runningSet.has(id)) _starve[id] = { streak, until: 0, tick: null };
+  } catch (e) {
+    appendLog(id, '⚠ Tự bật lại thất bại: ' + e.message + ' — thử lại sau.');
+    scheduleStarveRestart(id, STARVE_RESTART_WAITS[STARVE_RESTART_WAITS.length - 1], streak);
+  }
+}
 // ══════════════════════════════════════════════════════════════════════════
 // CANH HMA DO NGƯỜI DÙNG TỰ TẮT/BẬT (2026-08-06)
 // ══════════════════════════════════════════════════════════════════════════
@@ -776,8 +934,8 @@ async function watchVpnTunnel() {
   const prev = _tunnelPrev;
   _tunnelPrev = now;
 
-  // App đang tự đổi IP → nó tự lo khoá/mở. Đứng ngoài để việc khoá chỉ có MỘT chủ.
-  if (_vpnCycling) return;
+  // (Trước đây có nhánh "app đang tự đổi IP thì đứng ngoài". Không cần nữa: app KHÔNG BAO GIỜ tự
+  // đụng vào VPN — mọi thay đổi VPN đều do người dùng, nên bộ canh là chủ duy nhất của việc khoá.)
 
   if (now === 'down') {
     // VPN vừa SẬP (người dùng tắt, hoặc tụt). Khoá ngay: bật profile lúc này là chạy IP thật.
@@ -785,18 +943,48 @@ async function watchVpnTunnel() {
     _vpnLockReason = 'vpn-off';
     _vpnCooldownUntil = 0;
     applyVpnCooldown();
-    const running = runningSet.size;
-    const m = '⛔ HMA VPN vừa TẮT — đã khoá nút Chạy (bật profile lúc này sẽ chạy bằng IP THẬT).'
-      + (running ? ` ⚠ Còn ${running} profile ĐANG CHẠY: nên dừng ngay, chúng đang dùng IP thật.` : '');
+    // ⚠ DỪNG HẾT, không chỉ cảnh báo (người dùng chốt 2026-08-06: *"khi tôi tắt HMA thì vẫn thấy
+    // các profile chạy... Tắt HMA là dừng hết luôn không cho chạy"*). Cảnh báo là vô nghĩa khi họ
+    // treo máy: mỗi giây profile còn chạy là một giây gửi request bằng IP THẬT.
+    // App đang tự đổi IP thì nó đã dừng hết trước khi tắt VPN → chỗ này thành no-op, không xung đột.
+    const wasRunning = [...runningSet];
+    const running = wasRunning.length;
+    let m = '⛔ HMA VPN vừa TẮT — đã khoá nút Chạy (chạy lúc này là dùng IP THẬT).';
+    if (running) {
+      m += ` ĐANG DỪNG HẾT ${running} profile.`;
+      // Máy CÓ IPv6 công khai thì nguy hiểm hơn hẳn: đường hầm HMA chỉ định tuyến IPv4, nên lúc
+      // VPN tắt, IPv6 đi THẲNG ra internet bằng IP thật (đo thật: lọt trong 241ms) trong khi
+      // profile vẫn khai múi giờ London/Seoul — đúng mâu thuẫn "IP nước này, giờ nước khác".
+      // Nói rõ ra vì hai ca cần mức khẩn cấp khác nhau: không có IPv6 thì chỉ là lỗi mạng tạm
+      // thời, có IPv6 thì đang LỘ NƯỚC THẬT.
+      try {
+        const risk = await api.vpnIpv6Risk();
+        if (risk && risk.risky) {
+          const addr = (risk.addresses && risk.addresses[0] && risk.addresses[0].address) || '?';
+          m += ` Máy này CÓ IPv6 công khai (${addr}) nên chúng đang LỘ IP THẬT ra TikTok, không chỉ`
+            + ' lỗi mạng — dừng càng sớm càng tốt (tắt IPv6: TROUBLESHOOTING mục 17).';
+        } else if (risk && !risk.unknown) {
+          m += ' Máy đã tắt IPv6 nên chúng chỉ bị lỗi mạng, không lộ IP thật.';
+        }
+      } catch (_) { /* không hỏi được thì thôi, phần cảnh báo chính đã có */ }
+    }
     $('crawlStatusMsg').textContent = m;
-    for (const id of runningSet) appendLog(id, m);
-    toast(running ? `HMA đã tắt — còn ${running} profile đang chạy bằng IP thật!` : 'HMA đã tắt — đã khoá nút Chạy.', 'err');
+    for (const id of wasRunning) appendLog(id, m);
+    toast(running ? `HMA đã tắt — đang DỪNG HẾT ${running} profile.` : 'HMA đã tắt — đã khoá nút Chạy.', 'err');
+    if (running) {
+      // Nhớ nhóm để tự bật lại khi VPN lên — người dùng treo máy, VPN tụt lúc 3h sáng mà không ai
+      // bật lại thì mất cả đêm. Bấm ■ Dừng lúc đang chờ sẽ huỷ (xem cancelGroupRetry).
+      _vpnDownGroup = wasRunning;
+      try {
+        await api.profilesStopAll();
+      } catch (e) {
+        for (const id of wasRunning) appendLog(id, '⚠ Lỗi khi dừng vì VPN tắt: ' + e.message);
+      }
+    }
     return;
   }
 
-  // VPN vừa LÊN (bật lại, hoặc nối lại nên IP trong hầm đổi) → đếm ngược cho IP nguội, giống
-  // hệt đường app tự đổi IP. KHÔNG tự chạy lại profile: người dùng tự tắt/bật thì họ đang chủ
-  // động điều khiển, tự bấm ▶ khi hết giờ.
+  // ── VPN vừa LÊN (bật lại, hoặc nối lại nên IP trong hầm đổi) ──
   _vpnRunLock = false;
   _vpnLockReason = 'cycling';
   _vpnCooldownUntil = Date.now() + VPN_COOLDOWN_MS;
@@ -807,6 +995,19 @@ async function watchVpnTunnel() {
   $('crawlStatusMsg').textContent = m;
   for (const id of Object.keys(profileLogs)) appendLog(id, m);
   if (prev === 'down') toast('HMA đã bật lại — chờ 60s rồi mới chạy được.', 'ok');
+
+  // App đang tự đổi IP thì CHÍNH NÓ lo việc bật lại (cycleIpAndRestart) — đứng ngoài để không có
+  // hai đường cùng bật một nhóm.
+  if (_vpnCycling) { _vpnDownGroup = []; return; }
+
+  // Nhóm bị app dừng vì VPN tắt → hẹn bật lại sau đúng 59 giây chờ IP nguội. `fireGroupRetry` tự
+  // kiểm `vpnRunLocked()` nên nếu VPN lại tụt trong lúc chờ thì nó dừng lại chứ không bật bừa.
+  if (_vpnDownGroup.length) {
+    const group = _vpnDownGroup;
+    _vpnDownGroup = [];
+    for (const id of group) appendLog(id, `Sẽ tự chạy lại sau khi hết ${Math.round(VPN_COOLDOWN_MS / 1000)}s chờ IP nguội.`);
+    scheduleGroupRetry(group, VPN_COOLDOWN_MS);
+  }
 }
 
 // MỘT bộ đếm duy nhất lo cả 2 việc: vẽ đếm ngược trên nút (mỗi giây) và canh đường hầm (2 giây).
@@ -948,13 +1149,14 @@ function openSettingsModal(ids) {
   // đang mở, KHÔNG phải store chung. Trước đây để chung nên mở ⚙ ở profile nào cũng thấy tick
   // sẵn → tưởng app tự bật hết.
   $('cfgChromiumProfile').checked = !!s.chromiumProfile;
-  // Số luồng đếm đồng thời + tự đổi IP là cài đặt CHUNG (global store), không theo profile.
-  // ⚠ Cả hai đều ghi rõ "(toàn app)" ngay trên tiêu đề mục — bài học QĐ-28: đặt cài đặt toàn app
-  // vào modal mở-từ-một-profile mà không nói rõ thì người dùng hiểu là của riêng profile đó.
-  api.storeGet(['count_concurrency', 'vpn_auto_cycle', 'show_count_tab']).then(r => {
+  // Số luồng đếm đồng thời là cài đặt CHUNG (global store), không theo profile.
+  // ⚠ Ghi rõ "(toàn app)" ngay trên tiêu đề mục — bài học QĐ-28: đặt cài đặt toàn app vào modal
+  // mở-từ-một-profile mà không nói rõ thì người dùng hiểu là của riêng profile đó.
+  api.storeGet(['count_concurrency', 'show_count_tab', 'vpn_auto_cycle', 'count_mode']).then(r => {
     $('cfgCountConcurrency').value = (r && r.count_concurrency) || 2;
     $('cfgShowCountTab').checked = !!(r && r.show_count_tab);
     $('cfgVpnAutoCycle').checked = !!(r && r.vpn_auto_cycle);
+    $('cfgCountMode').value = (r && r.count_mode) === 'patient' ? 'patient' : 'fast';
   });
   updateCfgModeUI();
   updateCfgHeadlessLabel();
@@ -995,12 +1197,14 @@ async function saveCrawlSettings() {
   for (const id of crawlSettingsTargetIds) {
     profileSettings[id] = Object.assign({}, getSettings(id), s);
   }
-  // Lưu cài đặt CHUNG toàn app: số luồng đếm đồng thời (1–10) + tự đổi IP khi TikTok cắt feed.
+  // Lưu cài đặt CHUNG toàn app: số luồng đếm đồng thời (1–10) + tự đổi IP khi bị cắt feed.
   const cc = Math.max(1, Math.min(10, parseInt($('cfgCountConcurrency').value, 10) || 2));
   _vpnAutoCycle = $('cfgVpnAutoCycle').checked;
   await api.storeSet({
     count_concurrency: cc,
     vpn_auto_cycle: _vpnAutoCycle,
+    // Chế độ đếm số video — RIÊNG TỪNG MÁY, áp ngay cho sound kế tiếp.
+    count_mode: $('cfgCountMode').value === 'patient' ? 'patient' : 'fast',
     // Hiện cửa sổ tab đếm — chỉ để chẩn đoán, áp cho lần mở trình duyệt đếm tiếp theo.
     show_count_tab: $('cfgShowCountTab').checked,
   });
@@ -1535,7 +1739,15 @@ function initUpdater() {
 // SỰ KIỆN CRAWL (data + status)
 // ══════════════════════════════════════════
 function initCrawlEvents() {
-  api.onCrawlData((d) => addResultRow(d));
+  api.onCrawlData((d) => {
+    addResultRow(d);
+    // Thu được sound HỢP LỆ = feed của profile đó đang chạy tốt → xoá chuỗi "bị cắt liên tiếp" để
+    // lần cắt sau lại bắt đầu nghỉ từ 5 phút, không nhảy thẳng lên 30 phút.
+    // Dùng crawl-data (sound đã qua bộ lọc) thay vì status 'running': status 'running' còn phát
+    // trong cả lúc thoát kẹt/backoff nên không chứng minh được feed đã hồi.
+    const st = d && d.profileId && _starve[d.profileId];
+    if (st && !st.tick) delete _starve[d.profileId];
+  });
   api.onCrawlStatus((s) => {
     if (!s.profileId && s.status === 'sheet-rows') {
       setSheetRowsStatus(s.sheetRows);
@@ -1553,9 +1765,9 @@ function initCrawlEvents() {
       // 'error' ở đây sẽ làm hàng đổi về nút "▶ Chạy" dù profile chưa dừng.
       updateRowStatus(s.profileId, 'running', s.msg);
       appendLog(s.profileId, s.msg);
-      toast(`[${nameOf(s.profileId)}] TikTok cắt feed`
-        + (_vpnAutoCycle ? ' — đang đổi IP rồi chạy lại...' : ' — xem log 📄'), 'err');
-      if (_vpnAutoCycle) handleFeedStarved(s.profileId);
+      // DỪNG LUÔN profile đó (người dùng chốt 2026-08-06, thay cho việc tự đổi IP — xem
+      // handleFeedStarved). Không còn công tắc nào: cắt feed là dừng, khỏi hỏi.
+      handleFeedStarved(s.profileId);
     } else if (s.profileId && s.status === 'verify') {
       // Kết quả "🔑 Kiểm tra đăng nhập" — KHÔNG phải trạng thái của luồng crawl.
       // TUYỆT ĐỐI không gọi setRowRunning ở đây: kiểm tra phiên không làm profile chạy.
@@ -1599,8 +1811,8 @@ async function init() {
   } catch {}
 
   await loadSettingsStore();
-  // Công tắc tự đổi IP là cài đặt toàn app — phải nạp NGAY lúc khởi động, không chờ tới lúc mở
-  // ⚙: sự kiện 'feed-starved' có thể tới trước khi người dùng mở modal lần nào.
+  // Công tắc tự đổi IP là cài đặt toàn app — phải nạp NGAY lúc khởi động, không chờ tới lúc mở ⚙:
+  // sự kiện 'feed-starved' có thể tới trước khi người dùng mở modal lần nào.
   try {
     const g = await api.storeGet(['vpn_auto_cycle']);
     _vpnAutoCycle = !!(g && g.vpn_auto_cycle);
@@ -1608,8 +1820,7 @@ async function init() {
   await loadProfiles();
   renderProfileTable();
 
-  // Canh HMA do NGƯỜI DÙNG tự tắt/bật. Chạy KHÔNG phụ thuộc công tắc "Tự đổi IP": công tắc đó chỉ
-  // quyết định app có TỰ đổi IP hay không, còn việc này là phản ánh đúng trạng thái VPN lên nút
+  // Canh HMA do NGƯỜI DÙNG tự tắt/bật. Đây là phản ánh trạng thái VPN lên nút
   // bấm — người dùng chốt: *"kể cả app tự động hay là tôi thì đều phải là khi bật lại HMA thì các
   // nút chạy sẽ bị disable trong vòng 59 giây"*.
   // Máy không cài HMA thì `tunnelState()` luôn trả `up:false` → không có chuyển tiếp nào → không

@@ -46,7 +46,7 @@ sound TikTok. Mỗi profile = một tài khoản TikTok, chạy độc lập, c�
 | `history.cjs` | **Lịch sử theo ngày**: đếm sound thu được, ghi `config/history.json` (ghi trễ + atomic) |
 | `paths.cjs` | Đường dẫn dữ liệu (cạnh file .exe khi đóng gói) |
 | `updater.cjs` | Tải Firefox khi thiếu. **Tự cập nhật đang TẮT** — xem [QĐ-18](DECISIONS.md) |
-| `vpn-hma.cjs` | Điều khiển HMA VPN (tắt/bật lại lấy IP mới khi feed cạn) qua native messaging của chính HMA + `ipv6LeakRisk()` phát hiện rò rỉ IPv6 + `tunnelState()` đọc đường hầm HMA **miễn phí** (2.1ms, không spawn) để canh người dùng tự tắt/bật — [QĐ-32](DECISIONS.md) |
+| `vpn-hma.cjs` | Đọc trạng thái HMA VPN. ⛔ `cycle()` (tắt/bật lại lấy IP mới) còn trong file nhưng **KHÔNG còn nơi nào gọi** — QĐ-32 đã bỏ. Qua native messaging của chính HMA + `ipv6LeakRisk()` phát hiện rò rỉ IPv6 + `tunnelState()` đọc đường hầm HMA **miễn phí** (2.1ms, không spawn) để canh người dùng tự tắt/bật — [QĐ-32](DECISIONS.md) |
 
 ### Một vòng quét dùng chung cho mọi chế độ
 
@@ -69,11 +69,12 @@ Không nằm trong bản đóng gói. Chạy: `pnpm test`.
 | File | Kiểm gì |
 |---|---|
 | `crawl-modes.test.js` | 25 kịch bản — mock Playwright + `browser.cjs` để chạy engine thật không cần TikTok: tiền tố log từng chế độ, thoát kẹt (trùng sound / không đọc được sound), chế độ khách, `recycle` bật/tắt đúng chế độ, canh IP (lệch → tạm dừng, về đúng vùng → tự chạy tiếp), **feed cạn** (QĐ-31), và **thử lại khi đếm số video thất bại** (QĐ-07 bổ sung: lượt 2 đọc được bằng API → vào dữ liệu với số đúng; lượt 2 đọc được bằng giao diện `"4.5K"` → 4500; cả 2 lượt trượt → tab chờ + log `statusCode` lạ; **không** thử lại khi sound đã xóa / khi lượt 1 đã đọc được; `TTC_COUNT_ATTEMPTS=1` tắt được).<br>Bằng chứng "có/không thử lại" là **số lần mở trang `/music/`**, không phải đếm log.<br>⚠ **13 kịch bản GỐC chỉ IN log, KHÔNG có khẳng định nào** — pass chỉ nghĩa "không ném lỗi". Chỉ 36 khẳng định của phần feed cạn + thử lại là kiểm thật (trượt → exit ≠ 0). |
-| `vpn-run-lock.test.js` | **54 khẳng định** cho việc **khóa nút "▶ Chạy" khi đổi IP** (QĐ-32 bổ sung 1+2). Ba nhãn phân biệt: `⏳ đổi IP` (app đang tắt/bật VPN) · `⛔ VPN tắt` (VPN đang tắt) · `⏳ 59s…` (chờ IP nguội) → hết chờ trả về `▶ Chạy` ngay. Nút **"■ Dừng" luôn bấm được**; mốc đã qua tự hết hạn (không kẹt vĩnh viễn); `updateRunSelectedBtnState()` **tôn trọng** khóa chứ không ghi đè.<br>Phần **canh người dùng tự tắt/bật HMA**: lần poll đầu chỉ lấy mốc (máy không cài HMA / đang tắt HMA **không bao giờ** bị khóa), tắt→bật, bật→tắt, chu trình đầy đủ, **nối lại mà adapter còn nguyên** (so IP trong hầm), poll lại khi không đổi gì **không đặt lại đồng hồ**, app đang tự đổi IP thì bộ canh đứng ngoài, cảnh báo đúng **số** profile đang chạy bằng IP thật.<br>Cộng khẳng định trên **mã nguồn**: `toggleProfile`/`runSelected` tự chặn, mở khóa nằm trong `finally`, hủy tự-chạy-lại chỉ có **một bản** (trong `stopProfileById`), bộ canh dùng kênh **rẻ** (`vpnTunnel`) không dùng `vpnStatus`, và chạy **bất kể** công tắc "Tự đổi IP".<br>⚠ Test **trích đúng mã nguồn** 6 hàm từ `renderer.js` rồi chạy trong Chromium với DOM thật — **không chép logic sang test**, vì bản chép sẽ lệch âm thầm và test pass trong khi app hỏng. Hàm trích **phải kéo theo chữ `async`**, thiếu là SyntaxError báo lỗi lệch hướng hoàn toàn |
+| `vpn-run-lock.test.js` | **55 khẳng định** cho việc **khóa nút "▶ Chạy" khi đổi IP** (QĐ-32 bổ sung 1+2). Ba nhãn phân biệt: `⏳ đổi IP` (app đang tắt/bật VPN) · `⛔ VPN tắt` (VPN đang tắt) · `⏳ 59s…` (chờ IP nguội) → hết chờ trả về `▶ Chạy` ngay. Nút **"■ Dừng" luôn bấm được**; mốc đã qua tự hết hạn (không kẹt vĩnh viễn); `updateRunSelectedBtnState()` **tôn trọng** khóa chứ không ghi đè.<br>Phần **canh người dùng tự tắt/bật HMA**: lần poll đầu chỉ lấy mốc (máy không cài HMA / đang tắt HMA **không bao giờ** bị khóa), tắt→bật, bật→tắt, chu trình đầy đủ, **nối lại mà adapter còn nguyên** (so IP trong hầm), poll lại khi không đổi gì **không đặt lại đồng hồ**, cảnh báo đúng **số** profile đang chạy, và phân biệt **có/không có IPv6 công khai** (có → đang LỘ IP thật; không → chỉ lỗi mạng).<br>Cộng khẳng định trên **mã nguồn**: `toggleProfile`/`runSelected` tự chặn, mở khóa nằm trong `finally`, cắt feed **chỉ dừng đúng profile đó** và tuyệt đối không đụng vào VPN, bộ canh dùng kênh **rẻ** (`vpnTunnel`) không dùng `vpnStatus`, và bộ máy tự-chạy-lại đã **dọn sạch** khỏi mã nguồn.<br>⚠ Test **trích đúng mã nguồn** 6 hàm từ `renderer.js` rồi chạy trong Chromium với DOM thật — **không chép logic sang test**, vì bản chép sẽ lệch âm thầm và test pass trong khi app hỏng. Hàm trích **phải kéo theo chữ `async`**, thiếu là SyntaxError báo lỗi lệch hướng hoàn toàn |
 | `chromium-profile.test.js` | 58 khẳng định cho chế độ **profile Chromium riêng** (QĐ-27, QĐ-28): mặc định TẮT, mở đúng `<profile>/ChromiumProfile` + giới hạn cache, dọn `SingletonLock` kẹt, vân tay khớp chế độ thường, lần đầu bơm cookie sang (lần sau không bơm lại), nút 🦊 mở TAB MỚI chứ không chiếm tab feed đang quét, **trộn 2 chế độ trên cùng máy** (profile bật / profile tắt không ăn theo nhau), và **tab đếm theo chế độ hiển thị** — chạy ẩn thì dùng chung context (không bị đóng oan), chạy hiện thì tách sang trình duyệt ẩn riêng |
 | `sheet-rows-status.test.js` | 15 khẳng định cho ô **"Sheet: N dòng data"** (QĐ-29): luôn hiện dù dòng thông báo đang bị lỗi/câu dài chiếm, mà cũng không xoá mất câu đó; dựng lại đúng 2 câu đã gây lỗi thật; đối chiếu thẳng `renderer.js`/`index.html`/`styles.css` để bản sao logic không lệch âm thầm |
-| `sheets-pending.test.js` | **40 khẳng định** cho **tab chờ kiểm tay** (QĐ-33), mock `google-api.cjs`: ghi đúng 4 cột A:D và **không bao giờ ghi cột E "Tình trạng"**; ghi đúng tab chờ, **tuyệt đối không** ghi vào tab chính; không ghi trùng (link đã có trên Sheet / vừa ghi / **cùng ID khác slug ngôn ngữ**); **để trống tên tab = dùng tên mặc định** (không còn là tắt); **tab không tồn tại** → tự ngưng cả phiên ở *cả hai* đường phát hiện (đầu phiên và lúc ghi), **không gọi API nào nữa**, báo có tên tab + nói thẳng "link sẽ bị BỎ", sửa tên tab thì cho thử lại; lỗi ghi thường thì **giữ lô rồi ghi lại được**.<br>⚠ Dùng ID sound **19 chữ số thật** — ID ngắn làm `normalizeKey` lùi về so nguyên văn URL và khẳng định lọc trùng thành vô nghĩa. Mock trả **nguyên văn** `HTTP 400 "Unable to parse range"` như Google thật để còn kiểm được đường dịch lỗi của QĐ-26 |
+| `sheets-pending.test.js` | **52 khẳng định** cho **tab chờ kiểm tay** (QĐ-33), mock `google-api.cjs`: ghi đúng 4 cột A:D và **không bao giờ ghi cột E "Tình trạng"**; ghi đúng tab chờ, **tuyệt đối không** ghi vào tab chính; không ghi trùng (link đã có trên Sheet / vừa ghi / **cùng ID khác slug ngôn ngữ**); **để trống tên tab = dùng tên mặc định** (không còn là tắt); **tab không tồn tại** → tự ngưng cả phiên ở *cả hai* đường phát hiện (đầu phiên và lúc ghi), **không gọi API nào nữa**, báo có tên tab + nói thẳng "link sẽ bị BỎ", sửa tên tab thì cho thử lại; lỗi ghi thường thì **giữ lô rồi ghi lại được**; và **chống trùng LIÊN MÁY** — đọc **tăng dần** từ mốc (kiểm thấy đúng `!B4:B`) + **đọc lại ngay trước khi ghi** rồi tự bỏ dòng máy khác vừa ghi, mà đọc lại **lỗi mạng thì vẫn ghi** (không nghẽn dữ liệu).<br>⚠ Dùng ID sound **19 chữ số thật** — ID ngắn làm `normalizeKey` lùi về so nguyên văn URL và khẳng định lọc trùng thành vô nghĩa. Mock trả **nguyên văn** `HTTP 400 "Unable to parse range"` như Google thật để còn kiểm được đường dịch lỗi của QĐ-26 |
 | `vpn-hma.test.js` | 74 khẳng định điều khiển HMA VPN (QĐ-32), mock toàn bộ `child_process`: **mặc định nối lại đúng server cũ, không xoay city** (`rotate:true` là đường dự phòng, vẫn kiểm); **tuyệt đối không dùng `ConnectToOptimal`** (đo thật trả về Việt Nam bất kể profile khai nước nào); từ chối đổi IP khi quốc gia HMA đang nối không khớp profile hoặc khi HMA đang tắt sẵn; cảnh báo rõ "VPN có thể đang TẮT" khi bật lại thất bại; `status()` chỉ đọc, không đụng VPN; và **`ipv6LeakRisk()`** — nhận đúng `2000::/3` là rò rỉ, **không** tính Tailscale `fd7a:`/link-local `fe80`, không tính IPv6 trên adapter VPN, nhận cả `family` dạng số `6`.<br>Và **`tunnelState()`** (canh người dùng tự tắt/bật HMA): nhận đúng adapter HMA + IP trong hầm; **Tailscale TUYỆT ĐỐI không được tính** (đó là đường vào VPS — tính nhầm là khóa oan nút Chạy trên cả 4 máy ảo); dự phòng nhận adapter `TAP`/`OpenVPN` cho máy ảo bản HMA cũ; adapter HMA **thắng tất định** không phụ thuộc thứ tự Windows liệt kê; adapter còn nhưng mất IPv4 → coi là tắt; `os` ném lỗi → trả `unknown` chứ không ném ra ngoài (hàm bị gọi 2 giây/lần) |
+| `starve-restart.test.js` | **37 khẳng định** cho **cắt feed → dừng profile đó rồi TỰ BẬT LẠI** (QĐ-32 đảo lại). Người dùng **treo máy qua đêm** nên đường này hỏng là mất trọn sản lượng mà **không ai thấy** — đúng loại lỗi im lặng cần test nhất.<br>Phủ: dừng **đúng** profile bị cắt (profile khác không bị đụng), đặt hẹn + đếm ngược **hiện ra badge**, hết giờ **bật lại thật**, nghỉ **lâu dần 5→15→30** và **giữ mức cuối**, thu được sound hợp lệ thì **xoá chuỗi**, bấm ■ Dừng lúc chờ thì **huỷ hẹn** (bẫy: lúc đó profile **không** nằm trong `runningSet`), bấm ▶ Chạy thì chạy ngay mà **không bật 2 lần**, VPN đang tắt thì **không bật** rồi kiểm lại mỗi 5 giây, nhiều profile có hẹn **riêng**.<br>⚠ Thang thời gian trong test phải **lớn hơn nhịp bộ đếm (1 giây)** — lần đầu dùng 300/600/900ms thì 12 khẳng định trượt vì **test sai**, không phải code sai |
 | `ui-responsive.test.js` | Đo layout ở 5 khổ cửa sổ bằng Chromium, phát hiện nội dung bị cắt, chụp ảnh vào `.ui-shots/` |
 
 ## 5 chế độ crawl
@@ -195,7 +196,8 @@ sound với 2 kiểu slug khác nhau không còn bị tính là 2 sound.
 |---|---|
 | Tải lại feed định kỳ | Mỗi N lần cuộn (chỉnh được, mặc định 80) — xả bộ nhớ tích tụ |
 | Recycle tab đếm | Mỗi 200 sound — Playwright chỉ giải phóng bộ nhớ khi đóng tab |
-| Trần hàng đợi | Tối đa 500 sound chờ; đầy thì tạm ngừng cuộn |
+| **Nhịp cuộn tự giãn** | Hàng đợi càng đầy thì nghỉ giữa 2 lần cuộn càng lâu (dưới 50% → bình thường · 75% → ×2.5 · 100% → ×4). Vòng quét **tự khớp tốc độ** với bước đếm nên hiếm khi tới ngưỡng đầy — thay cho hành vi cũ "chạy hết tốc rồi ĐỨNG HẲN" vốn là nguyên nhân của hiện tượng *"cứ dừng mãi ở 1 video"* ([QĐ-34](DECISIONS.md)) |
+| Trần hàng đợi | Tối đa 20 sound chờ; đầy hẳn thì mới tạm ngừng cuộn (chốt chống hàng đợi phình vô hạn) |
 | Điều tiết đếm toàn cục | Giới hạn số request `/music/` đồng thời (mặc định 2) + giãn nhịp |
 | Nghỉ khi bị chặn | 3 lần lỗi liên tiếp → nghỉ 30s → 2 phút → 5 phút (có nhiễu ngẫu nhiên) |
 | **Trần thời gian đọc giao diện** | 2.5s (lượt 1) / 5s (lượt 2) tính bằng **đồng hồ**, không đếm vòng — giữ slot đếm quá lâu làm hàng đợi đầy → vòng quét đứng → **feed ngừng cuộn** ([QĐ-34](DECISIONS.md)) |
@@ -204,27 +206,41 @@ sound với 2 kiểu slug khác nhau không còn bị tính là 2 sound.
 
 ## Phát hiện sự cố tự động
 
-- **Feed kẹt**: đọc trúng cùng 1 sound 20 lần liên tiếp → chẩn đoán trang rồi thoát kẹt theo
-  3 cấp (bấm nút "video kế tiếp" của TikTok → click lấy con trỏ + phím xuống → tải lại).
+- **Feed kẹt** — nhận biết theo **hai đường, đủ một là đủ**:
+  · đọc trúng cùng 1 sound **20 lần** liên tiếp, hoặc
+  · ở trên cùng 1 sound quá **90 giây** (và đã đọc ít nhất 5 lần).
+  Đường thời gian là **bắt buộc** kể từ khi nhịp cuộn tự giãn (tới ×4): 20 lần đọc có thể mất tới
+  5 phút mới tới ngưỡng, quá chậm để can thiệp. Đòi tối thiểu 5 lần đọc để không báo oan khi người
+  dùng đặt delay rất lớn. ⚠ Cố ý đo *"cùng 1 sound bao lâu"*, **không** đo *"bao lâu không có sound
+  mới"* — feed khoẻ vẫn có thể hàng phút không ra sound mới do lọc trùng 173.000 link.
+  Rồi chẩn đoán trang và thoát kẹt theo **3 cấp**: bấm nút "video kế tiếp" của TikTok → cuộn mạnh
+  3 nhịp con lăn → tải lại trang. Xoay vòng 1→2→3→1. `clearStuck()` reset **cả đồng hồ**, nếu không
+  thì lần đọc kế tiếp báo kẹt ngay và cách vừa thử không có cơ hội tỏ hiệu quả.
 - **Feed cạn** (TikTok không cấp thêm video, [QĐ-31](DECISIONS.md)): kẹt + trang chỉ còn ≤2
   video + không có nút "xuống" dùng được + đã thử trọn vòng 3 cấp + **không** phải chế độ khách
   → chu kỳ **cắt pha Quét sang pha Xem**; chế độ khác **tạm dừng 5/15/30 phút** rồi thử lại.
   Phải đủ cả 5 điều kiện — báo oan làm profile khoẻ tự tạm dừng. Kết luận mất 2–3 phút, thay
   cho việc quay vòng thoát kẹt vô hạn (đo thật: ~2 giờ ra 0 sound).
-- **Tự đổi IP khi feed cạn** ([QĐ-32](DECISIONS.md), tùy chọn — mặc định TẮT): phát hiện feed
-  cạn phát status riêng `feed-starved` → nếu công tắc "Tự đổi IP" bật, renderer dừng profile →
-  **tắt/bật lại HMA VPN đúng server đang dùng** (qua native messaging của chính HMA,
-  `src/vpn-hma.cjs`) → chạy lại đúng nhóm vừa dừng. **Không cần đổi city** — HMA cấp IP từ pool
-  mỗi lần kết nối (đo thật: cùng gateway London cho `18.171.54.19` → `18.132.40.68`).
-  Giới hạn 10 phút/lần, 6 lần/ngày.
-  **Nút "▶ Chạy" bị KHÓA suốt cả hai pha nguy hiểm** — pha đang tắt/bật lại VPN (nhãn `⏳ đổi IP`;
-  bật profile lúc này là chạy bằng IP THẬT) và pha chờ IP nguội (nhãn `⏳ 59s` đếm ngược trên chính
-  nút đó). Hết chờ thì mở khóa ngay. Nút "■ Dừng" luôn bấm được, và bấm nó sẽ **hủy** việc tự chạy
-  lại. Chỉ hiện đếm ngược ở dòng trạng thái là KHÔNG đủ — đã gặp thật, xem QĐ-32.
-  **Dừng 1 hay dừng hết do `ipv6LeakRisk()` quyết định**: máy có IPv6 công khai thì lúc VPN tắt
-  IPv6 đi thẳng ra IP thật (đo: lọt trong 241ms, `systemKillSwitchActive` của HMA KHÔNG chặn) →
-  phải dừng hết; máy đã tắt IPv6 → chỉ dừng đúng profile bị cạn. Kiểm ở **cả** renderer (để
-  quyết định) và `main.js` (chốt lại, không tin renderer).
+- **TikTok cắt feed → DỪNG profile đó rồi TỰ BẬT LẠI** ([QĐ-32](DECISIONS.md)): feed cạn phát status
+  riêng `feed-starved` → renderer **dừng đúng profile bị cắt**, hẹn **tự bật lại sau 5 → 15 → 30
+  phút** (tăng dần theo số lần cắt liên tiếp, giữ mức 30; thu được 1 sound hợp lệ thì chuỗi về 0).
+  Đếm ngược **hiện ra badge** từng giây — người dùng **treo máy** nên không thể bấm tay.
+  Bấm ■ Dừng lúc đang chờ = **huỷ hẹn**; bấm ▶ Chạy = chạy ngay (vẫn giữ chuỗi); VPN đang tắt lúc
+  tới giờ thì **không bật**, kiểm lại mỗi 5 giây. **Không có công tắc nào**, áp cho **mọi chế độ** —
+  việc dừng này **đè lên** backoff cũ của backend và cả đường "cắt sang pha Xem" của chế độ chu kỳ.
+  ⛔ Tính năng **tự tắt/bật lại HMA VPN rồi tự chạy lại** đã **BỎ** (2026-08-06): IP là của **cả
+  máy**, nên đổi IP giữa lúc các profile khác đang quét làm chúng chuyển từ IP A sang IP B **giữa
+  phiên** — đúng khuôn "tài khoản bị chiếm" mà QĐ-15 gọi là nguyên nhân số 1 khiến TikTok hủy phiên.
+  Còn dừng HẾT profile trước khi đổi thì mỗi lần **một** profile bị cắt là **cả dàn phải nghỉ**.
+  `src/vpn-hma.cjs` vẫn còn `cycle()` + test (kiến thức đo thật) nhưng **không còn nơi nào gọi**.
+- **Canh HMA do NGƯỜI DÙNG tự tắt/bật** ([QĐ-32](DECISIONS.md)) — tính năng KHÁC, vẫn giữ: đọc
+  `tunnelState()` **2 giây/lần** (miễn phí — chỉ `os.networkInterfaces()`, đo thật 2.1ms/lần; cố ý
+  không dùng `status()` vì kênh đó spawn `VpnNM.exe` + chờ 600ms). VPN tắt → nút Chạy thành
+  `⛔ VPN tắt` và cảnh báo rõ số profile đang chạy (kèm **có/không có IPv6 công khai** — có thì
+  chúng đang LỘ IP thật, không thì chỉ lỗi mạng). VPN lên → khóa nút kèm đếm ngược `⏳ 59s`.
+  Khóa **cả** nút từng hàng và nút "Chạy ô đã chọn"; nút "■ Dừng" luôn bấm được.
+  App **không bao giờ tự đụng vào VPN** — chỉ phản ánh trạng thái lên nút.
+  ⚠️ Chỉ hiện đếm ngược ở dòng trạng thái là KHÔNG đủ — đã gặp thật, xem QĐ-32.
 - **Chế độ khách**: sau khi feed hiện, kiểm tra trang có nút "Log in" không. Có → dừng ngay
   với thông báo *"cần đăng nhập lại bằng 🦊"* thay vì cào vô ích hàng giờ.
 - **Thống kê cuộn**: mỗi 100 lần cuộn ghi `Cuộn 100 lần, gặp N sound khác nhau, M sound mới`
@@ -251,7 +267,7 @@ sound với 2 kiểu slug khác nhau không còn bị tính là 2 sound.
 | Cơ chế | Phạm vi | Ghi chú |
 |---|---|---|
 | Ghi Google Sheet | Liên máy — an toàn | `values:append` được Google xử lý tuần tự (QĐ-08) |
-| Chống trùng dữ liệu | Liên máy — gần đúng | Đọc **phần mới ở cuối** mỗi phút + đọc lại toàn bộ mỗi 10 phút; vẫn trùng nếu 2 máy trúng cùng sound trong cùng 1 phút (QĐ-09) |
+| Chống trùng dữ liệu | Liên máy — gần đúng | Đọc **phần mới ở cuối** mỗi phút + đọc lại toàn bộ mỗi 10 phút + đọc lại **ngay trước mỗi lần ghi**. Áp cho **cả tab chính và tab chờ** (tab chờ được bổ sung 2026-08-06 — trước đó chỉ nạp 1 lần đầu phiên nên sinh dòng trùng) (QĐ-09) |
 | Vân tay thiết bị | Theo profile | Tất định từ tên thư mục → chép sang máy khác vẫn cùng "thiết bị" (QĐ-05) |
 | Canh IP đúng quốc gia | Theo máy | Tạm dừng khi VPN tụt, tự chạy tiếp khi về vùng (QĐ-17) |
 | Số luồng đếm video | **Theo từng máy** | N máy = N × số luồng tới cùng IP nếu các máy chia sẻ exit IP |

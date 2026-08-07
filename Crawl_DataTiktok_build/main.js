@@ -285,6 +285,9 @@ ipcMain.handle('profile-start', async (_e, params) => {
 
   // Áp số luồng đếm đồng thời toàn app (cài đặt chung, mặc định 2).
   crawler.setCountConcurrency(store.get('count_concurrency') || 2);
+  // Chế độ đếm số video — RIÊNG TỪNG MÁY (xem COUNT_MODES trong crawler.cjs). Mặc định 'fast'
+  // vì chọn sai ở máy mạnh chỉ mất chút cơ hội, còn chọn sai ở máy yếu là ĐỨNG FEED.
+  crawler.setCountMode(store.get('count_mode') || 'fast');
   // Hiện tab đếm để chẩn đoán (mặc định TẮT — xem setShowCountTab trong browser.cjs).
   browser.setShowCountTab(!!store.get('show_count_tab'));
 
@@ -517,9 +520,16 @@ ipcMain.handle('vpn-tunnel', () => {
   catch (e) { return { up: false, address: null, iface: null, unknown: true, msg: e.message }; }
 });
 
-// Giới hạn nhịp đổi IP. Đổi quá dày cũng là tín hiệu bất thường với TikTok, và mỗi lượt đã
-// tốn thời gian dừng+bật lại cả dàn profile — không có lý do gì để nó chạy liên tục.
-const VPN_MIN_GAP_MS = 10 * 60 * 1000;
+// ── ĐỔI IP: tắt/bật lại HMA VPN (QĐ-32) ──
+// Lịch sử ngắn để không ai đi lại đường cũ: tính năng này từng bị BỎ trong ngày 2026-08-06 vì bản
+// đầu cho phép "chỉ dừng 1 profile rồi đổi IP" — người dùng chỉ ra đúng lỗ hổng: 4 profile kia đang
+// quét trên IP A bị chuyển sang IP B GIỮA PHIÊN, đúng khuôn "tài khoản bị chiếm" (QĐ-15). Sau đó họ
+// chốt giữ lại tính năng nhưng **LUÔN DỪNG HẾT profile** trước khi đổi. Cấu hình đó an toàn, nên
+// nhánh "dừng 1 profile" bị xoá hẳn — kể cả khi máy không có IPv6 công khai.
+//
+// Nhờ vậy chốt an toàn ở backend giờ RẤT ĐƠN GIẢN: còn profile nào đang chạy là TỪ CHỐI, không cần
+// hỏi `ipv6LeakRisk()` nữa (bản cũ dùng nó để quyết định có cho phép dừng 1 hay không).
+const VPN_MIN_GAP_MS = 10 * 60 * 1000;   // đổi quá dày cũng là tín hiệu bất thường với TikTok
 const VPN_MAX_PER_DAY = 6;
 let _vpnLastAt = 0;
 let _vpnDayKey = '';
@@ -529,25 +539,14 @@ ipcMain.handle('vpn-cycle', async (_e, arg) => {
   const profileId = arg && arg.profileId;
 
   // ⛔ CHỐT AN TOÀN Ở TẦNG BACKEND, KHÔNG TIN RENDERER.
-  // Renderer có nhiệm vụ dừng profile trước khi gọi, nhưng nếu nó lỗi/bị reload giữa dòng thì
-  // lệnh này KHÔNG được phép chạy sai. Lớp phòng thủ thứ hai, cùng tinh thần với `withDeadline`
-  // ở profile-start (QĐ-19).
-  //
-  // ĐIỀU KIỆN phụ thuộc RÒ RỈ IPv6 (đo thật 2026-08-06 — xem ipv6LeakRisk):
-  //   • Máy CÓ IPv6 công khai → lúc VPN tắt, IPv6 đi thẳng ra IP thật (đo: lọt trong 241ms).
-  //     Profile nào còn chạy là lộ nước thật → BẮT BUỘC dừng hết.
-  //   • Máy KHÔNG có IPv6 công khai → lúc VPN tắt mọi request chỉ bị lỗi mạng, không lộ gì
-  //     → cho phép giữ các profile khác chạy (đúng cái người dùng muốn: chỉ dừng profile bị cắt).
-  const risk = vpn.ipv6LeakRisk();
-  if (risk.risky && crawler.isAnyRunning()) {
-    const addr = (risk.addresses[0] && risk.addresses[0].address) || '?';
-    const iface = (risk.addresses[0] && risk.addresses[0].iface) || '?';
+  // Renderer có nhiệm vụ dừng hết profile trước khi gọi, nhưng nếu nó lỗi/bị reload giữa dòng thì
+  // lệnh này KHÔNG được phép chạy sai. Lớp phòng thủ thứ hai, cùng tinh thần `withDeadline` ở
+  // profile-start (QĐ-19). Lúc VPN tắt, máy dùng IP THẬT — profile nào còn chạy là mất phiên.
+  if (crawler.isAnyRunning()) {
     return {
       ok: false,
-      ipv6Risk: risk,
-      msg: `Không tắt VPN khi còn profile đang chạy: máy này CÓ IPv6 công khai (${iface}: ${addr})`
-        + ' nên lúc VPN tắt IPv6 sẽ đi thẳng ra IP thật và làm mất phiên. Hãy dừng hết profile'
-        + ' trước, hoặc tắt IPv6 trên máy (xem TROUBLESHOOTING mục 17) để chỉ cần dừng 1 profile.',
+      msg: 'Không tắt VPN khi còn profile đang chạy — lúc VPN tắt máy dùng IP THẬT nên profile nào'
+        + ' còn chạy sẽ mất phiên. Phải dừng HẾT profile trước.',
     };
   }
 
@@ -691,6 +690,11 @@ ipcMain.handle('store-set', (_e, data) => {
   if (Object.prototype.hasOwnProperty.call(data, 'show_count_tab')) {
     browser.setShowCountTab(!!data.show_count_tab);
   }
+  // Đổi chế độ đếm → áp dụng NGAY cho sound kế tiếp (mỗi sound tự chốt thông số lúc bắt đầu, nên
+  // sound đang chạy giữa dòng không bị đổi luật).
+  if (Object.prototype.hasOwnProperty.call(data, 'count_mode')) {
+    crawler.setCountMode(data.count_mode || 'fast');
+  }
 });
 
 // ─────────────────────────────────────────
@@ -814,9 +818,24 @@ app.whenReady().then(() => {
       }
     } catch (e) {
       console.warn('[reseed] Đọc lại Sheet lỗi (thử lại vòng sau):', e.message);
-    } finally {
-      _reseedBusy = false;
     }
+    // ĐỌC LẠI CẢ TAB CHỜ theo cùng nhịp (2026-08-06). Trước đây tab chờ chỉ nạp danh sách ĐÚNG
+    // MỘT LẦN lúc bắt đầu phiên, nên chạy 5 máy thì máy này không bao giờ thấy link máy kia ghi
+    // sau đó → mỗi máy ghi thêm một dòng cho cùng một link (người dùng gửi ảnh tab chờ đầy dòng
+    // trùng). Tab chính không bị vì nó có đúng vòng đọc lại này.
+    // Lỗi ở đây KHÔNG được làm hỏng việc đọc tab chính → try/catch riêng.
+    try {
+      if (sheets.isPendingEnabled()) {
+        const p = await sheets.refreshPendingKnown({ full: needFull });
+        if (p.ok && p.added > 0) {
+          console.log(`[pending] Đọc ${p.full ? 'TOÀN BỘ' : 'phần mới'} tab chờ: +${p.added} link`
+            + ` (tổng đã biết: ${p.count}).`);
+        }
+      }
+    } catch (e) {
+      console.warn('[pending] Đọc lại tab chờ lỗi (thử lại vòng sau):', e.message);
+    }
+    _reseedBusy = false;
   }, 60000);
 
   // ── BADGE "SỐ DÒNG TRÊN SHEET" (2026-08-03, người dùng yêu cầu) ──

@@ -40,8 +40,31 @@ Chọn ở cột **Chế độ** hoặc trong ⚙️ Cài đặt.
 | Không tải ảnh/video | Giảm RAM/CPU đáng kể. Nên bật khi chạy dài |
 | Tải lại feed sau mỗi N lần cuộn | Xả bộ nhớ. Số nhỏ = an toàn hơn nhưng feed hay nhảy về đầu |
 | Số luồng đếm video đồng thời | **Cài đặt chung toàn app.** Khuyến nghị 2 — càng cao càng dễ bị TikTok chặn |
+| **Chế độ đếm** | **Riêng từng máy.** `Nhanh` (mặc định) cho máy ảo/máy yếu · `Kiên nhẫn` cho máy mạnh — xem mục dưới |
 | Dùng profile Chromium riêng cho tài khoản này | **Riêng từng profile.** Mặc định **tắt**. Bật khi profile đó bị **mất đăng nhập liên tục** — đổi lại tốn thêm ~150–250MB RAM (xem mục dưới) |
 | Thời lượng mỗi pha (chu kỳ) | Quét bao nhiêu giờ, xem bao nhiêu phút, nghỉ giữa 2 pha bao lâu |
+
+### Chọn "Chế độ đếm" nào cho máy nào?
+
+Cùng một file `.exe` chạy trên mọi máy, nhưng **máy mạnh và máy ảo cần đánh đổi ngược nhau**. Nên
+đây là cài đặt **riêng từng máy** (lưu ở máy đó, không đồng bộ).
+
+| | **Nhanh** (mặc định) | **Kiên nhẫn** (như bản 0.1.63) |
+|---|---|---|
+| Chờ API `api/music/detail/` | 8 giây | 20 giây |
+| Đọc giao diện (dự phòng) | trần cứng 2.5s → 5s | tới 30 giây |
+| Thử lại khi TikTok trả trang lỗi | **có**, 1 lượt | không |
+| Tự bỏ lượt thử lại khi hàng đợi tắc | **có** | — |
+
+**Máy chính (mạnh) → chọn Kiên nhẫn.** API về trong ~1s và đọc giao diện xong trong ~3s, nên kiên
+nhẫn gần như **không mất gì**, mà có thêm cơ hội đọc được link chậm.
+
+⚠️ **Máy ảo yếu → PHẢI để Nhanh.** Đo thật trên VPS lag: chế độ Kiên nhẫn làm **một** sound lỗi
+chiếm slot đếm **của cả app** tới **~28 giây** → thông lượng tụt còn ~4 sound/phút trong khi vòng
+quét cần ~20 → hàng đợi đầy vĩnh viễn → **vòng quét đứng, feed ngừng cuộn** (đúng hiện tượng
+*"cứ dừng mãi ở 1 video"*).
+
+Đổi xong **áp dụng ngay** cho sound kế tiếp, không cần chạy lại profile.
 
 ### Khi nào bật "Dùng profile Chromium riêng"?
 
@@ -96,11 +119,29 @@ giây/profile, nếu profile nào chậm thì tự bật tiếp, không đứng 
 `▶ Đang bật 2/5...` và tạm khóa cho tới khi xong lượt. Lý do: bật cùng lúc làm mấy profile
 tranh nhau CPU → có profile bị đứng, không quét được (lỗi cũ hay gặp trên VPS).
 
-Số sound sẽ mất khi dừng cứng = **cột Quét − cột Đã check**. Khoảng cách này giờ được giữ
-**nhỏ** (tối đa ~20 sound/profile): khi hàng đợi chờ đếm đầy, app **tạm dừng cuộn** và ghi rõ
-*"Tạm dừng cuộn — chờ đếm số video cho N sound đang xếp hàng..."* rồi cuộn tiếp — đây là bình
-thường, không phải treo. Muốn đếm nhanh hơn thì tăng **"Số luồng đếm video đồng thời"** trong
-⚙ (càng cao càng dễ bị TikTok chặn trang đếm — khuyến nghị giữ 2, tối đa 4–5).
+Số sound sẽ mất khi dừng cứng = **cột Quét − cột Đã check**. Khoảng cách này được giữ **nhỏ**
+(tối đa ~20 sound/profile) bằng cách **tự giãn nhịp cuộn**: hàng đợi chờ đếm càng đầy thì app cuộn
+càng chậm, nên vòng quét **tự khớp tốc độ** với bước đếm.
+
+| Hàng đợi | Delay thực (nếu bạn đặt 2–4s) |
+|---|---|
+| Dưới nửa | 2–4s (bình thường) |
+| 3/4 | 5–10s |
+| Đầy | 8–16s |
+
+Trước đây app chạy **hết tốc** rồi **dừng cứng** ở một video khi hàng đợi đầy — trông y như treo,
+đúng hiện tượng *"cứ dừng mãi ở 1 video"*. Giờ nó chậm dần thay vì đứng.
+
+Nếu vẫn thấy dòng *"Tạm dừng cuộn — chờ đếm số video cho 20 sound đang xếp hàng..."* thì bước đếm
+đang quá chậm cho máy đó → kiểm **Chế độ đếm** phải là **Nhanh** (xem mục trên).
+
+Muốn đếm nhanh hơn thì tăng **"Số luồng đếm video đồng thời"** trong ⚙ — càng cao càng dễ bị TikTok
+chặn trang đếm, khuyến nghị giữ 2, tối đa 4–5.
+
+**Feed đứng thật thì app tự gỡ.** Nhận biết bằng **hai** đường (đủ một là đủ): đọc trúng cùng 1 sound
+**20 lần**, hoặc ở trên cùng 1 sound quá **90 giây**. Rồi thử **3 cách** xoay vòng: bấm nút "video kế
+tiếp" của TikTok → cuộn mạnh 3 nhịp con lăn → tải lại trang. Cả 3 đều trượt mà trang chỉ còn 1–2
+video ⇒ **feed cạn** (xem mục dưới).
 
 ## Đọc bảng profile
 
@@ -124,20 +165,49 @@ thêm — nút mũi tên xuống trên trang bị làm mờ. App nhận ra và b
   Phiên đăng nhập vẫn TỐT — cuộn thêm chỉ làm TikTok siết nặng hơn.
 ```
 
-**Không cần bấm gì**, và **không phải đăng nhập lại** (app đã tự kiểm phiên trước khi kết luận —
-nên đừng mất công bấm 🦊). App tự xử:
+**Không phải đăng nhập lại** — app đã tự kiểm phiên trước khi kết luận, nên đừng mất công bấm 🦊.
 
-| Chế độ của profile đó | App làm gì |
+**App DỪNG đúng profile đó rồi TỰ BẬT LẠI** (từ 2026-08-06):
+
+```
+⛔ "tên profile" bị TikTok cắt feed (lần 1 liên tiếp) — DỪNG profile này,
+   sẽ TỰ BẬT LẠI sau 5p0s.
+```
+
+Badge trạng thái của hàng đó đếm ngược để bạn biết app **đang chờ có chủ đích**, không phải treo:
+
+```
+⏸ Bị cắt feed — tự bật lại sau 4p12s
+```
+
+**Nghỉ lâu dần theo số lần bị cắt LIÊN TIẾP: 5 → 15 → 30 phút** (giữ mức 30). Bị cắt lại ngay nghĩa
+là TikTok đang siết nặng — thử dày chỉ siết thêm. Thu được **1 sound hợp lệ** là chuỗi này về 0, lần
+cắt sau lại nghỉ từ 5 phút.
+
+| Việc bạn làm | App làm gì |
 |---|---|
-| **Quét ⇄ Xem** | Kết thúc pha Quét **sớm**, chuyển sang pha Xem luôn. Vòng sau tự thử quét lại |
-| **For You / Tìm kiếm / Tab đang mở** | **Tạm dừng 5 → 15 → 30 phút** rồi tự tải lại thử tiếp |
+| **Không làm gì** (treo máy) | Tự bật lại theo đúng lịch trên — không cần bấm |
+| Bấm **▶ Chạy** lúc đang đếm ngược | Chạy **ngay**, khỏi chờ hết giờ |
+| Bấm **■ Dừng** lúc đang đếm ngược | **Huỷ** hẹn tự bật lại — app không tự bật nữa (bạn đã tiếp quản) |
+| Tắt HMA lúc đang đếm ngược | Tới giờ app **không bật** (sẽ chạy bằng IP thật). Kiểm lại mỗi 5 giây, HMA lên là bật |
+
+Các profile khác **chạy bình thường, không bị đụng tới**. Áp dụng cho **mọi chế độ**, kể cả
+**Quét ⇄ Xem** — không có ngoại lệ, không có công tắc nào.
 
 App mất **2–3 phút** mới dám kết luận (phải thử đủ 3 cách thoát kẹt trước) — đó là cố ý, để
-không báo oan làm profile đang khoẻ tự tạm dừng.
+không báo oan làm profile đang khoẻ bị dừng.
+
+⛔ **Đã bỏ** (2026-08-06): trước đây app *tự tắt/bật lại HMA VPN* rồi mới chạy lại. Bỏ vì **IP là
+của cả máy**: đổi IP giữa lúc các profile khác đang quét làm chúng chuyển từ IP A sang IP B **giữa
+phiên** — đúng khuôn "tài khoản bị chiếm" mà TikTok dùng để hủy phiên. Giờ app **chỉ dừng/bật lại
+đúng một profile**, không bao giờ tự đụng vào VPN.
+
+💡 **Nếu muốn đổi IP nữa** thì làm tay trong lúc profile đang đếm ngược (dừng hết profile → tắt/bật
+HMA → chờ 59 giây). App tự nhận ra VPN vừa đổi và **không bật profile trong lúc VPN còn tắt**.
 
 **Nếu bị lặp lại nhiều lần thì nguyên nhân ở NGOÀI app**, làm theo thứ tự:
 
-0. **Bật "Tự đổi IP khi TikTok cắt feed" trong ⚙** nếu máy có cài HMA VPN — xem mục ngay dưới
+0. **Đổi IP bằng tay**: dừng HẾT profile trên máy đó → tắt/bật lại HMA → chờ hết 59 giây → chạy lại. Xem mục ngay dưới
    đây. Đây là cách duy nhất chạm tới **gốc rễ** (đổi IP thật); các cách còn lại chỉ là vòng qua.
 1. **Đổi profile đó sang chế độ Tìm kiếm** (đổi ngay ở cột **Chế độ**). Đây là cách lướt tiếp
    **có thật**: video mở từ kết quả tìm kiếm dùng danh sách phát riêng của trang tìm kiếm, không
@@ -155,60 +225,37 @@ không báo oan làm profile đang khoẻ tự tạm dừng.
 là giới hạn thật, không phải app thiếu tính năng. Nhưng **đổi IP máy** (mục dưới) thường giải
 quyết được, vì khi đó TikTok gặp một "máy" hoàn toàn khác.
 
-### Tự đổi IP bằng HMA VPN (mặc định TẮT)
+### Đổi IP bằng tay khi bị cắt feed
 
-Nếu máy có cài **HMA VPN** và **đã đăng nhập**, app có thể tự **tắt/bật lại HMA** rồi **tự chạy
-lại** đúng các profile vừa dừng — không cần bạn làm gì tay. Bật ở **⚙ Cài đặt crawl → "Tự đổi IP
-khi TikTok cắt feed"** (cài đặt **chung toàn app**, áp dụng cho máy này).
+App **không tự đổi IP** — tính năng đó đã **bỏ** (xem cuối mục này). Làm tay theo đúng thứ tự này
+để không phá phiên của profile khác:
 
-App chỉ **tắt rồi bật lại đúng server đang dùng**, không đổi thành phố — vì HMA cấp **IP khác
-mỗi lần kết nối** (đo thật: cùng server London cho IP `18.171.54.19` → `18.132.40.68`). Nên
-những nước HMA chỉ có 1 thành phố (như Hàn Quốc — Seoul) vẫn đổi IP được bình thường.
+1. **Dừng HẾT profile** trên máy đó — tick tất cả rồi bấm **■ Dừng ô đã chọn**
+2. **Tắt rồi bật lại HMA** (không cần đổi thành phố — HMA cấp **IP khác mỗi lần kết nối**; đo thật:
+   cùng server London cho `18.171.54.19` → `18.132.40.68`, nên cả nước chỉ có 1 thành phố như Hàn
+   Quốc vẫn đổi IP được)
+3. App tự phát hiện, **khóa nút Chạy và đếm ngược 59 giây**
+4. Hết đếm ngược → bấm **▶ Chạy** lại
 
-Khi bật, một profile báo feed cạn sẽ kích hoạt:
+**Vì sao phải dừng HẾT trước khi tắt VPN:** lúc VPN tắt, máy dùng **IP thật**. Profile nào còn chạy
+sẽ gửi request bằng IP thật trong khi vẫn khai múi giờ London/Seoul/New York — mâu thuẫn đó là thứ
+TikTok dễ nhận ra nhất.
 
-```
-⛔ "tên profile" bị TikTok cắt feed — dừng 5 profile để đổi IP (IP là của cả máy nên
-   phải dừng hết, không thể dừng riêng 1 profile)...
-Đang tắt HMA VPN rồi bật lại để lấy IP mới (nối lại đúng server cũ — HMA cấp IP khác
-   mỗi lần kết nối nên không cần đổi city)...
-✅ HMA đã tắt/bật lại (London) — GB. IP mới: 18.132.40.68 (GB).
-```
+⛔ **Vì sao BỎ tính năng "app tự tắt/bật HMA rồi tự chạy lại"** (2026-08-06):
 
-rồi tự chạy lại lần lượt đúng nhóm profile đã dừng.
+**IP là của CẢ MÁY**, không của riêng một profile. Chỉ có hai cách làm, cả hai đều tệ:
 
-**App dừng 1 profile hay dừng hết?** Nó tự kiểm máy rồi chọn:
-
-| Máy của bạn | App làm gì |
+| Cách | Vấn đề |
 |---|---|
-| **Đã tắt IPv6** | Chỉ dừng **đúng profile bị cắt feed** — các profile khác chạy tiếp |
-| **Còn IPv6** (mặc định của Windows) | Dừng **hết** rồi bật lại |
+| Chỉ dừng profile bị cắt rồi đổi IP luôn | 4 profile kia đang quét trên **IP A** bị chuyển sang **IP B giữa phiên** — đúng khuôn "tài khoản bị chiếm" khiến TikTok hủy phiên |
+| Dừng HẾT profile rồi mới đổi | Mỗi lần **một** profile bị cắt là **cả dàn phải nghỉ** + chờ 59 giây + bật lại lần lượt — đắt hơn nhiều so với mất một profile |
 
-⚠️ **Vì sao còn IPv6 thì phải dừng hết:** VPN HMA chỉ bảo vệ IPv4. Lúc VPN tắt (dù chỉ vài
-giây), IPv6 đi **thẳng ra internet bằng IP thật ở Việt Nam**, trong khi profile vẫn khai giờ
-London/Seoul/New York. Đây là kiểu rò rỉ **im lặng** — profile vẫn chạy mượt, không báo lỗi gì,
-chỉ **mất phiên sau đó**. Đo thật: IP Việt Nam lọt ra chỉ trong **241 mili giây**.
-
-👉 **Nên tắt IPv6 trên mọi máy** — vừa để app chỉ cần dừng 1 profile, vừa bịt lỗ rò rỉ này mỗi
-lần VPN tụt (kể cả tụt tự nhiên ban đêm). Cách làm: xem
-[TROUBLESHOOTING mục 17](../technical/TROUBLESHOOTING.md) — chỉ 1 dòng lệnh PowerShell chạy bằng
-quyền Administrator. Tắt xong app tự nhận ra, không cần cấu hình gì thêm.
-
-**Giới hạn:**
-- **Không bao giờ đổi quốc gia** — chỉ nối lại trong đúng nước profile đang khai (đổi nước sẽ
-  phá vỡ vân tay của profile và bị app tự tạm dừng).
-- Tối đa **6 lần/ngày**, cách nhau ít nhất **10 phút**.
-- **Không đảm bảo IP mới sạch** — pool IP của HMA hữu hạn và nhiều người dùng chung, nên vẫn có
-  thể rút được một IP cũng đang bị TikTok siết. Tính năng này giảm xác suất, không phải thuốc
-  chữa tuyệt đối. Nếu đổi mấy lần vẫn bị cắt feed thì nguyên nhân ở chỗ khác (xem 4 bước trên).
-- Nếu đổi IP thất bại, app **không tự chạy lại profile** (sợ VPN đang tắt thật, chạy lúc đó là
-  lộ IP thật) — mở cửa sổ HMA kiểm tra bằng mắt rồi tự bấm ▶ Chạy lại.
-
+Nên bỏ hẳn, thay bằng: **cắt feed → dừng đúng profile đó, bạn tự xử lý IP rồi tự chạy lại**.
 ### Nút "▶ Chạy" bị khóa trong lúc đổi IP — bình thường, không phải app treo
 
 Nhãn trên nút cho biết đang ở đâu:
 
-Áp dụng cho **cả hai** trường hợp: app tự đổi IP, **và bạn tự tay tắt/bật HMA**.
+App **không bao giờ tự đổi IP** (tính năng đó đã bỏ 2026-08-06 — xem dưới). Phần này áp dụng khi **bạn tự tay tắt/bật HMA**.
 
 | Nút hiện | Nghĩa | Vì sao không cho bấm |
 |---|---|---|

@@ -407,6 +407,23 @@
             <span>request cùng lúc</span>
           </label>
           <div class="section-desc">Đây là cài đặt <b>chung toàn app</b> (không riêng từng profile). Càng nhỏ càng ít bị TikTok chặn trang đếm; khuyến nghị <b>2</b>. Chạy nhiều profile mà để cao dễ bị chặn (nghỉ 300s liên tục).</div>
+          <label class="toggle-row" style="margin-top:10px" title="Đánh đổi giữa 'đọc được nhiều link hơn' và 'không để hàng đợi tắc'. Máy mạnh chọn Kiên nhẫn, máy ảo yếu PHẢI chọn Nhanh.">
+            <span>Chế độ đếm</span>
+            <select class="select input-sm" id="cfgCountMode" style="width:auto">
+              <option value="fast">Nhanh — cho máy ảo / máy yếu (khuyến nghị)</option>
+              <option value="patient">Kiên nhẫn — cho máy mạnh (như bản 0.1.63)</option>
+            </select>
+          </label>
+          <div class="section-desc">
+            Cài đặt <b>riêng từng máy</b> (lưu ở máy này, không đồng bộ).<br />
+            <b>Nhanh</b>: chờ API <b>8 giây</b>, đọc giao diện có <b>trần cứng</b> 2.5s/5s, <b>thử lại 1 lượt</b>
+            khi TikTok trả trang lỗi, và <b>tự bỏ lượt thử lại khi hàng đợi tắc</b>.<br />
+            <b>Kiên nhẫn</b>: chờ API <b>20 giây</b>, đọc giao diện tới <b>30 giây</b>, <b>không thử lại</b>.
+            Trên máy mạnh gần như không mất gì (API về trong ~1s) mà có thêm cơ hội đọc được link chậm.<br />
+            ⚠️ <b>Máy ảo yếu PHẢI để "Nhanh"</b>. Đo thật trên VPS lag: chế độ Kiên nhẫn làm một sound
+            lỗi chiếm slot đếm <b>toàn app</b> tới <b>~28 giây</b> → thông lượng tụt còn ~4 sound/phút
+            trong khi vòng quét cần ~20 → hàng đợi đầy vĩnh viễn → <b>vòng quét đứng, feed ngừng cuộn</b>.
+          </div>
           <label class="toggle-row" style="margin-top:8px" title="Chỉ dùng để CHẨN ĐOÁN: cho tab đếm /music/ hiện thành MỘT TAB ngay trong cửa sổ của profile, để xem tận mắt trang sound (vd nghi TikTok trả 'Something went wrong', hoặc muốn biết vì sao một sound bị bỏ).">
             <input type="checkbox" id="cfgShowCountTab" />
             <span>Hiện tab đếm số video trong cùng cửa sổ profile (chẩn đoán)</span>
@@ -420,19 +437,25 @@
           </div>
         </div>
 
-        <div class="section" id="cfgVpnSection">
-          <div class="section-title">Tự đổi IP khi TikTok cắt feed (toàn app)</div>
-          <label class="toggle-row" title="Khi phát hiện TikTok không cấp thêm video: dừng hết profile trên máy, tắt/bật lại HMA VPN để lấy IP mới, rồi tự chạy lại.">
+        <div class="section">
+          <div class="section-title">Khi TikTok cắt feed — tự đổi IP (toàn app)</div>
+          <label class="toggle-row" title="Một profile bị TikTok cắt feed: DỪNG HẾT profile trên máy → tắt/bật lại HMA VPN lấy IP mới → chờ 59 giây → tự chạy lại đúng nhóm vừa dừng.">
             <input type="checkbox" id="cfgVpnAutoCycle" />
-            <span>Tắt/bật lại HMA VPN rồi tự chạy lại profile</span>
+            <span>Dừng HẾT profile → tắt/bật lại HMA VPN → tự chạy lại</span>
           </label>
           <div class="section-desc">
-            Cài đặt <b>chung toàn app</b>. Mặc định <b>tắt</b>. Cần HMA VPN đã cài và <b>đã đăng nhập</b> trên máy này.<br />
-            ⚠️ Vì IP là của <b>cả máy</b>, mỗi lần đổi IP sẽ <b>dừng HẾT profile</b> đang chạy rồi bật lại lần lượt —
-            không thể đổi IP cho riêng một profile. Lúc VPN tắt máy dùng IP thật, nên để profile nào chạy cũng là mất phiên.<br />
-            Chỉ <b>tắt rồi bật lại đúng server đang dùng</b> — HMA cấp IP khác mỗi lần kết nối nên không cần đổi thành phố
-            (đo thật: cùng server London cho IP <code>18.171.54.19</code> → <code>18.132.40.68</code>).
-            Giới hạn: tối đa <b>6 lần/ngày</b>, cách nhau ít nhất <b>10 phút</b>.
+            Cài đặt <b>chung toàn app</b>. Cần HMA VPN đã cài và <b>đã đăng nhập</b> trên máy này.<br />
+            ⚠️ Vì IP là của <b>cả máy</b>, app <b>LUÔN dừng HẾT profile</b> trước khi tắt VPN — không
+            bao giờ chỉ dừng một profile. Nếu chỉ dừng một, 4 profile kia đang quét trên IP A sẽ bị
+            chuyển sang <b>IP B giữa phiên</b>, đúng khuôn "tài khoản bị chiếm" mà TikTok dùng để hủy
+            phiên.<br />
+            Chỉ <b>tắt rồi bật lại đúng server đang dùng</b> — HMA cấp IP khác mỗi lần kết nối nên
+            không cần đổi thành phố (đo thật: cùng server London cho <code>18.171.54.19</code> →
+            <code>18.132.40.68</code>). Giới hạn: tối đa <b>6 lần/ngày</b>, cách nhau ít nhất
+            <b>10 phút</b>.<br />
+            <b>Tắt công tắc này</b> thì cắt feed chỉ <b>dừng đúng profile đó</b> rồi tự bật lại sau
+            <b>5 → 15 → 30 phút</b> (không đụng vào VPN).<br />
+            Cả hai đường đều <b>tự chạy lại</b> — treo máy không cần bấm gì.
           </div>
         </div>
 

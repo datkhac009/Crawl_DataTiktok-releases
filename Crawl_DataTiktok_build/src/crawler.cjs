@@ -108,24 +108,57 @@ const STARVE_WAITS = process.env.TTC_STARVE_RETRY_MS
   ? [Number(process.env.TTC_STARVE_RETRY_MS)]
   : [5 * 60000, 15 * 60000, 30 * 60000];
 
-// Số lượt đọc số video cho MỘT sound (2026-08-06). Trang lỗi của TikTok ghi thẳng
-// "Something went wrong — Sorry about that! Please try again later" kèm nút Refresh, tức TikTok
-// TỰ KHAI đây là lỗi TẠM THỜI. Trước đây app bỏ ngay sau 1 lượt nên mỗi lỗi tạm thời = 1 sound
-// mất (hoặc 1 dòng phải kiểm tay). Đặt 1 là tắt hẳn việc thử lại, không cần build lại.
-const COUNT_READ_ATTEMPTS = Math.max(1, Number(process.env.TTC_COUNT_ATTEMPTS) || 2);
-const COUNT_RETRY_WAIT_MS = Math.max(0, Number(process.env.TTC_COUNT_RETRY_MS) || 2500);
-// TRẦN THỜI GIAN đọc giao diện (bước 2) cho từng lượt — tính bằng ĐỒNG HỒ, không đếm vòng.
-// Vì sao phải là đồng hồ: mỗi `readVideoCount` có trần riêng 5 giây, nên "6 vòng" trên máy yếu
-// có thể thành 30 giây, mà suốt thời gian đó nó giữ 1 trong 2 slot đếm TOÀN APP → hàng đợi đầy
-// → vòng quét đứng → feed ngừng cuộn (sự cố máy ảo 2026-08-06, xem chú thích tại chỗ dùng).
-const COUNT_DOM_BUDGET_MS = [2500, 5000];
-// Trần chờ response `api/music/detail/`. TRƯỚC ĐÂY 20 GIÂY — đo được đây là phần TỐN NHẤT khi
-// TikTok trả trang lỗi: trang lỗi thì API **không bao giờ chạy**, nên mỗi lượt đốt trọn 20s mà
-// không thu được gì; 2 lượt = 40s/sound, chiếm phần lớn con số 132s/sound đo trên máy ảo.
-// 8 giây là dư: `waitForResponse` được đăng ký TRƯỚC `goto`, mà trang tự gọi API ngay lúc tải —
-// response bình thường về trong ~1s. Quá 8s sau khi trang đã dựng xong thì gần như chắc chắn
-// không có API nào cả. Đoán sai cũng chỉ rơi xuống bước đọc giao diện, không mất dữ liệu.
-const COUNT_API_WAIT_MS = Math.max(1000, Number(process.env.TTC_COUNT_API_MS) || 8000);
+// ══════════════════════════════════════════════════════════════════════════
+// HAI CHẾ ĐỘ ĐẾM SỐ VIDEO — chọn theo TỪNG MÁY (người dùng yêu cầu 2026-08-06)
+// ══════════════════════════════════════════════════════════════════════════
+// VÌ SAO CÓ CÔNG TẮC thay vì chọn một cách: cùng MỘT file .exe chạy trên cả 5 máy, mà máy chính
+// (mạnh) và máy ảo (yếu) cần đánh đổi NGƯỢC NHAU:
+//
+//   'patient' — đúng quy trình bản v0.1.63: chờ API 20 giây, đọc giao diện rất kiên nhẫn, KHÔNG
+//               thử lại. Trên máy MẠNH thì kiên nhẫn gần như miễn phí (API về trong ~1s, đọc giao
+//               diện xong trong ~3s) nên không mất gì, mà có thêm cơ hội đọc được link chậm.
+//   'fast'    — bản hiện tại: chờ API 8 giây, ngân sách đọc giao diện có TRẦN CỨNG, có thử lại.
+//               BẮT BUỘC cho máy ảo: đo thật trên VPS lag, 'patient' làm 1 sound lỗi chiếm slot
+//               đếm TOÀN APP tới ~28 giây → thông lượng tụt còn ~4 sound/phút trong khi vòng quét
+//               cần ~20 → hàng đợi đầy vĩnh viễn → VÒNG QUÉT ĐỨNG → feed ngừng cuộn.
+//
+// => Không có cách nào đúng cho cả hai loại máy. Nên để người dùng chọn, mặc định 'fast' (an toàn
+//    cho máy yếu — chọn sai ở máy mạnh chỉ mất chút cơ hội, chọn sai ở máy yếu là ĐỨNG FEED).
+//
+// ⚠ MỘT ĐIỂM KHÔNG SAO CHÉP NGUYÊN VĂN: v0.1.63 đọc giao diện bằng "6 vòng × 500ms" — mà mỗi lần
+// đọc có trần riêng 5 giây, nên vòng đó KHÔNG CÓ TRẦN THẬT (máy yếu → 30 giây). 'patient' ở đây
+// dùng ngân sách 30 giây: trên máy mạnh hành vi y hệt v0.1.63 (6 vòng × ~550ms ≈ 3.3s là xong),
+// còn trên máy yếu thì có trần thay vì trôi tự do. Cố ý KHÔNG dựng lại vòng không trần đó.
+const COUNT_MODES = {
+  fast:    { apiWaitMs: 8000,  domBudgetMs: [2500, 5000],   attempts: 2, retryWaitMs: 2500 },
+  patient: { apiWaitMs: 20000, domBudgetMs: [30000, 30000], attempts: 1, retryWaitMs: 2500 },
+};
+const COUNT_MODE_DEFAULT = 'fast';
+let _countMode = COUNT_MODE_DEFAULT;
+
+// Biến môi trường (nếu đặt) GHI ĐÈ chế độ — để soi lỗi mà không phải vào ⚙, và để test chỉnh được.
+function _countCfg() {
+  const m = COUNT_MODES[_countMode] || COUNT_MODES[COUNT_MODE_DEFAULT];
+  const envNum = (k, min) => {
+    const v = Number(process.env[k]);
+    return Number.isFinite(v) && v >= min ? v : null;
+  };
+  return {
+    apiWaitMs: envNum('TTC_COUNT_API_MS', 1000) ?? m.apiWaitMs,
+    domBudgetMs: m.domBudgetMs,
+    attempts: envNum('TTC_COUNT_ATTEMPTS', 1) ?? m.attempts,
+    retryWaitMs: envNum('TTC_COUNT_RETRY_MS', 0) ?? m.retryWaitMs,
+  };
+}
+
+function setCountMode(mode) {
+  _countMode = COUNT_MODES[mode] ? mode : COUNT_MODE_DEFAULT;
+  const c = _countCfg();
+  console.log(`[count] Chế độ đếm: ${_countMode} (chờ API ${c.apiWaitMs}ms, ngân sách giao diện`
+    + ` ${c.domBudgetMs.join('/')}ms, ${c.attempts} lượt đọc).`);
+  return _countMode;
+}
+function getCountMode() { return _countMode; }
 
 // ── Vòng lặp crawl cho 1 profile (nhận cờ `stop` riêng) ──
 // `onPending` (QĐ-33): link TikTok trả "Something went wrong" — không đọc được số video nhưng
@@ -392,6 +425,30 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
   // đồng thời" trong ⚙ — đánh đổi: càng cao càng dễ bị TikTok chặn trang đếm.
   const soundQueue = [];
   const QUEUE_MAX = 20;
+
+  // ── NHỊP CUỘN TỰ GIÃN THEO ÁP LỰC HÀNG ĐỢI (2026-08-06) ──
+  //
+  // VẤN ĐỀ: trước đây vòng quét chạy HẾT TỐC cho tới lúc hàng đợi đầy 20/20, rồi **ĐỨNG HẲN** ở
+  // nhánh chờ. Người dùng thấy đúng cái đó: 4 profile kẹt `Quét − Đã check = 21`, feed đứng im 8
+  // phút ở một video. Hành vi kiểu bật/tắt (chạy hết tốc → dừng hẳn) là thứ gây ra hiện tượng
+  // "đứng feed", chứ không phải TikTok chặn.
+  //
+  // CÁCH SỬA: thay ngưỡng bật/tắt bằng **giãn dần**. Hàng đợi càng đầy thì nghỉ giữa 2 lần cuộn
+  // càng lâu, nên vòng quét TỰ khớp tốc độ với bước đếm và **hiếm khi tới được ngưỡng đầy**.
+  //   dưới 50%  → nhịp bình thường (máy khoẻ gần như luôn ở đây)
+  //   75%       → ×2.5
+  //   100%      → ×4
+  // Vì sao đây là cách đúng: bước đếm là cổ chai có thật, không thể xoá. Nhưng "chậm dần" giữ feed
+  // LUÔN CHUYỂN ĐỘNG — vừa không mất sound nào (khác với cuộn qua mà không thu), vừa không để một
+  // video mở đứng hàng phút (bản thân việc đó cũng là tín hiệu bất thường với TikTok).
+  //
+  // ⚠ KHÔNG bỏ hẳn ngưỡng đầy: nó là chốt chống hàng đợi phình vô hạn. Chỉ là giờ rất ít khi tới.
+  function queuePressureFactor() {
+    const p = soundQueue.length / QUEUE_MAX;
+    if (p < 0.5) return 1;
+    return 1 + (Math.min(p, 1) - 0.5) * 6;
+  }
+
   let localCount = 0;   // số sound profile NÀY tự quét được (feed) — hiển thị cột "Sound"
   let localChecked = 0; // số sound profile NÀY đã ĐI QUA bước đếm video (kể cả trả về '?')
                          // — hiển thị cột "Đã check". Tăng trong countLoop, không phải ở đây.
@@ -494,7 +551,8 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
         if (!await waitForCorrectCountry(prefix)) break;
         lastIpCheck = Date.now();   // đặt lại sau khi chờ, tránh kiểm dồn ngay vòng sau
       }
-      // Queue đầy → tạm dừng cuộn, chờ tab đếm tiêu bớt (chống backlog vô hạn).
+      // Queue ĐẦY HẲN → mới tạm dừng cuộn (chống backlog vô hạn). Nhờ nhịp cuộn tự giãn ở cuối
+      // vòng (queuePressureFactor) thì hiếm khi tới được đây — trước đây chạy hết tốc rồi ĐỨNG HẲN.
       // (2026-07-31) BÁO RA UI: trước đây vòng chờ này im lặng hoàn toàn — cột Quét đứng yên
       // mà không có dòng trạng thái nào, trông y như app bị treo (người dùng báo đúng hiện
       // tượng này). Giờ nói rõ đang chờ bước đếm, có kèm số sound còn trong hàng đợi.
@@ -580,7 +638,8 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
       }
 
       await scrollFeed(page);
-      await interruptibleSleep(rand(minDelay, maxDelay), stop);
+      // NHỊP CUỘN TỰ GIÃN THEO ÁP LỰC HÀNG ĐỢI (2026-08-06) — xem queuePressureFactor().
+      await interruptibleSleep(Math.round(rand(minDelay, maxDelay) * queuePressureFactor()), stop);
 
       if (recycle && recycleEvery > 0 && ++scrolls >= recycleEvery
           && !stop.requested && Date.now() < deadlineAt) {
@@ -693,6 +752,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
       let oddStatus = null;  // statusCode TikTok trả về mà ta chưa biết nghĩa (để log — xem dưới)
       let stopped = false;   // đã yêu cầu dừng giữa chừng → thoát hẳn countLoop
       let holdingSlot = false;   // ĐANG giữ slot đếm hay không (nhả đúng 1 lần, xem finally)
+      const cfg = _countCfg();   // chốt thông số theo chế độ đếm cho ĐÚNG sound này
       try {
         // ĐỌC QUA API (2026-07-06): trang /music/ tự gọi api/music/detail/ ngay khi tải.
         // Nghe response đó thay vì poll DOM: (a) có số CHÍNH XÁC (videoCount=88100 thay vì
@@ -701,7 +761,10 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
         // Quy trình 2 BƯỚC (user chốt 2026-07-12): API lỗi → đọc GIAO DIỆN (DOM) trên chính
         // trang vừa tải → cả 2 đều lỗi → không nhả dòng '?' vào dữ liệu.
         //
-        // THỬ LẠI TRỌN VÒNG (2026-08-06, COUNT_READ_ATTEMPTS): xem lý do ở chỗ khai hằng số.
+        // Thông số lấy theo CHẾ ĐỘ ĐẾM của máy này (xem COUNT_MODES). Đọc MỘT LẦN ở đây, không
+        // đọc lại giữa các lượt — để một sound không bị đổi luật giữa dòng nếu người dùng vừa
+        // đổi cài đặt.
+        // THỬ LẠI TRỌN VÒNG (2026-08-06, cfg.attempts): xem lý do ở chỗ khai COUNT_MODES.
         // KHÔNG mâu thuẫn QĐ-07 ("không retry"): QĐ-07 chặn việc GHI SỐ KHÔNG CHẮC vào dữ liệu
         // — thử lại rồi đọc được SỐ THẬT không tạo dữ liệu bẩn nào.
         //
@@ -709,7 +772,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
         // slot suốt các lượt với lý do "TikTok đang lỗi thì chậm lại là đúng hướng" — LÝ LẼ ĐÓ
         // SAI, vì slot đếm là tài nguyên **TOÀN APP** (chỉ 2 slot cho mọi profile), không phải
         // của riêng sound này. Giữ slot lúc ngủ = chặn cả 5 profile trên máy.
-        for (let attempt = 1; attempt <= COUNT_READ_ATTEMPTS; attempt++) {
+        for (let attempt = 1; attempt <= cfg.attempts; attempt++) {
           if (stop.requested || raw !== null || dead) break;
           // ── CHỈ THỬ LẠI KHI CÒN THỪA SỨC (2026-08-06) ──
           // Thử lại là thứ ĐÁNG CÓ nhưng KHÔNG đáng đánh đổi việc feed đứng hẳn. Khi hàng đợi đã
@@ -726,9 +789,9 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
           }
           if (attempt > 1) {
             onStatus(profile.id, 'running', `"${item.name}": TikTok trả trang lỗi`
-              + ` — thử lại lượt ${attempt}/${COUNT_READ_ATTEMPTS}...`);
+              + ` — thử lại lượt ${attempt}/${cfg.attempts}...`);
             if (holdingSlot) { releaseCountSlot(); holdingSlot = false; }
-            await interruptibleSleep(COUNT_RETRY_WAIT_MS, stop);
+            await interruptibleSleep(cfg.retryWaitMs, stop);
             if (stop.requested) { stopped = true; break; }
           }
           if (!holdingSlot) {
@@ -738,7 +801,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
           try {
             // Đăng ký nghe TRƯỚC khi điều hướng để không lỡ response.
             const respPromise = sidePage
-              .waitForResponse(r => r.url().includes('/api/music/detail/'), { timeout: COUNT_API_WAIT_MS })
+              .waitForResponse(r => r.url().includes('/api/music/detail/'), { timeout: cfg.apiWaitMs })
               .catch(() => null);
             await sidePage.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
             const resp = await respPromise;
@@ -779,7 +842,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
             // Đếm vòng thì chi phí phụ thuộc máy CHẬM ĐẾN ĐÂU; đếm giờ thì có trần cứng.
             // Lượt 2 kiên nhẫn hơn vì link đã đáng ngờ, nhưng vẫn có trần.
             if (raw === null && !dead && !stop.requested) {
-              const budget = COUNT_DOM_BUDGET_MS[Math.min(attempt - 1, COUNT_DOM_BUDGET_MS.length - 1)];
+              const budget = cfg.domBudgetMs[Math.min(attempt - 1, cfg.domBudgetMs.length - 1)];
               const until = Date.now() + budget;
               while (!stop.requested) {
                 // Truyền trần cho TỪNG lần gọi = phần ngân sách còn lại. Không truyền thì mặc
@@ -1492,4 +1555,7 @@ module.exports = {
   runningIds,
   addSeedUrls,
   setCountConcurrency,
+  setCountMode,
+  getCountMode,
+  COUNT_MODES,
 };

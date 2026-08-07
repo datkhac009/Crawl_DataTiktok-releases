@@ -32,9 +32,9 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 | `update-get-repo`, `update-set-repo` | gọi | Repo GitHub phát hành (ô "Nâng cao" trong modal ⬆) |
 | `download-progress`, `update-available`, `update-not-available`, `update-error` | nhận | Tiến trình tải + kết quả kiểm tra cập nhật |
 | `vpn-status` | gọi | Đọc trạng thái HMA VPN hiện tại (chỉ đọc, không đổi gì) — [QĐ-32](DECISIONS.md) |
-| `vpn-ipv6-risk` | gọi | Máy có IPv6 công khai (rò rỉ khi VPN tắt) hay không → quyết định dừng RIÊNG 1 profile hay dừng HẾT. Rẻ, đồng bộ, không spawn gì |
+| `vpn-ipv6-risk` | gọi | Máy có IPv6 công khai (rò rỉ khi VPN tắt) hay không. Dùng để **phân mức cảnh báo** khi người dùng tắt HMA lúc còn profile chạy: có IPv6 → chúng đang **LỘ IP thật**; không có → chỉ lỗi mạng. Rẻ, đồng bộ, không spawn gì |
+| `vpn-cycle` | gọi | Tắt/bật lại HMA VPN **đúng server đang dùng** để lấy IP mới từ pool (không đổi city — xem QĐ-32). Backend **từ chối nếu còn profile nào đang chạy** + giới hạn nhịp (10 phút/lần, 6 lần/ngày) |
 | `vpn-tunnel` | gọi | Đường hầm HMA đang lên/xuống + **IP trong hầm** (`{up, address, iface}`). Renderer poll **2 giây/lần** để biết NGƯỜI DÙNG tự tắt/bật HMA. ⚠ CỐ Ý không dùng `vpn-status` cho việc này: kênh đó spawn `VpnNM.exe` + chờ 600ms (≈1800 tiến trình/giờ nếu poll dày); kênh này chỉ đọc `os.networkInterfaces()` — đo thật **2.1ms/lần** — [QĐ-32](DECISIONS.md) |
-| `vpn-cycle` | gọi | Tắt/bật lại HMA VPN **đúng server đang dùng** để lấy IP mới từ pool (không đổi city — xem QĐ-32). Backend tự chặn nếu còn profile đang chạy + giới hạn nhịp (10 phút/lần, 6 lần/ngày) |
 
 ### Các loại `crawl-status`
 
@@ -47,7 +47,7 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 | `counts` | `scanned`, `checked`, `skippedDup` | **Kênh riêng, không kèm text** — chỉ cập nhật số, không đụng badge/log |
 | `phase` | `phaseLabel`, `nextLabel`, `deadlineAt` | Chip đếm ngược của chế độ chu kỳ (renderer tự tick mỗi giây) |
 | `verify` | `state`, `msg` | Kết quả 🔑. ⚠ **KHÔNG** dùng `running` cho việc này — xem cảnh báo trong `main.js` |
-| `feed-starved` | `msg` | TikTok không cấp thêm video cho profile ([QĐ-31](DECISIONS.md)) — vừa là log, vừa là tín hiệu để renderer tự đổi IP nếu đã bật ([QĐ-32](DECISIONS.md)). ⚠ **KHÔNG** dùng `error`/`running` — profile vẫn sống |
+| `feed-starved` | `msg` | TikTok không cấp thêm video cho profile ([QĐ-31](DECISIONS.md)) — vừa là log, vừa là tín hiệu để renderer xử. Công tắc "Tự đổi IP" **bật** → **dừng HẾT profile** + tắt/bật lại HMA + chờ 59s + chạy lại cả nhóm; **tắt** → dừng đúng profile đó rồi tự bật lại sau 5/15/30 phút ([QĐ-32](DECISIONS.md)). ⚠ **KHÔNG** dùng `error`/`running` — profile vẫn sống |
 | `sheet-rows` | `sheetRows`, `knownLinks` | Ghi vào **ô riêng** `#sheetRowsInfo` ([QĐ-29](DECISIONS.md)) |
 | `sheet-error` | `msg` | Hiện toast lỗi + ghi vào dòng thông báo |
 | `info` | `msg` | Thông báo cấp phiên (nạp link lọc trùng, tiến độ 🔑…) |
@@ -58,7 +58,8 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 | Endpoint | Dùng để | Ghi chú |
 |---|---|---|
 | `https://www.tiktok.com/` | Feed For You | Cần User-Agent Chrome thật, nếu không bị chặn |
-| `api/music/detail/` | Lấy số video của sound | Nghe response khi mở trang `/music/` — **không gọi thẳng** (cần tham số ký `X-Bogus`/`msToken`, xem [QĐ-06](DECISIONS.md)) |
+| `api/music/detail/` | Lấy số video của sound | Nghe response khi mở trang `/music/` — **không gọi thẳng** (cần tham số ký `X-Bogus`/`msToken`, xem [QĐ-06](DECISIONS.md)). Trần chờ **8 giây** (`TTC_COUNT_API_MS`) — trang lỗi thì API không bao giờ chạy, xem [QĐ-34](DECISIONS.md) |
+| `https://www.tiktok.com/music/<slug>-<id>` | Trang sound | Chỉ `<id>` có ý nghĩa, phần chữ bị bỏ qua |
 
 **Các `statusCode` đã gặp thật trong body của `api/music/detail/`** — app xử khác nhau hoàn toàn:
 
@@ -73,7 +74,6 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 ⚠️ **Nợ kỹ thuật đã biết:** hai dòng cuối đang bị **gộp** — lỗi của riêng một link (`statusCode`
 lạ) cũng làm tăng `failStreak` nên cũng phạt tốc độ **mọi profile**, dù TikTok chẳng chặn gì. Chờ
 log có số liệu về `10203` rồi mới tách — xem [QĐ-07](DECISIONS.md).
-| `https://www.tiktok.com/music/<slug>-<id>` | Trang sound | Chỉ `<id>` có ý nghĩa, phần chữ bị bỏ qua |
 
 ## 3. Google Sheets API v4
 
@@ -84,7 +84,8 @@ toàn app qua `google-api.cjs`).
 |---|---|---|
 | Ghi dữ liệu | `values:append` `{tab}!A:Z` · `RAW` | `A:Z` **không** phải `A:D` — xem [QĐ-08](DECISIONS.md) |
 | Ghi **tab chờ** | `values:append` `{pendingTab}!A:Z` · `RAW` | Link TikTok trả *"Something went wrong"*. Chỉ 4 cột A:D, **cột E "Tình trạng" không bao giờ ghi** — [QĐ-33](DECISIONS.md) |
-| Đọc **tab chờ** để lọc trùng | `values.get` `{pendingTab}!B:B` | Nạp 1 lần đầu phiên. **Không** nạp vào bộ lọc quét → link chờ vẫn được thử lại phiên sau |
+| Đọc **tab chờ** — toàn bộ | `values.get` `{pendingTab}!B:B` | Đầu phiên + đồng bộ lại mốc (cùng `reseedMinutes` với tab chính). **Không** nạp vào bộ lọc quét → link chờ vẫn được thử lại phiên sau |
+| Đọc **tab chờ** — tăng dần | `values.get` `{pendingTab}!B{n}:B` | Phần mới ở cuối, **mỗi phút** + **ngay trước mỗi lần ghi**. Cùng bộ cơ chế của tab chính ([QĐ-09](DECISIONS.md)) — thiếu nó thì nhiều máy cùng ghi sẽ sinh dòng trùng, đã gặp thật 2026-08-06 |
 | Đọc lọc trùng — **toàn bộ** | `values.get` `{tab}!B:B` | Đầu phiên + đồng bộ lại mốc (mặc định 10 phút/lần). Trần riêng 120s × 2 lần thử ([QĐ-20](DECISIONS.md)) |
 | Đọc lọc trùng — **tăng dần** | `values.get` `{tab}!B{n}:B` | Phần mới ở cuối, mỗi phút + **ngay trước mỗi lần ghi** ([QĐ-09](DECISIONS.md)) |
 | Dọn trùng — quét | `values.get` `{tab}!A:Z` | Đọc rộng để biết dòng nào có ghi chú tay ở cột E trở đi ([QĐ-20](DECISIONS.md)) |

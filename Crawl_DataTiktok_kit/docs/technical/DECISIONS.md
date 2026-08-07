@@ -1224,7 +1224,76 @@ ngưỡng thời gian vào test để không ai đặt lại quá ngắn.
 
 ---
 
-## QĐ-32 — Tự đổi IP (tắt/bật lại HMA VPN) khi feed cạn — chạm tới GỐC RỄ thay vì chỉ giảm thiệt hại
+## QĐ-32 — Tự đổi IP khi feed cạn: LUÔN DỪNG HẾT profile (chốt cuối 2026-08-06)
+
+> **HIỆN TẠI — hai đường, chọn bằng công tắc "Tự đổi IP" trong ⚙ (chung toàn app):**
+>
+> | Công tắc | TikTok cắt feed thì app làm gì |
+> |---|---|
+> | **BẬT** | **DỪNG HẾT** profile → tắt/bật lại HMA VPN → chờ **59s** → chạy lại **cả nhóm**, lần lượt |
+> | **TẮT** | Dừng **đúng profile đó** → nghỉ **5 → 15 → 30 phút** → tự bật lại chính nó |
+>
+> Cả hai đường đều **TỰ CHẠY LẠI** — người dùng chốt: *"nhiều khi tôi treo máy nên không thể ấn
+> Chạy thủ công được"*. Dừng hẳn mà không ai bấm lại = mất cả đêm sản lượng.
+>
+> **VPN TẮT (bạn tự tắt, hoặc VPN tụt) → cũng DỪNG HẾT.** Người dùng chốt: *"khi tôi tắt HMA thì vẫn
+> thấy các profile chạy... Tắt HMA là dừng hết luôn không cho chạy"*. Bản trước chỉ **cảnh báo** —
+> vô nghĩa khi họ treo máy: mỗi giây profile còn chạy là một giây gửi request bằng **IP THẬT**. Khi
+> VPN lên lại, app hẹn chạy lại **đúng nhóm vừa bị dừng** sau 59 giây (VPN tụt lúc 3h sáng vẫn tự
+> phục hồi).
+>
+> ### ⚠️ VÌ SAO LUÔN DỪNG HẾT — nhánh "chỉ dừng 1 profile" đã bị XOÁ HẲN
+>
+> Bản đầu cho phép chỉ dừng 1 profile **nếu máy không rò rỉ IPv6**. Người dùng chỉ ra lỗ hổng mà
+> phép đo IPv6 **không** che được:
+>
+> > 4 profile kia **vẫn đang chạy**. Chúng bắt đầu phiên quét trên **IP A** rồi **giữa chừng** bị
+> > chuyển sang **IP B**. Với TikTok, một phiên đang hoạt động bỗng đổi IP giữa lúc quét là đúng
+> > khuôn "tài khoản bị chiếm" mà [QĐ-15](#qđ-15--phòng-thủ-nhiều-lớp-cho-phiên-đăng-nhập) gọi là
+> > nguyên nhân số 1 khiến nó huỷ phiên.
+>
+> Rò rỉ IPv6 chỉ là **một** trong hai vấn đề; "đổi IP giữa phiên" là vấn đề còn lại và nó xảy ra
+> **kể cả khi không có IPv6 nào**. Nên nhánh "dừng 1" bị xoá, không để làm tuỳ chọn — một tuỳ chọn
+> mà bật lên là tự hại thì không nên tồn tại.
+>
+> Nhờ vậy chốt an toàn ở backend trở nên **rất đơn giản**: `vpn-cycle` từ chối nếu
+> `crawler.isAnyRunning()`. Không cần hỏi `ipv6LeakRisk()` để quyết định gì nữa — hàm đó giờ chỉ
+> dùng để **phân mức cảnh báo** khi VPN tắt (có IPv6 = đang lộ IP thật; không có = chỉ lỗi mạng).
+>
+> **Bài học chung:** một tài nguyên **dùng chung cấp máy** (IP, VPN, cổng mạng) thì không thể "sửa
+> cho riêng một đơn vị công việc". Trước khi tự động hoá thao tác trên tài nguyên đó, phải hỏi
+> *"ai khác đang dùng nó, và việc mình làm ảnh hưởng họ thế nào?"* — không chỉ hỏi *"việc này có
+> chữa được vấn đề trước mắt không?"*.
+>
+> ### Vì sao DỪNG rồi BẬT LẠI, không "tạm dừng tại chỗ"
+>
+> Backend vốn đã có backoff 5/15/30 tại chỗ, nhưng dựng lại context thì hơn: trang feed mới, cookie
+> nạp lại, vân tay áp lại → TikTok thấy một phiên **mở mới** thay vì một phiên đang bị siết cố cào
+> tiếp. Và bật lại đi qua `waitForCorrectCountry` (ip-guard, QĐ-17) nên VPN tụt lúc không ai trông
+> thì profile **tự chờ đúng vùng**, không chạy sai nước. "Tạm dừng tại chỗ" không có bước này.
+>
+> ⚠️ Việc dừng này **đè lên** logic cũ của backend: chế độ chu kỳ không còn cắt sang pha Xem, chế độ
+> khác không còn backoff tại chỗ.
+>
+> ### Các chốt an toàn (đều có test)
+>
+> | Chốt | Vì sao |
+> |---|---|
+> | Bấm **■ Dừng** lúc đang chờ → **huỷ** mọi hẹn | Người dùng đã tiếp quản; không huỷ thì app tự bật lại đúng profile họ vừa tắt |
+> | Bấm **▶ Chạy** lúc đang chờ → chạy ngay, **giữ `streak`** | Vẫn bị cắt tiếp thì lần nghỉ sau phải dài hơn |
+> | Tới giờ mà **VPN đang tắt** → không bật, kiểm lại mỗi **5 giây** | Bật lên là chạy bằng IP thật. 5 giây vì VPN tắt do người dùng nên có thể hết bất cứ lúc nào |
+> | Đổi IP **thất bại** → hẹn thử lại **cả nhóm** | Người dùng treo máy; bỏ mặc nhóm ở trạng thái dừng = mất cả đêm |
+> | App đang tự đổi IP → **bộ canh HMA đứng ngoài** | Hai đường cùng bật một nhóm = bật 2 lần |
+> | Đếm ngược **hiện ra badge** từng giây | Vòng chờ im lặng luôn bị báo là "app treo" (QĐ-21) — mà đây chờ tới 30 phút |
+> | Chờ backend xác nhận **dừng sạch** trước khi tắt VPN | Không tin `runningSet` của renderer (bài học đồng bộ trạng thái 2026-07-28) |
+>
+> **Kiểm chứng:** `test/vpn-run-lock.test.js` **71 khẳng định** + `test/starve-restart.test.js`
+> **41 khẳng định**. Cả hai đã kiểm có "cắn": bỏ `api.profilesStopAll()` trong bộ canh → 3 khẳng
+> định trượt; bỏ dòng đặt hẹn tự-bật-lại → 20 khẳng định trượt.
+
+---
+
+### (Lưu trữ) Thiết kế và các phép đo — vẫn đúng, đọc để hiểu tại sao làm thế
 
 **Người dùng chốt (2026-08-05), ngay sau QĐ-31:** *"Nếu tiktok block cuộn xuống thì sẽ dừng
 profile đó và tắt HMA VPN đi rồi bật lại và tự chạy lại profile đó"*. QĐ-31 chỉ phát hiện đúng
@@ -1751,7 +1820,40 @@ một vấn đề đã có (`30.8/phút`) thành vấn đề nghiêm trọng (`2
 một đoạn đang **giữ tài nguyên dùng chung**, phải tính lại **thông lượng**, không chỉ tính "tốn thêm
 mấy giây cho một link". Câu hỏi đúng là *"cái này giữ tài nguyên chung bao lâu, và ai đang chờ?"*.
 
-**Quyết định 3 — trần chờ API 20s → 8s.** Đo được đây mới là phần **TỐN NHẤT**: trang lỗi thì
+### Bổ sung (2026-08-06): hai CHẾ ĐỘ ĐẾM, chọn theo từng máy
+
+**Vì sao có công tắc thay vì chọn một cách.** Người dùng chạy **cùng một file `.exe`** trên 5 máy,
+mà máy chính (mạnh) và máy ảo (yếu) cần đánh đổi **ngược nhau**. Họ nhìn mô tả quy trình của một máy
+đang chạy **v0.1.63** rồi yêu cầu *"setup quy trình check số video của máy kia vào máy này"*. Sửa
+code là đổi **cả 5 máy** — đúng thứ vừa gây đứng feed trên VPS. Nên biến nó thành **cài đặt riêng
+từng máy** (`count_mode` trong electron-store, chọn ở ⚙):
+
+| Chế độ | Chờ API | Ngân sách đọc giao diện | Số lượt | Dùng cho |
+|---|---|---|---|---|
+| `fast` **(mặc định)** | 8s | 2.5s / 5s — **trần cứng** | 2 (có thử lại) | Máy ảo / máy yếu |
+| `patient` | 20s | 30s | 1 (không thử lại) | Máy mạnh — đúng khuôn v0.1.63 |
+
+**Mặc định là `fast`** vì hai hướng chọn sai không đối xứng: sai ở máy mạnh chỉ **mất chút cơ hội**
+đọc được link chậm; sai ở máy yếu là **ĐỨNG FEED** (đo thật: 1 sound lỗi chiếm slot đếm toàn app
+~28 giây → thông lượng ~4 sound/phút trong khi vòng quét cần ~20 → hàng đợi đầy vĩnh viễn).
+
+⚠️ **Một điểm KHÔNG sao chép nguyên văn v0.1.63:** bản đó đọc giao diện bằng *"6 vòng × 500ms"*, mà
+mỗi lần đọc có trần riêng 5 giây → vòng đó **không có trần thật** (máy yếu trôi tới 30 giây).
+`patient` dùng **ngân sách 30 giây**: trên máy mạnh hành vi y hệt v0.1.63 (6 vòng × ~550ms ≈ 3.3s là
+xong), còn máy yếu thì có trần thay vì trôi tự do. **Cố ý không dựng lại vòng không trần** — chính
+nó là bug.
+
+Thông số được **chốt một lần cho mỗi sound** (`const cfg = _countCfg()`), nên đổi cài đặt giữa dòng
+không làm sound đang chạy đổi luật. Biến môi trường (`TTC_COUNT_API_MS`, `TTC_COUNT_ATTEMPTS`,
+`TTC_COUNT_RETRY_MS`) vẫn **ghi đè** chế độ — để soi lỗi không cần vào ⚙.
+
+**Kiểm chứng:** `crawl-modes.test.js` kiểm **hành vi thật**, không chỉ đọc hằng số: cùng một kịch bản
+(lượt 1 `statusCode` lạ, lượt 2 API tốt) thì `patient` **mất sound vào tab chờ** còn `fast`
+**cứu được** với số đúng `4321`. Đó là bằng chứng công tắc có tác dụng, không phải cài đặt trang trí.
+
+---
+
+**Quyết định 3 — trần chờ API 20s → 8s** *(áp cho chế độ `fast`)*. Đo được đây mới là phần **TỐN NHẤT**: trang lỗi thì
 `api/music/detail/` **không bao giờ chạy**, nên mỗi lượt đốt trọn 20 giây mà không thu được gì —
 2 lượt = 40s/sound. 8 giây là dư: `waitForResponse` đăng ký **trước** `goto`, mà trang tự gọi API
 ngay lúc tải nên response bình thường về trong ~1s. Đoán sai cũng chỉ rơi xuống bước đọc giao diện,
@@ -1774,6 +1876,46 @@ ngay lúc tải nên response bình thường về trong ~1s. Đoán sai cũng c
 ⚠️ **Bài học lặp lại LẦN THỨ HAI trong cùng một ngày:** vá xong "ngân sách DOM" tôi tưởng đã xong,
 mà **chưa đo lại toàn bộ đường đi** — nên bỏ sót `waitForResponse` 20s, vốn là phần lớn nhất
 (40/132 giây). Phải **đo lại cả đường đi sau mỗi lần vá**, không chỉ đo phần vừa sửa.
+
+### Bổ sung (2026-08-06): NHỊP CUỘN TỰ GIÃN + phát hiện kẹt theo THỜI GIAN
+
+Ba bản vá trên làm bước đếm **nhanh hơn**, nhưng cổ chai vẫn còn thật. Người dùng yêu cầu tiếp:
+*"tránh bị đứng feed, nếu đứng thì bạn phải có cách để nó cuộn tiếp"*. Hai thay đổi:
+
+**1. Thay ngưỡng BẬT/TẮT bằng GIÃN DẦN.** Trước đây vòng quét chạy **hết tốc** cho tới lúc hàng đợi
+đầy `20/20` rồi **ĐỨNG HẲN** ở nhánh chờ. Chính hành vi bật/tắt đó là hiện tượng "đứng feed" — không
+phải TikTok chặn. Giờ nghỉ giữa 2 lần cuộn **nhân theo áp lực hàng đợi**:
+
+| Hàng đợi | Hệ số | Delay thực (gốc 2–4s) | Nhịp quét tối đa |
+|---|---|---|---|
+| < 50% | ×1 | 2–4s | 20 sound/phút |
+| 75% | ×2.5 | 5–10s | 8 sound/phút |
+| 100% | ×4 | 8–16s | 5 sound/phút |
+
+Vòng quét **tự khớp tốc độ** với bước đếm (chế độ `fast` cho ~11–13 sound/phút) nên **hiếm khi tới
+ngưỡng đầy**. Vì sao đây là cách đúng: bước đếm là cổ chai **có thật**, không xoá được — nhưng "chậm
+dần" giữ feed **luôn chuyển động**, vừa không mất sound nào (khác với cuộn qua mà không thu), vừa
+không để một video mở đứng hàng phút (bản thân việc đó cũng là tín hiệu bất thường với TikTok).
+⚠️ **Vẫn giữ ngưỡng đầy** làm chốt chống hàng đợi phình vô hạn — chỉ là giờ rất ít khi tới.
+
+**2. Phát hiện kẹt phải có TRẦN THỜI GIAN, không chỉ đếm lần.** Hệ quả trực tiếp của thay đổi 1:
+nhịp giãn tới ×4 nghĩa là 20 lần đọc có thể mất **tới 5 phút** mới tới ngưỡng — quá chậm. Thêm điều
+kiện: **ở trên cùng 1 sound quá 90 giây** (và đã đọc ít nhất 5 lần) cũng là kẹt.
+
+- Đòi **tối thiểu 5 lần đọc** vì người dùng có thể đặt delay rất lớn (30s) — kết luận từ 1–2 lần đọc
+  là báo oan.
+- ⚠️ **Cố ý đo "cùng 1 sound bao lâu", KHÔNG đo "bao lâu không có sound MỚI"**: người dùng đã nạp
+  173.000 link để lọc trùng nên feed khoẻ vẫn có thể hàng phút không ra sound mới — đo cái đó là báo
+  oan hàng loạt. Đây đúng bài học mà chính bộ tracker này đã ghi ở đầu file.
+- ⚠️ `clearStuck()` phải reset **cả đồng hồ**. Không reset thì sau lần can thiệp đầu, vòng đọc kế
+  tiếp đã "quá 90s" → báo kẹt ngay → cách vừa thử không có cơ hội tỏ hiệu quả. Đúng cái bẫy mà chú
+  thích `clearStuck()` đã cảnh báo với `lastHref`.
+
+**Kiểm chứng:** đã kiểm cả hai có "cắn" — bỏ hệ số giãn nhịp → 1 khẳng định trượt; bỏ điều kiện thời
+gian → 2 khẳng định trượt. Test kiểm cả **đường không báo oan** (2 lần đọc dù đã quá 90s → không báo)
+và **đường `clearStuck` reset đồng hồ**.
+
+---
 
 **Kiểm chứng:** `crawl-modes.test.js` có **spy trên semaphore** kiểm cả hai chiều — xin/nhả phải
 **cân bằng** (nhả thừa làm semaphore tưởng còn chỗ → hơn 2 request `/music/` song song, đúng thứ
@@ -1882,3 +2024,30 @@ ngủ). Đã kiểm test có "cắn": bỏ dòng nhả slot → 2 khẳng địn
 | Vá xong một phần rồi tưởng đã xong, không đo lại TOÀN BỘ đường đi | Vá "ngân sách DOM" xong mà bỏ sót `waitForResponse` 20s — vốn chiếm 40/132 giây, tức phần LỚN NHẤT. Sai lần thứ hai trong cùng một ngày. Sau mỗi lần vá phải **đo lại cả đường đi**, không chỉ phần vừa sửa — xem QĐ-34 |
 | Đặt trần chờ dài cho thứ có thể KHÔNG BAO GIỜ xảy ra | Trang lỗi thì `api/music/detail/` không bao giờ chạy → `waitForResponse` đốt trọn 20s mỗi lượt, không thu được gì. Trần phải đặt theo "bao lâu thì coi như KHÔNG có", không phải "bao lâu thì chắc chắn có" — xem QĐ-34 |
 | Để tính năng "nice-to-have" chạy cả khi hệ thống đang tắc | Thử lại là thứ đáng có, nhưng lúc hàng đợi đầy thì nó làm **feed đứng hẳn**. Tính năng phụ phải biết tự nhường khi tài nguyên khan — kiểm `soundQueue.length` trước khi thử lại — xem QĐ-34 |
+| Cho một tab Sheet chỉ nạp danh sách lọc trùng MỘT LẦN đầu phiên | Chạy nhiều máy thì máy này không bao giờ thấy dòng máy kia ghi **sau đó** → mỗi máy đều tưởng link còn mới và ghi thêm một dòng. Tab chờ mắc đúng lỗi này suốt (ảnh người dùng: tab chờ đầy dòng trùng) trong khi tab chính không bị, vì tab chính có **đọc tăng dần + đọc lại ngay trước khi ghi** (QĐ-09). Thêm tab mới thì phải mang theo CẢ BỘ cơ chế đó, không chỉ bước nạp đầu phiên |
+| Cho phép ghi lên Sheet khi CHƯA nạp được danh sách link cũ | Không biết link nào đã có thì ghi chỉ để tạo trùng. Một lần đọc Sheet thất bại (mạng chớp) là cả phiên ghi lại từ đầu. Tab chính có cổng `_seeded`; tab chờ ban đầu **thiếu** cổng đó — phải có ở mọi đường ghi |
+| Đổi tên tab mà chỉ xoá bộ nhớ link, quên xoá MỐC DÒNG | Mốc cũ (vd 500) làm lần đọc đầu của tab mới bỏ qua 500 dòng đầu → mọi link trong đó bị coi là mới → ghi trùng hàng loạt |
+| Trả `rows` (lô gốc) về buffer khi ghi lỗi, thay vì lô ĐÃ THỬ GHI | Những dòng vừa bị lọc bỏ vì máy khác ghi trước sẽ được đưa trở lại hàng chờ rồi thử ghi trùng lần nữa. Phải trả đúng `toWrite` |
+| Giả lập lỗi mạng trong test bằng cách gán lại thuộc tính hàm của module | `sheets.cjs` **destructure** `httpRequest` lúc `require`, nên gán lại thuộc tính KHÔNG có tác dụng — test tưởng đã giả lập lỗi mà thực ra chạy đường bình thường. Phải điều khiển qua chính mock (`httpScript.readFails`) |
+| Kiểm "đọc tăng dần" bằng dữ liệu tab RỖNG | Tab rỗng thì mốc = dòng 1, mà đọc từ dòng 1 chính là đọc cả cột → không phân biệt được với "đọc lại toàn bộ". Phải có sẵn vài dòng để mốc > 1 (test phải thấy `!B4:B`) |
+| Đặt hẹn (setTimeout/interval) TRƯỚC khi `await` một hàm mà chính nó xoá hẹn | `handleFeedStarved` đặt hẹn tự-bật-lại rồi mới `await stopProfileById` thì chính `stopProfileById` xoá mất hẹn → profile dừng vĩnh viễn qua đêm mà không ai thấy. Phải đặt hẹn **sau** khi await xong — xem QĐ-32 |
+| Kiểm `runningSet` TRƯỚC khi huỷ hẹn trong `stopProfileById` | Lúc đang đếm ngược, profile **không** nằm trong `runningSet` → hàm return sớm, hẹn sống sót → app tự bật lại đúng profile người dùng vừa tắt. Phải huỷ hẹn ở **dòng đầu**, trước mọi `return` — xem QĐ-32 |
+| Xoá bộ đếm "số lần liên tiếp" mỗi lần dừng | Lần nào cũng nghỉ 5 phút, không bao giờ giãn lên 15/30 → thử dày trong lúc TikTok đang siết nặng. `streak` phải sống qua lần dừng, chỉ xoá khi **thu được sound hợp lệ** |
+| Dùng status `running` làm bằng chứng "feed đã hồi" | Status đó còn phát trong cả lúc thoát kẹt/backoff nên không chứng minh được gì. Bằng chứng đúng là **`crawl-data`** — một sound đã qua bộ lọc |
+| Dùng `process.env` trong renderer | Renderer chạy sandbox (contextIsolation) → `process` không tồn tại → ReferenceError làm **chết cả giao diện**. Hằng số phải viết thẳng, muốn điều chỉnh thì qua electron-store |
+| `Math.round(ms / 60000)` để hiện khoảng thời gian | Mọi khoảng dưới 30 giây thành **"0 phút"** — vô nghĩa. Dùng `formatCountdown` đã có (dùng chung với chip pha chu kỳ). Test bắt được đúng lỗi này |
+| Đặt thang thời gian trong test NGẮN HƠN nhịp bộ đếm | Bộ đếm chạy mỗi **1 giây**, nên thang 300/600/900ms không bao giờ tới hạn → **12 khẳng định trượt** vì test sai chứ không phải code sai. Thang test phải > nhịp đếm |
+| Hẹn kiểm lại thưa (30s) cho điều kiện do NGƯỜI DÙNG gây ra | VPN tắt là do người dùng nên có thể hết bất cứ lúc nào; hẹn 30s làm profile nằm chờ vô ích sau khi VPN đã lên. 5 giây đủ nhạy mà không tốn gì (chỉ đọc một cờ trong bộ nhớ) |
+| Cho phép "chỉ dừng 1 profile" khi thao tác trên tài nguyên CẢ MÁY (IP/VPN) | Phép đo IPv6 chỉ che được **một** trong hai vấn đề. Vấn đề còn lại — profile khác đang quét bị **đổi IP giữa phiên** — xảy ra kể cả khi không có IPv6 nào, và đúng khuôn "tài khoản bị chiếm" (QĐ-15). Một tuỳ chọn mà bật lên là tự hại thì **không nên tồn tại** — xoá hẳn, đừng để làm tuỳ chọn — xem QĐ-32 |
+| Chỉ CẢNH BÁO khi phát hiện trạng thái nguy hiểm (VPN tắt mà profile còn chạy) | Người dùng **treo máy** — không ai đọc cảnh báo. Mỗi giây profile còn chạy là một giây gửi request bằng IP THẬT. Phát hiện được thì phải **hành động** (dừng hết), cảnh báo chỉ là phần bổ sung — xem QĐ-32 |
+| Đặt khối test mới SAU `await browser.close()` | Mọi `page.evaluate` sau đó báo `Target page, context or browser has been closed` — thông báo không nói gì về nguyên nhân thật. Kiểm vị trí trước khi chèn |
+| Tin `node --check` là đủ cho renderer | Nó chỉ bắt **cú pháp**, không bắt `ReferenceError` lúc chạy — mà renderer lỗi là **chết cả giao diện**, không có stack nào hiện ra ngoài. Phải có bước kiểm tĩnh: mọi biến/hàm/`api.*` được tham chiếu đều thật sự tồn tại (và không dùng `process`/`require` trong sandbox) |
+| Sửa CODE khi người dùng muốn đổi hành vi của MỘT máy | Cùng một `.exe` chạy trên cả 5 máy → sửa code là đổi hết. Nếu hai loại máy cần đánh đổi **ngược nhau** (máy mạnh muốn kiên nhẫn, máy yếu cần nhanh) thì phải làm **cài đặt riêng từng máy**, không phải chọn một cách rồi áp cho tất cả — xem QĐ-34 |
+| Đặt mặc định cho một công tắc theo "cái nào tốt hơn" | Phải xét **hai hướng chọn sai có đối xứng không**. Ở đây: sai ở máy mạnh chỉ mất chút cơ hội; sai ở máy yếu là **ĐỨNG FEED**. Nên mặc định phải là cái an toàn cho máy yếu, dù máy mạnh có thể tốt hơn với cái kia — xem QĐ-34 |
+| Sao chép nguyên văn hành vi cũ khi chính nó là bug | v0.1.63 đọc giao diện bằng "6 vòng × 500ms" mà mỗi vòng có trần riêng 5s → **không có trần thật**. Chế độ `patient` dùng ngân sách 30 giây: giống v0.1.63 trên máy mạnh, nhưng có trần trên máy yếu. Sao chép y nguyên là dựng lại bug — xem QĐ-34 |
+| Test công tắc bằng cách đọc hằng số trong mã nguồn | Chỉ chứng minh "hằng số có mặt", không chứng minh công tắc **có tác dụng**. Phải kiểm hành vi: cùng một kịch bản, hai chế độ cho **kết quả khác nhau** (`patient` mất sound, `fast` cứu được) — xem QĐ-34 |
+| Xử lý áp lực tài nguyên bằng ngưỡng BẬT/TẮT (chạy hết tốc → dừng hẳn) | Đúng là hiện tượng "app treo/đứng feed" mà người dùng báo. Dùng **giãn dần** theo mức áp lực: hệ thống tự khớp tốc độ với cổ chai và **luôn chuyển động**. Giữ ngưỡng cứng chỉ làm chốt cuối — xem QĐ-34 |
+| Đổi nhịp vòng lặp mà không xét lại các NGƯỠNG ĐẾM LẦN phụ thuộc nhịp đó | Nhịp cuộn giãn tới ×4 làm ngưỡng "20 lần đọc" mất tới 5 phút mới tới — bộ phát hiện kẹt phản ứng chậm gấp 4. Mỗi khi đổi nhịp, phải soát mọi ngưỡng đếm-lần và thêm trần **thời gian** — xem QĐ-34 |
+| Phát hiện kẹt bằng "bao lâu không có dữ liệu MỚI" | Feed khoẻ vẫn có thể hàng phút không ra sound mới vì lọc trùng 173.000 link → báo oan hàng loạt. Phải đo "**cùng một** dữ liệu lặp lại bao lâu" — xem QĐ-34 |
+| Reset bộ đếm sau khi can thiệp mà quên reset ĐỒNG HỒ đi kèm | Vòng đọc kế tiếp đã "quá hạn" → báo kẹt ngay → cách vừa thử không có cơ hội tỏ hiệu quả. Mọi trần thời gian đều phải được reset cùng bộ đếm — xem QĐ-34 |
+| Dùng biến `const` khai báo PHÍA DƯỚI trong cùng hàm test | `ReferenceError: Cannot access 'src' before initialization` (vùng chết TDZ). Trong file test dài, khối mới thêm ở giữa dễ vướng — đọc lại nguồn vào biến riêng thay vì mượn biến có sẵn |
