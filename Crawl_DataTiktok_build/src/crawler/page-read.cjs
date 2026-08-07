@@ -38,7 +38,10 @@ async function readActiveSound(page) {
 // Đọc text số "X videos" trên trang /music/... (vd "31.5K", "8").
 // Đây là ĐƯỜNG DỰ PHÒNG: đường chính là nghe response api/music/detail/ (xem QĐ-06) vì
 // API cho số chính xác (88100) thay vì text đã làm tròn ("88.1K").
-async function readVideoCount(page) {
+// `timeoutMs`: trần cho MỘT lần gọi. Nơi gọi có ngân sách tổng (COUNT_DOM_BUDGET_MS) nên phải
+// truyền vào được — để mặc định 5s thì MỘT lần gọi đã vượt cả ngân sách 2.5s, tức ngân sách chỉ
+// là hình thức (bài học 2026-08-06, xem QĐ-34).
+async function readVideoCount(page, timeoutMs = 5000) {
   const evalPromise = page.evaluate(() => {
     const els = document.querySelectorAll('h1,h2,h3,strong,p,span,div');
     for (const el of els) {
@@ -51,7 +54,7 @@ async function readVideoCount(page) {
   });
   return Promise.race([
     evalPromise.catch(() => null),
-    new Promise(resolve => setTimeout(() => resolve(null), 5000)),
+    new Promise(resolve => setTimeout(() => resolve(null), timeoutMs)),
   ]);
 }
 

@@ -722,3 +722,57 @@ miễn còn đăng ký native messaging host bình thường (không gỡ/cài l
 của HMA).
 
 ---
+
+---
+
+## 19. Feed ĐỨNG YÊN ở 1 video trên máy ảo, mà KHÔNG hề bị TikTok chặn
+
+**Triệu chứng** (người dùng báo 2026-08-06): máy ảo *"cứ dừng mãi ở 1 video"*, link sound trên tab
+đếm không đổi, cột **Quét** đứng yên. Máy chính chạy bình thường. Trang feed **không** hiện lỗi gì.
+
+**Đây thường KHÔNG phải TikTok chặn — mà là app tự hãm mình.**
+
+### Cách xác nhận trong 10 giây
+
+Mở **log 📄** của profile đó, tìm dòng:
+
+```
+Tạm dừng cuộn — chờ đếm số video cho 20 sound đang xếp hàng...
+```
+
+Thấy dòng này = **đúng bệnh**: vòng quét đang bị chặn bởi hàng đợi đầy, **không phải** feed bị siết.
+Không thấy = xem [mục 16 (feed cạn)](#16-feed-cạn--tiktok-không-cấp-thêm-video-cho-profile-này).
+
+### Vì sao
+
+Bước đếm số video có **2 slot dùng chung cho CẢ APP** (mọi profile). Trên máy yếu, mỗi lần
+`page.evaluate` mất cả giây, nên một link lỗi có thể **giữ slot rất lâu**. Thông lượng đếm tụt
+xuống dưới nhịp cuộn → hàng đợi (tối đa 20) đầy vĩnh viễn → vòng quét **cố tình dừng cuộn** để chờ.
+Đây là cơ chế có chủ đích (QĐ-21), nhưng khi bước đếm quá chậm thì nó biểu hiện như "app treo".
+
+Nặng nhất là khi TikTok trả **trang lỗi**: lúc đó `api/music/detail/` **không bao giờ chạy**, nên
+app ngồi chờ hết trần rồi mới bỏ cuộc. Đo trên đúng ca người dùng gặp — 4 profile, mỗi profile 20
+sound xếp hàng ([QĐ-34](DECISIONS.md)):
+
+| Bản | s/sound | Tiêu hết 80 sound |
+|---|---|---|
+| **v0.1.64** | 132.5s | **88 phút** ← đúng cái bạn thấy |
+| v0.1.65 | **10.5s** | **7 phút** |
+
+Ba thứ được sửa ở v0.1.65:
+1. Trần chờ API `20s → 8s` (phần tốn nhất — 40/132 giây)
+2. Trần đọc giao diện tính bằng **đồng hồ** (2.5s/5s) thay vì đếm vòng, và truyền trần vào **từng**
+   lần gọi
+3. **Hàng đợi quá nửa → bỏ lượt thử lại**, ưu tiên cho feed chạy tiếp (link vẫn vào tab chờ)
+
+### Nếu vẫn chậm trên máy quá yếu
+
+| Cách | Làm gì | Đánh đổi |
+|---|---|---|
+| **Tắt thử lại** | Đặt biến môi trường `TTC_COUNT_ATTEMPTS=1` rồi chạy app | Link lỗi tạm thời không được cứu → vào tab chờ nhiều hơn |
+| **Nới delay cuộn** | ⚙ Cài đặt crawl → tăng delay lên 4–8s | Quét chậm hơn, nhưng bước đếm theo kịp → không còn đứng |
+| **Giảm số profile/máy** | Chạy 2–3 profile thay vì 5 | Ít sản lượng mỗi máy, nhưng mượt hơn |
+| **Bỏ tick "Hiện tab đếm"** | ⚙ → tắt *"Hiện cửa sổ tab đếm (chẩn đoán)"* | Không xem được tab đếm; đổi lại nhẹ CPU |
+
+⚠️ **Đừng** tăng "số luồng đếm video" để chữa: đó là số request `/music/` **đồng thời tới cùng một
+IP**, tăng lên là tự chuốc lấy việc bị TikTok chặn — đúng thứ QĐ-21 sinh ra để tránh.

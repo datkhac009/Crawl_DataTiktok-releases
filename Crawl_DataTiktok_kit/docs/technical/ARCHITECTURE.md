@@ -198,6 +198,7 @@ sound với 2 kiểu slug khác nhau không còn bị tính là 2 sound.
 | Trần hàng đợi | Tối đa 500 sound chờ; đầy thì tạm ngừng cuộn |
 | Điều tiết đếm toàn cục | Giới hạn số request `/music/` đồng thời (mặc định 2) + giãn nhịp |
 | Nghỉ khi bị chặn | 3 lần lỗi liên tiếp → nghỉ 30s → 2 phút → 5 phút (có nhiễu ngẫu nhiên) |
+| **Trần thời gian đọc giao diện** | 2.5s (lượt 1) / 5s (lượt 2) tính bằng **đồng hồ**, không đếm vòng — giữ slot đếm quá lâu làm hàng đợi đầy → vòng quét đứng → **feed ngừng cuộn** ([QĐ-34](DECISIONS.md)) |
 | Giữ sound khi bị chặn | Từ lần lỗi thứ 3, sound được trả về đầu hàng đợi thay vì bỏ (tối đa 3 vòng) |
 | Hộp đen | Ghi lý do khi tiến trình con chết + nhịp bộ nhớ mỗi 5 phút vào `logs/` |
 

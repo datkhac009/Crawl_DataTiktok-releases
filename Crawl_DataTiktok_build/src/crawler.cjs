@@ -114,6 +114,18 @@ const STARVE_WAITS = process.env.TTC_STARVE_RETRY_MS
 // mất (hoặc 1 dòng phải kiểm tay). Đặt 1 là tắt hẳn việc thử lại, không cần build lại.
 const COUNT_READ_ATTEMPTS = Math.max(1, Number(process.env.TTC_COUNT_ATTEMPTS) || 2);
 const COUNT_RETRY_WAIT_MS = Math.max(0, Number(process.env.TTC_COUNT_RETRY_MS) || 2500);
+// TRẦN THỜI GIAN đọc giao diện (bước 2) cho từng lượt — tính bằng ĐỒNG HỒ, không đếm vòng.
+// Vì sao phải là đồng hồ: mỗi `readVideoCount` có trần riêng 5 giây, nên "6 vòng" trên máy yếu
+// có thể thành 30 giây, mà suốt thời gian đó nó giữ 1 trong 2 slot đếm TOÀN APP → hàng đợi đầy
+// → vòng quét đứng → feed ngừng cuộn (sự cố máy ảo 2026-08-06, xem chú thích tại chỗ dùng).
+const COUNT_DOM_BUDGET_MS = [2500, 5000];
+// Trần chờ response `api/music/detail/`. TRƯỚC ĐÂY 20 GIÂY — đo được đây là phần TỐN NHẤT khi
+// TikTok trả trang lỗi: trang lỗi thì API **không bao giờ chạy**, nên mỗi lượt đốt trọn 20s mà
+// không thu được gì; 2 lượt = 40s/sound, chiếm phần lớn con số 132s/sound đo trên máy ảo.
+// 8 giây là dư: `waitForResponse` được đăng ký TRƯỚC `goto`, mà trang tự gọi API ngay lúc tải —
+// response bình thường về trong ~1s. Quá 8s sau khi trang đã dựng xong thì gần như chắc chắn
+// không có API nào cả. Đoán sai cũng chỉ rơi xuống bước đọc giao diện, không mất dữ liệu.
+const COUNT_API_WAIT_MS = Math.max(1000, Number(process.env.TTC_COUNT_API_MS) || 8000);
 
 // ── Vòng lặp crawl cho 1 profile (nhận cờ `stop` riêng) ──
 // `onPending` (QĐ-33): link TikTok trả "Something went wrong" — không đọc được số video nhưng
@@ -678,9 +690,9 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
       let dead = false;   // sound đã bị xóa/không tồn tại — KHÔNG phải bị chặn
       // XIN SLOT ĐẾM TOÀN CỤC: giới hạn số request /music/ đồng thời trên toàn app +
       // giãn nhịp → không dội IP khi chạy nhiều profile (nguyên nhân kẹt "nghỉ 300s").
-      const gotSlot = await acquireCountSlot(stop);
-      if (!gotSlot) break;   // đã yêu cầu dừng
       let oddStatus = null;  // statusCode TikTok trả về mà ta chưa biết nghĩa (để log — xem dưới)
+      let stopped = false;   // đã yêu cầu dừng giữa chừng → thoát hẳn countLoop
+      let holdingSlot = false;   // ĐANG giữ slot đếm hay không (nhả đúng 1 lần, xem finally)
       try {
         // ĐỌC QUA API (2026-07-06): trang /music/ tự gọi api/music/detail/ ngay khi tải.
         // Nghe response đó thay vì poll DOM: (a) có số CHÍNH XÁC (videoCount=88100 thay vì
@@ -692,20 +704,41 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
         // THỬ LẠI TRỌN VÒNG (2026-08-06, COUNT_READ_ATTEMPTS): xem lý do ở chỗ khai hằng số.
         // KHÔNG mâu thuẫn QĐ-07 ("không retry"): QĐ-07 chặn việc GHI SỐ KHÔNG CHẮC vào dữ liệu
         // — thử lại rồi đọc được SỐ THẬT không tạo dữ liệu bẩn nào.
-        // GIỮ NGUYÊN slot đếm suốt các lượt (không nhả rồi xin lại): slot là để hãm nhịp request
-        // `/music/` từ một IP, nên lúc TikTok đang lỗi thì chậm lại là ĐÚNG hướng.
+        //
+        // ⚠ NHẢ SLOT TRONG LÚC CHỜ giữa 2 lượt (sửa 2026-08-06, cùng ngày). Bản đầu GIỮ NGUYÊN
+        // slot suốt các lượt với lý do "TikTok đang lỗi thì chậm lại là đúng hướng" — LÝ LẼ ĐÓ
+        // SAI, vì slot đếm là tài nguyên **TOÀN APP** (chỉ 2 slot cho mọi profile), không phải
+        // của riêng sound này. Giữ slot lúc ngủ = chặn cả 5 profile trên máy.
         for (let attempt = 1; attempt <= COUNT_READ_ATTEMPTS; attempt++) {
           if (stop.requested || raw !== null || dead) break;
+          // ── CHỈ THỬ LẠI KHI CÒN THỪA SỨC (2026-08-06) ──
+          // Thử lại là thứ ĐÁNG CÓ nhưng KHÔNG đáng đánh đổi việc feed đứng hẳn. Khi hàng đợi đã
+          // quá nửa, bước đếm chính là cổ chai — lúc đó thử lại làm mọi thứ tệ đi: vòng quét bị
+          // chặn ở nhánh chờ hàng đợi và feed NGỪNG CUỘN (đo thật trên máy ảo: 4 profile đứng
+          // yên 8 phút, hàng đợi đầy 20/20 cả 4).
+          // Bỏ lượt 2 KHÔNG mất link: nó vẫn vào TAB CHỜ, và link ở tab chờ vẫn được thử lại ở
+          // phiên sau (QĐ-33). Đổi lại feed chạy tiếp — quét được sound mới đáng giá hơn.
+          if (attempt > 1 && soundQueue.length >= QUEUE_MAX / 2) {
+            onStatus(profile.id, 'running',
+              `"${item.name}": bỏ lượt thử lại vì đang tắc hàng đợi (${soundQueue.length}/${QUEUE_MAX})`
+              + ' — ưu tiên cho feed chạy tiếp, link vẫn vào tab chờ.');
+            break;
+          }
           if (attempt > 1) {
             onStatus(profile.id, 'running', `"${item.name}": TikTok trả trang lỗi`
               + ` — thử lại lượt ${attempt}/${COUNT_READ_ATTEMPTS}...`);
+            if (holdingSlot) { releaseCountSlot(); holdingSlot = false; }
             await interruptibleSleep(COUNT_RETRY_WAIT_MS, stop);
-            if (stop.requested) break;
+            if (stop.requested) { stopped = true; break; }
+          }
+          if (!holdingSlot) {
+            if (!await acquireCountSlot(stop)) { stopped = true; break; }
+            holdingSlot = true;
           }
           try {
             // Đăng ký nghe TRƯỚC khi điều hướng để không lỡ response.
             const respPromise = sidePage
-              .waitForResponse(r => r.url().includes('/api/music/detail/'), { timeout: 20000 })
+              .waitForResponse(r => r.url().includes('/api/music/detail/'), { timeout: COUNT_API_WAIT_MS })
               .catch(() => null);
             await sidePage.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
             const resp = await respPromise;
@@ -732,26 +765,40 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
             }
             // BƯỚC 2: API không có kết quả → đọc GIAO DIỆN (DOM) trên trang vừa tải.
             //
-            // KIÊN NHẪN TĂNG DẦN theo lượt (2026-08-06): lượt 1 chờ 3s như cũ, lượt 2 chờ 6s.
-            // Lý do: người dùng chỉ đúng nguyên nhân — **VPS yếu nên không dựng nổi trang**. Cùng
-            // một link, VPS hiện "Something went wrong" còn máy chính hiện `262K video`. Máy chậm
-            // thì header có thể mất hơn 3s mới xong, mà 3s là toàn bộ ngân sách cũ.
-            // Vì sao không nâng cả lượt 1: trang lỗi THẬT sẽ luôn tiêu hết ngân sách, nâng cả 2
-            // lượt là mọi link lỗi đắt gấp đôi. Đã sang lượt 2 thì link vốn đã đáng ngờ → chờ
-            // thêm là hợp lý; còn lượt 1 phải nhanh để không kéo cả hàng đợi.
+            // ⚠ NGÂN SÁCH TÍNH BẰNG ĐỒNG HỒ, KHÔNG ĐẾM VÒNG (sửa 2026-08-06, cùng ngày).
+            // Bản đầu đếm vòng ("6 vòng × 500ms = 3s"). SAI trên máy yếu: mỗi `readVideoCount`
+            // có trần RIÊNG 5 giây, nên 6 vòng có thể thành **30 giây**, 12 vòng thành 60 giây —
+            // suốt thời gian đó nó GIỮ slot đếm **toàn app** (chỉ có 2 slot cho mọi profile).
+            //
+            // Hậu quả đo được (VPS lag ~800ms/evaluate): 1 sound lỗi chiếm slot ~28 giây →
+            // thông lượng đếm tụt còn ~4 sound/phút, trong khi vòng quét cuộn ra ~20 sound/phút
+            // → hàng đợi (QUEUE_MAX=20) đầy vĩnh viễn → vòng quét đứng ở nhánh chờ hàng đợi →
+            // **FEED NGỪNG CUỘN**. Đúng hiện tượng người dùng báo: "nó cứ dừng mãi ở 1 video"
+            // trên máy ảo trong khi máy chính bình thường.
+            //
+            // Đếm vòng thì chi phí phụ thuộc máy CHẬM ĐẾN ĐÂU; đếm giờ thì có trần cứng.
+            // Lượt 2 kiên nhẫn hơn vì link đã đáng ngờ, nhưng vẫn có trần.
             if (raw === null && !dead && !stop.requested) {
-              const rounds = attempt === 1 ? 6 : 12;
-              for (let i = 0; i < rounds && !stop.requested; i++) {
-                const t = await readVideoCount(sidePage);
+              const budget = COUNT_DOM_BUDGET_MS[Math.min(attempt - 1, COUNT_DOM_BUDGET_MS.length - 1)];
+              const until = Date.now() + budget;
+              while (!stop.requested) {
+                // Truyền trần cho TỪNG lần gọi = phần ngân sách còn lại. Không truyền thì mặc
+                // định 5s, tức MỘT lần gọi đã vượt ngân sách 2.5s → ngân sách chỉ là hình thức.
+                const t = await readVideoCount(sidePage, Math.max(500, until - Date.now()));
                 if (t) { raw = t; break; }
-                await sleep(500);
+                if (Date.now() + 400 >= until) break;   // hết ngân sách → thôi, đừng ngủ vô ích
+                await sleep(400);
               }
             }
           } catch (_) {}
         }
       } finally {
-        releaseCountSlot();
+        // Nhả ĐÚNG MỘT LẦN và chỉ khi thực sự đang giữ. Vòng thử lại nhả slot lúc ngủ rồi xin
+        // lại, nên nhả vô điều kiện ở đây sẽ nhả THỪA → semaphore tưởng còn chỗ → nhiều hơn 2
+        // request /music/ chạy song song, đúng thứ QĐ-21 sinh ra để chặn.
+        if (holdingSlot) { releaseCountSlot(); holdingSlot = false; }
       }
+      if (stopped) break;   // đã yêu cầu dừng giữa chừng
       // Chỉ báo khi thực sự KHÔNG đọc được — statusCode lạ mà lượt sau đọc ra số thì không cần ồn.
       if (oddStatus && raw === null && !dead && !stop.requested) {
         onStatus(profile.id, 'running',

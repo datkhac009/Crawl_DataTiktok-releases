@@ -1712,6 +1712,76 @@ chữ số thật** — hiện đang dùng đúng 2 ID lấy từ ảnh người
 
 ---
 
+## QĐ-34 — Bước đếm KHÔNG được giữ slot toàn cục quá lâu: đó là gốc rễ của "feed ngừng cuộn" trên máy ảo
+
+**Hiện tượng người dùng báo (2026-08-06):** máy ảo *"cứ dừng mãi ở 1 video"*, link sound không đổi,
+**mà không hề bị TikTok chặn**. Máy chính thì bình thường. Họ tự chẩn đúng một nửa: *"tại vì nó
+không cuộn lướt video nữa"*.
+
+**Chuỗi nhân quả (đo bằng số, không đoán):**
+
+```
+readVideoCount có trần RIÊNG 5s mỗi lần gọi
+   → "6 vòng × 500ms" KHÔNG phải 3s: trên máy chậm là tới 30s (12 vòng → 60s)
+   → suốt thời gian đó GIỮ 1 trong 2 slot đếm TOÀN APP
+   → thông lượng đếm tụt còn 2–4 sound/phút (VPS lag)
+   → nhưng vòng quét cuộn ra ~20 sound/phút
+   → hàng đợi QUEUE_MAX=20 ĐẦY VĨNH VIỄN
+   → vòng quét đứng ở `while (soundQueue.length >= QUEUE_MAX)`
+   → FEED NGỪNG CUỘN
+```
+
+| Máy | Trước | Sau |
+|---|---|---|
+| Khoẻ (`evaluate` ~50ms) | 14.2s giữ slot → 8.5 sound/phút | 9.3s → **12.9/phút** |
+| VPS lag (~800ms) | 27.7s → 4.3/phút | 9.3s → **12.9/phút** |
+| VPS rất lag (~2s) | 49.3s → **2.4/phút** | 9.3s → **12.9/phút** |
+
+**Quyết định 1 — ngân sách tính bằng ĐỒNG HỒ, không đếm vòng.** `COUNT_DOM_BUDGET_MS = [2500, 5000]`.
+Đếm vòng thì chi phí phụ thuộc *máy chậm đến đâu* — tức là **không có trần**. Đếm giờ thì có trần
+cứng, và đó chính là thứ làm cột "Sau" ở trên **bằng nhau ở mọi loại máy**.
+
+**Quyết định 2 — NHẢ slot trong lúc ngủ giữa 2 lượt thử lại.** Bản đầu (cùng ngày) giữ nguyên slot
+với lý lẽ *"TikTok đang lỗi thì chậm lại là đúng hướng"*. **Lý lẽ đó sai**: slot là tài nguyên
+**TOÀN APP** (2 slot cho mọi profile), không phải của riêng sound đó. Giữ slot lúc ngủ = chặn cả 5
+profile trên máy vì một link hỏng.
+
+⚠️ **Tự phê bình:** hai lỗi trên do **chính bản vá thử-lại của tôi cùng ngày** gây ra, và nó biến
+một vấn đề đã có (`30.8/phút`) thành vấn đề nghiêm trọng (`2.4/phút`). Bài học: khi thêm việc vào
+một đoạn đang **giữ tài nguyên dùng chung**, phải tính lại **thông lượng**, không chỉ tính "tốn thêm
+mấy giây cho một link". Câu hỏi đúng là *"cái này giữ tài nguyên chung bao lâu, và ai đang chờ?"*.
+
+**Quyết định 3 — trần chờ API 20s → 8s.** Đo được đây mới là phần **TỐN NHẤT**: trang lỗi thì
+`api/music/detail/` **không bao giờ chạy**, nên mỗi lượt đốt trọn 20 giây mà không thu được gì —
+2 lượt = 40s/sound. 8 giây là dư: `waitForResponse` đăng ký **trước** `goto`, mà trang tự gọi API
+ngay lúc tải nên response bình thường về trong ~1s. Đoán sai cũng chỉ rơi xuống bước đọc giao diện,
+**không mất dữ liệu**. Chỉnh được bằng `TTC_COUNT_API_MS`.
+
+**Quyết định 4 — TẮC HÀNG ĐỢI thì BỎ lượt thử lại.** Thử lại là thứ *đáng có* nhưng **không đáng
+đánh đổi việc feed đứng hẳn**. Khi hàng đợi đã quá nửa, bước đếm chính là cổ chai. Bỏ lượt 2
+**không mất link**: nó vẫn vào **tab chờ**, và link ở tab chờ vẫn được thử lại ở phiên sau (QĐ-33).
+Đổi lại feed chạy tiếp — quét được sound mới đáng giá hơn.
+
+**Toàn cảnh, đo trên đúng ca người dùng gặp** (TikTok trả trang lỗi; 4 profile × 20 sound chờ):
+
+| Bản | s/sound | sound/phút | Tiêu hết 80 sound |
+|---|---|---|---|
+| v0.1.64 (bản đang chạy trên máy ảo) | 132.5s | 0.9 | **88 phút** |
+| + ngân sách DOM bằng đồng hồ | 50.0s | 2.4 | 33 phút |
+| + trần chờ API 8s | 26.0s | 4.6 | 17 phút |
+| + tắc hàng đợi thì bỏ lượt 2 | **10.5s** | **11.4** | **7 phút** |
+
+⚠️ **Bài học lặp lại LẦN THỨ HAI trong cùng một ngày:** vá xong "ngân sách DOM" tôi tưởng đã xong,
+mà **chưa đo lại toàn bộ đường đi** — nên bỏ sót `waitForResponse` 20s, vốn là phần lớn nhất
+(40/132 giây). Phải **đo lại cả đường đi sau mỗi lần vá**, không chỉ đo phần vừa sửa.
+
+**Kiểm chứng:** `crawl-modes.test.js` có **spy trên semaphore** kiểm cả hai chiều — xin/nhả phải
+**cân bằng** (nhả thừa làm semaphore tưởng còn chỗ → hơn 2 request `/music/` song song, đúng thứ
+QĐ-21 sinh ra để chặn), và thử lại phải **xin slot 2 lần riêng biệt** (bằng chứng có nhả ra lúc
+ngủ). Đã kiểm test có "cắn": bỏ dòng nhả slot → 2 khẳng định trượt ngay.
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |
@@ -1805,3 +1875,10 @@ chữ số thật** — hiện đang dùng đúng 2 ID lấy từ ảnh người
 | Gộp "VPN đang tắt" và "đang đổi IP" thành cùng một nhãn nút | Hai ca người dùng phải xử **khác nhau** (bật lại HMA / chỉ cần chờ). Gộp là bắt họ đoán — xem QĐ-32 |
 | Tự dừng profile khi thấy người dùng tắt VPN | Họ đang **chủ động** điều khiển VPN; tự ý dừng profile của họ là vượt quyền. Chỉ **cảnh báo rõ số lượng** profile đang chạy bằng IP thật rồi để họ quyết — xem QĐ-32 |
 | Hàm trích mã nguồn cho test tìm `"function <tên>("` | Với `async function` nó **cắt mất chữ `async`** → thân hàm có `await` → SyntaxError → harness không nạp được, và Playwright báo `"T is not defined"` — thông báo chẳng liên quan gì tới nguyên nhân, tốn thời gian truy — xem QĐ-32 |
+| Đặt trần cho vòng lặp chờ bằng SỐ VÒNG khi mỗi vòng có trần riêng | "6 vòng × 500ms" nghe như 3s nhưng mỗi `readVideoCount` có trần riêng **5 giây** → thực tế tới **30 giây**. Chi phí phụ thuộc "máy chậm đến đâu" = **không có trần**. Đặt trần bằng **đồng hồ** — xem QĐ-34 |
+| Giữ tài nguyên DÙNG CHUNG (slot đếm) trong lúc `sleep` | Slot đếm là semaphore **toàn app** (2 slot cho mọi profile). Giữ nó lúc ngủ = một link hỏng chặn cả 5 profile. Đo thật: thông lượng tụt còn **2.4 sound/phút** trong khi vòng quét cần 20 → hàng đợi đầy → **feed ngừng cuộn** — xem QĐ-34 |
+| Thêm việc vào đoạn đang giữ tài nguyên chung mà chỉ tính "tốn thêm mấy giây cho 1 link" | Phải tính lại **THÔNG LƯỢNG** của cả hệ. Bản vá thử-lại làm 1 link đắt thêm ~7s nghe vô hại, nhưng biến thông lượng từ 30.8 → 2.4 sound/phút và làm feed đứng hẳn. Câu hỏi đúng: *"giữ tài nguyên chung bao lâu, và ai đang chờ?"* — xem QĐ-34 |
+| Nhả semaphore vô điều kiện trong `finally` khi thân hàm có nhả/xin lại giữa chừng | Nhả THỪA còn nguy hiểm hơn giữ lâu: semaphore tưởng còn chỗ → nhiều hơn 2 request `/music/` song song, đúng thứ QĐ-21 sinh ra để chặn. Dùng cờ `holdingSlot` tường minh — xem QĐ-34 |
+| Vá xong một phần rồi tưởng đã xong, không đo lại TOÀN BỘ đường đi | Vá "ngân sách DOM" xong mà bỏ sót `waitForResponse` 20s — vốn chiếm 40/132 giây, tức phần LỚN NHẤT. Sai lần thứ hai trong cùng một ngày. Sau mỗi lần vá phải **đo lại cả đường đi**, không chỉ phần vừa sửa — xem QĐ-34 |
+| Đặt trần chờ dài cho thứ có thể KHÔNG BAO GIỜ xảy ra | Trang lỗi thì `api/music/detail/` không bao giờ chạy → `waitForResponse` đốt trọn 20s mỗi lượt, không thu được gì. Trần phải đặt theo "bao lâu thì coi như KHÔNG có", không phải "bao lâu thì chắc chắn có" — xem QĐ-34 |
+| Để tính năng "nice-to-have" chạy cả khi hệ thống đang tắc | Thử lại là thứ đáng có, nhưng lúc hàng đợi đầy thì nó làm **feed đứng hẳn**. Tính năng phụ phải biết tự nhường khi tài nguyên khan — kiểm `soundQueue.length` trước khi thử lại — xem QĐ-34 |

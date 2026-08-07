@@ -19,6 +19,41 @@ const SRC = path.join(__dirname, '..', 'src');
 const browserPath = require.resolve(path.join(SRC, 'browser.cjs'));
 const profilesPath = require.resolve(path.join(SRC, 'profiles.cjs'));
 const ipGuardPath = require.resolve(path.join(SRC, 'ip-guard.cjs'));
+const throttlePath = require.resolve(path.join(SRC, 'crawler', 'count-throttle.cjs'));
+
+// ── Theo doi SLOT DEM (semaphore TOAN APP, chi 2 slot cho moi profile) ──
+// Vi sao phai theo doi: slot bi GIU trong luc ngu giua 2 luot thu lai => tren may ao yeu, 1
+// sound loi chiem slot toi 30-49 GIAY => thong luong dem tut duoi nhip cuon => hang doi day =>
+// vong quet dung o nhanh cho => FEED NGUNG CUON (loi that nguoi dung bao 2026-08-06).
+// Nha THUA cung nguy hiem khong kem: semaphore tuong con cho => hon 2 request /music/ song song,
+// dung thu QD-21 sinh ra de chan. Nen phai kiem CA HAI chieu.
+let slotLog = null;
+function installThrottleSpy() {
+  const real = require(throttlePath);
+  slotLog = { acquires: 0, releases: 0, held: 0, maxHeld: 0, heldDuringSleep: false };
+  const fake = {
+    ...real,
+    async acquireCountSlot(stop) {
+      const ok = await real.acquireCountSlot(stop);
+      if (ok) {
+        slotLog.acquires++;
+        slotLog.held++;
+        if (slotLog.held > slotLog.maxHeld) slotLog.maxHeld = slotLog.held;
+      }
+      return ok;
+    },
+    releaseCountSlot() {
+      slotLog.releases++;
+      slotLog.held--;
+      if (slotLog.held < 0) slotLog.heldDuringSleep = true;   // nha thua => am
+      return real.releaseCountSlot();
+    },
+  };
+  require.cache[throttlePath] = new Module(throttlePath, null);
+  require.cache[throttlePath].filename = throttlePath;
+  require.cache[throttlePath].loaded = true;
+  require.cache[throttlePath].exports = fake;
+}
 
 // ── Fake page: tra ve chuoi sound do kich ban quy dinh ──
 function makeFakePage(script) {
@@ -171,11 +206,12 @@ async function run({ name, mode, sounds, loginState, runMs, ipScript = ['ok'], p
   // Xoa cache crawler de moi kich ban co trang thai phien sach
   for (const k of Object.keys(require.cache)) {
     if (k.includes('crawler') || k.includes('browser.cjs') || k.includes('profiles.cjs')
-        || k.includes('ip-guard.cjs')) delete require.cache[k];
+        || k.includes('ip-guard.cjs') || k.includes('count-throttle.cjs')) delete require.cache[k];
   }
   const page = makeFakePage({ sounds, loginState, links, navButton, countApi, countDom });
   installMocks(page, profileName);
   installIpGuardMock(ipScript);
+  installThrottleSpy();
   const crawler = require(path.join(SRC, 'crawler.cjs'));
 
   const msgs = [];
@@ -200,7 +236,7 @@ async function run({ name, mode, sounds, loginState, runMs, ipScript = ['ok'], p
   await new Promise(r => setTimeout(r, runMs));
   crawler.stopProfile('p_test');
   await new Promise(r => setTimeout(r, 400));
-  return { name, msgs, data, pending, calls: page._calls };
+  return { name, msgs, data, pending, calls: page._calls, slots: slotLog };
 }
 
 // ── Cac kich ban ──
@@ -464,6 +500,50 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
   ok(retryOff.calls.musicGoto === 1,
     `TTC_COUNT_ATTEMPTS=1 -> TAT duoc viec thu lai (that: ${retryOff.calls.musicGoto})`);
   ok(retryOff.pending.length === 1, 'tat thu lai -> van vao tab cho nhu cu, khong mat link');
+
+  console.log('### KHANG DINH: TRAN CHO API va DOM phai co gioi han THAT');
+  // Tren may ao, TikTok tra trang loi => API `api/music/detail/` KHONG BAO GIO chay => moi luot
+  // dot tron tran cho. Tran 20s x 2 luot = 40s/sound, la phan TON NHAT trong con so 132s/sound
+  // do duoc. Kiem tren MA NGUON vi mock tra response ngay lap tuc, khong do duoc tran that.
+  const src = require('fs').readFileSync(path.join(SRC, 'crawler.cjs'), 'utf8');
+  ok(/COUNT_API_WAIT_MS/.test(src) && !/timeout:\s*20000\s*\}\)/.test(src),
+    'tran cho api/music/detail/ KHONG con hardcode 20000');
+  ok(/COUNT_API_WAIT_MS\s*=\s*Math\.max\(1000,\s*Number\(process\.env\.TTC_COUNT_API_MS\)\s*\|\|\s*8000\)/.test(src),
+    'tran cho API = 8s, chinh duoc bang TTC_COUNT_API_MS khong can build lai');
+  const prSrc = require('fs').readFileSync(path.join(SRC, 'crawler', 'page-read.cjs'), 'utf8');
+  ok(/function readVideoCount\(page,\s*timeoutMs\s*=\s*5000\)/.test(prSrc),
+    'readVideoCount nhan tran cho TUNG lan goi');
+  ok(/readVideoCount\(sidePage,\s*Math\.max\(500,\s*until - Date\.now\(\)\)\)/.test(src),
+    'noi goi TRUYEN phan ngan sach con lai — khong truyen thi 1 lan goi (5s) da vuot ngan sach '
+    + '2.5s, tuc ngan sach chi la hinh thuc');
+
+  console.log('### KHANG DINH: TAC HANG DOI thi BO luot thu lai (uu tien cho feed chay tiep)');
+  ok(/soundQueue\.length >= QUEUE_MAX \/ 2/.test(src),
+    'co dieu kien bo thu lai khi hang doi qua nua');
+  ok(/bỏ lượt thử lại vì đang tắc hàng đợi/.test(src),
+    'noi RO ly do trong log — nguoi dung phai biet vi sao link vao tab cho ma khong duoc thu lai');
+
+  console.log('### KHANG DINH: SLOT DEM khong bi giu trong luc cho (goc re cua "feed ngung cuon")');
+  // Slot dem la semaphore TOAN APP (2 slot cho MOI profile). Giu no trong luc ngu giua 2 luot
+  // => tren VPS yeu 1 sound loi chiem slot 30-49s => thong luong dem tut duoi nhip cuon =>
+  // hang doi day => vong quet dung => feed ngung cuon.
+  const sl = (r) => r.slots || {};
+  ok(sl(retryFail).acquires === 2,
+    `thu lai 2 luot -> XIN slot 2 lan rieng biet (nha ra roi xin lai), that: ${sl(retryFail).acquires}`);
+  ok(sl(retryFail).releases === sl(retryFail).acquires,
+    `xin va nha CAN BANG (${sl(retryFail).acquires} xin / ${sl(retryFail).releases} nha) — `
+    + 'nha thua se lam semaphore tuong con cho => hon 2 request /music/ song song');
+  ok(sl(retryFail).held === 0, `chay xong khong con giu slot nao (that: ${sl(retryFail).held})`);
+  ok(sl(retryFail).heldDuringSleep === false,
+    'khong lan nao nha THUA (bo dem chua bao gio xuong am)');
+  ok(sl(retryFail).maxHeld <= 1,
+    `1 profile -> khong bao gio giu qua 1 slot cung luc (that: ${sl(retryFail).maxHeld})`);
+  ok(sl(okNoRetry).acquires === 1 && sl(okNoRetry).releases === 1,
+    `doc duoc ngay -> dung 1 lan xin + 1 lan nha (that: ${sl(okNoRetry).acquires}/${sl(okNoRetry).releases})`);
+  ok(sl(goneNoRetry).acquires === 1 && sl(goneNoRetry).held === 0,
+    'sound da xoa -> 1 lan xin, nha sach');
+  ok(sl(retryWin).acquires === 2 && sl(retryWin).releases === 2,
+    `thu lai roi doc duoc -> van can bang (that: ${sl(retryWin).acquires}/${sl(retryWin).releases})`);
 
   console.log(`\n${failed ? '❌' : '✅'} ${failed} khang dinh TRUOT`);
   console.log('\nDONE');
