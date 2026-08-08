@@ -381,15 +381,18 @@ function ok(cond, label, detail) {
   // Ly do bo tinh nang tu doi IP: IP la cua CA MAY, nen doi IP giua luc 4 profile khac dang quet
   // lam chung chuyen tu IP A sang IP B GIUA PHIEN — dung khuon "tai khoan bi chiem" (QD-15).
   // Con dung HET profile truoc khi doi thi moi lan MOT profile bi cat la ca dan phai nghi.
-  const starved = fn('handleFeedStarved');
-  ok(/stopProfileById\(profileId\)/.test(starved),
-    'cat feed -> DUNG dung profile do');
-  ok(!/vpnCycle|profilesStopAll|startProfilesStaggered|vpnIpv6Risk/.test(starved),
-    'TUYET DOI khong dung vao VPN, khong dung profile khac, khong tu chay lai');
-  ok(!/_vpnRunLock|_vpnCooldownUntil/.test(starved),
-    'khong khoa nut Chay — nguoi dung phai bam chay lai duoc ngay sau khi ho tu xu IP');
-  ok(/nameOf\(profileId\)/.test(starved) && /appendLog/.test(starved),
+  // Duong NHE (`stopAndScheduleRestart`) tach ra 2026-08-07 de dung chung cho ca 'feed can' lan
+  // 'bi chan trang dem keo dai' — mot ban logic duy nhat (QĐ-10).
+  const light = fn('stopAndScheduleRestart');
+  ok(/stopProfileById\(profileId\)/.test(light),
+    'duong nhe -> DUNG dung profile do');
+  ok(!/vpnCycle|profilesStopAll|startProfilesStaggered|vpnIpv6Risk/.test(light),
+    'TUYET DOI khong dung vao VPN, khong dung profile khac');
+  ok(!/_vpnRunLock|_vpnCooldownUntil/.test(light),
+    'khong khoa nut Chay — nguoi dung phai bam chay lai duoc ngay');
+  ok(/nameOf\(profileId\)/.test(light) && /appendLog/.test(light),
     'noi RO profile nao bi dung, va ghi vao log 📄 cua chinh profile do');
+  const starved = fn('handleFeedStarved');
   // ── DUONG DOI IP (cong tac BAT): LUON dung HET, khong co nhanh "chi dung 1" ──
   // Nguoi dung chot 2026-08-06 sau khi chi ra lo hong ma phep do IPv6 KHONG che duoc: 4 profile kia
   // dang quet tren IP A bi chuyen sang IP B GIUA PHIEN, dung khuon "tai khoan bi chiem" (QD-15).

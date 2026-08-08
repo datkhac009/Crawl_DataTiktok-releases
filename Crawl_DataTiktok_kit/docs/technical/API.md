@@ -48,6 +48,7 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 | `phase` | `phaseLabel`, `nextLabel`, `deadlineAt` | Chip đếm ngược của chế độ chu kỳ (renderer tự tick mỗi giây) |
 | `verify` | `state`, `msg` | Kết quả 🔑. ⚠ **KHÔNG** dùng `running` cho việc này — xem cảnh báo trong `main.js` |
 | `feed-starved` | `msg` | TikTok không cấp thêm video cho profile ([QĐ-31](DECISIONS.md)) — vừa là log, vừa là tín hiệu để renderer xử. Công tắc "Tự đổi IP" **bật** → **dừng HẾT profile** + tắt/bật lại HMA + chờ 59s + chạy lại cả nhóm; **tắt** → dừng đúng profile đó rồi tự bật lại sau 5/15/30 phút ([QĐ-32](DECISIONS.md)). ⚠ **KHÔNG** dùng `error`/`running` — profile vẫn sống |
+| `count-blocked` | `msg` | TikTok chặn **trang đếm** `/music/` của profile này quá lâu (≥6 sound liên tiếp lỗi, đã đi hết thang backoff 30s → 2p → 5p). Renderer **dừng profile đó rồi tự bật lại** 5/15/30 phút. ⚠ **KHÔNG** đi đường đổi IP — chặn này theo **tài khoản**, không theo IP. ⚠ **KHÔNG** dùng `error` (sẽ làm hàng đổi về nút "▶ Chạy" khi profile chưa dừng) |
 | `sheet-rows` | `sheetRows`, `knownLinks` | Ghi vào **ô riêng** `#sheetRowsInfo` ([QĐ-29](DECISIONS.md)) |
 | `sheet-error` | `msg` | Hiện toast lỗi + ghi vào dòng thông báo |
 | `info` | `msg` | Thông báo cấp phiên (nạp link lọc trùng, tiến độ 🔑…) |

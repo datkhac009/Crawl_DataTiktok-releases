@@ -37,7 +37,10 @@ function extractFn(src, name) {
   throw new Error(`Ngoac khong dong cho function ${name}()`);
 }
 
-const FNS = ['cancelStarveRestart', 'handleFeedStarved', 'scheduleStarveRestart',
+// `stopAndScheduleRestart` la duong NHE dung chung: ca 'feed can' (handleFeedStarved) lan 'bi chan
+// trang dem keo dai' (handleCountBlocked) deu goi no. Tach ra 2026-08-07 khi them ca thu hai.
+const FNS = ['cancelStarveRestart', 'handleFeedStarved', 'handleCountBlocked',
+             'stopAndScheduleRestart', 'scheduleStarveRestart',
              'fireStarveRestart', 'formatCountdown'].map(n => extractFn(SRC, n)).join('\n\n');
 
 const PAGE = `<!doctype html><meta charset="utf-8"><span id="crawlStatusMsg"></span>`;
@@ -273,9 +276,19 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     'thang nghi that = 5/15/30 phut (cung thang backoff cu cua backend, khong doan so moi)');
   ok(!/process\.env/.test(WAITS_LINE[0]),
     'KHONG dung process.env o renderer — sandbox khong co `process`, viet vao la chet giao dien');
-  const starved = fn('handleFeedStarved');
-  ok(/await stopProfileById\(profileId\)[\s\S]*scheduleStarveRestart/.test(starved),
+  // Duong nhe nam trong `stopAndScheduleRestart` (tach ra 2026-08-07 de dung chung cho ca
+  // 'feed can' lan 'bi chan trang dem keo dai').
+  const light = fn('stopAndScheduleRestart');
+  ok(/await stopProfileById\(profileId\)[\s\S]*scheduleStarveRestart/.test(light),
     'dat hen SAU khi await dung xong — dat truoc thi chinh stopProfileById xoa mat hen');
+  const starved = fn('handleFeedStarved');
+  ok(/stopAndScheduleRestart\(profileId/.test(starved),
+    'feed can -> di duong nhe dung chung');
+  ok(/stopAndScheduleRestart\(profileId/.test(fn('handleCountBlocked')),
+    'bi chan trang dem keo dai -> CUNG duong nhe do (mot ban logic duy nhat, QĐ-10)');
+  ok(!/cycleIpAndRestart|_vpnAutoCycle/.test(fn('handleCountBlocked')),
+    'chan trang dem KHONG di duong doi IP — chan theo TAI KHOAN, doi IP ca may la dung oan '
+    + 'cac profile khoe ma van khong chua duoc');
   ok(!/vpnCycle|profilesStopAll|vpnIpv6Risk/.test(starved),
     'TUYET DOI khong dung vao VPN, khong dung profile khac');
   const stop = fn('stopProfileById');

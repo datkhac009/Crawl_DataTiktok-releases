@@ -154,6 +154,27 @@ video ⇒ **feed cạn** (xem mục dưới).
 
 Nhấn **📄** để xem log chi tiết của từng profile — đây là nơi đầu tiên cần xem khi có vấn đề.
 
+### Khi TikTok chặn riêng bước đếm
+
+Dấu hiệu trong log, lặp đi lặp lại:
+
+```
+TikTok đang chặn trang đếm (5 sound liên tiếp lỗi) — nghỉ 322s...
+Tạm dừng cuộn — chờ đếm số video cho 20 sound đang xếp hàng...
+```
+
+Cột của profile đó đứng yên kiểu **Quét 24 · Đã check 3 · Hợp lệ 0** — feed vẫn quét được, chỉ bước
+đếm bị chặn.
+
+Từ **v0.1.68** app **bỏ cuộc sau 6 lần lỗi liên tiếp**: dừng profile đó rồi **tự bật lại sau
+5 → 15 → 30 phút** cho tài khoản nghỉ. Trước đây nó thử mãi 1 sound mỗi ~6 phút — đo thật: **40 phút
+ra 0 sound hữu ích**, và hàng đợi 20 sound cần **6–7 tiếng** mới tiêu hết.
+
+⚠️ Đây thường là TikTok siết **riêng tài khoản đó**, không phải IP. Cách kiểm: nhìn các profile khác
+**trên cùng máy** — nếu chúng vẫn đếm bình thường thì đổi IP **không giải quyết được gì**, chỉ làm
+dừng oan những profile đang khoẻ. Tài khoản bị siết nhiều lần trong ngày thì nên cho nghỉ hẳn vài
+tiếng.
+
 ## Khi TikTok không cho lướt tiếp ("feed cạn")
 
 Đôi khi một profile **vẫn đăng nhập tốt** nhưng TikTok chỉ cho nó **1–2 video** rồi không nạp

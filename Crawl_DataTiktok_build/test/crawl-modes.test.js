@@ -17,6 +17,9 @@ process.env.TTC_COUNT_RETRY_MS = '100';
 // Rut ngan nhip kiem lai phien dang nhap (that la 15 PHUT) — de test duoc duong "TikTok huy phien
 // GIUA CHUNG", duong tung lam profile ket vinh vien o trang thai "dang chay".
 process.env.TTC_LOGIN_RECHECK_MS = '500';
+// Rut ngan backoff khi bi chan trang dem (that la 30s/2p/5p) — de test duong "bi chan KEO DAI ->"
+// bo cuoc", khong co no thi phai cho hon 20 phut.
+process.env.TTC_BLOCK_BACKOFF_MS = '50';
 
 const SRC = path.join(__dirname, '..', 'src');
 const browserPath = require.resolve(path.join(SRC, 'browser.cjs'));
@@ -469,6 +472,20 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
   // exit code khac 0) cho duong FEED CAN moi them.
   let failed = 0;
   const has = (r, needle) => (r.msgs || []).some(m => m.includes(needle));
+  // Trich than mot ham tu renderer.js (dem ngoac) — dung de kiem hop dong tren MA NGUON.
+  // Cung ky thuat voi test/vpn-run-lock.test.js; PHAI keo theo chu `async` phia truoc.
+  function extractRendererFn(src, name) {
+    let at = src.indexOf(`function ${name}(`);
+    if (at < 0) throw new Error(`Khong tim thay function ${name}() trong renderer.js`);
+    if (/async\s+$/.test(src.slice(Math.max(0, at - 8), at))) at = src.lastIndexOf('async', at);
+    const open = src.indexOf('{', at);
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') { depth--; if (depth === 0) return src.slice(at, i + 1); }
+    }
+    throw new Error(`Ngoac khong dong cho function ${name}()`);
+  }
   function ok(cond, label) {
     console.log((cond ? '  ✓ ' : '  ✗ ') + label);
     if (!cond) failed++;
@@ -535,6 +552,47 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
   ok(retryOff.calls.musicGoto === 1,
     `TTC_COUNT_ATTEMPTS=1 -> TAT duoc viec thu lai (that: ${retryOff.calls.musicGoto})`);
   ok(retryOff.pending.length === 1, 'tat thu lai -> van vao tab cho nhu cu, khong mat link');
+
+  console.log('### KHANG DINH: TIKTOK CHAN TRANG DEM KEO DAI -> BO CUOC, khong cay 6 tieng');
+  // ⚠ LOI THAT (log nguoi dung 2026-08-07): buoc dem bi chan, app backoff 30s -> 2p -> 5p roi KET
+  // O MUC 5 PHUT MAI MAI vi `failStreak` khong bao gio reset (moi lan thu deu loi). Moi sound con
+  // duoc giu 3 vong => ~18-22 phut/sound; hang doi 20 sound => 6-7 TIENG, ma suot thoi gian do
+  // vong quet dung han vi hang doi day. Do that: 40 phut -> Quet 24 · Da check 3 · HOP LE 0.
+  // ── KIEM HANH VI THAT: nguong co that su kich hoat khong? ──
+  // Nguong khong bao gio cham la loi IM LANG kinh dien — khang dinh tren ma nguon khong bat duoc.
+  // `countApi: [null]` = KHONG co response nao (dung nhu bi chan), `countDom: [null]` = giao dien
+  // cung khong doc duoc => moi sound deu that bai => failStreak leo den nguong.
+  process.env.TTC_COUNT_ATTEMPTS = '1';   // 1 luot/sound cho nhanh; tra lai ngay sau
+  const countBlocked = await run({
+    name: 'Bi chan trang dem KEO DAI -> phat count-blocked (bo cuoc)',
+    mode: 'foryou', sounds: [SOUND_A, SOUND_B, SOUND_C], runMs: 30000,
+    countApi: [null], countDom: [null], noStop: true,
+  });
+  delete process.env.TTC_COUNT_ATTEMPTS;
+  results.push(countBlocked);
+  ok(countBlocked.msgs.some(m => /\[count-blocked\]/.test(m)),
+    'THUC SU phat status count-blocked khi bi chan keo dai',
+    JSON.stringify(countBlocked.msgs.filter(m => /chặn/.test(m)).slice(-3)));
+  ok(countBlocked.msgs.filter(m => /\[count-blocked\]/.test(m)).length === 1,
+    `chi phat DUNG MOT LAN (that: ${countBlocked.msgs.filter(m => /\[count-blocked\]/.test(m)).length})`);
+
+  const blockSrc = require('fs').readFileSync(path.join(SRC, 'crawler.cjs'), 'utf8');
+  ok(/const COUNT_BLOCK_GIVEUP = 6;/.test(blockSrc),
+    'co nguong bo cuoc = 6 (di het thang backoff roi con nghi o muc tran 2 lan nua)');
+  ok(/failStreak >= COUNT_BLOCK_GIVEUP && !countBlockedEmitted/.test(blockSrc),
+    'phat tin hieu khi vuot nguong, va CHI MOT LAN (co countBlockedEmitted)');
+  ok(/'count-blocked'/.test(blockSrc),
+    'dung status RIENG `count-blocked`, khong muon `error` (error lam hang doi ve nut Chay)');
+  const rSrc = require('fs').readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');
+  ok(/s\.status === 'count-blocked'/.test(rSrc), 'renderer co xu ly count-blocked');
+  const hcb = extractRendererFn(rSrc, 'handleCountBlocked');
+  ok(/stopAndScheduleRestart\(profileId/.test(hcb),
+    'count-blocked -> dung profile do + hen tu bat lai (dung chung duong nhe voi feed can)');
+  ok(!/cycleIpAndRestart|_vpnAutoCycle/.test(hcb),
+    'TUYET DOI khong di duong doi IP: chan nay theo TAI KHOAN, khong theo IP — 5 profile khac tren '
+    + 'CUNG may van dem binh thuong (bang chung trong anh nguoi dung)');
+  ok(/updateRowStatus\(s\.profileId, 'running', s\.msg\);\s*\n\s*appendLog\(s\.profileId, s\.msg\);\s*\n\s*handleCountBlocked/.test(rSrc),
+    'giu hang o trang thai `running` — dung `error` la lap lai dung bay gay be tac 2026-08-07');
 
   console.log('### KHANG DINH: TIKTOK HUY PHIEN GIUA CHUNG -> profile PHAI thoat "dang chay"');
   // ⚠ BUG THAT (log nguoi dung 2026-08-07): vong quet ket thuc vi TikTok huy phien, nhung countLoop

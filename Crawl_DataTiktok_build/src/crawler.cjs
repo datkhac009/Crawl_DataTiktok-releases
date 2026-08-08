@@ -133,6 +133,9 @@ const COUNT_MODES = {
   fast:    { apiWaitMs: 8000,  domBudgetMs: [2500, 5000],   attempts: 2, retryWaitMs: 2500 },
   patient: { apiWaitMs: 20000, domBudgetMs: [30000, 30000], attempts: 1, retryWaitMs: 2500 },
 };
+// Số sound LIÊN TIẾP không đọc được thì coi là "TikTok chặn trang đếm KÉO DÀI" và bỏ cuộc.
+// 6 = đi hết thang backoff (30s → 2p → 5p) rồi còn nghỉ ở mức trần thêm 2 lần nữa.
+const COUNT_BLOCK_GIVEUP = 6;
 const COUNT_MODE_DEFAULT = 'fast';
 let _countMode = COUNT_MODE_DEFAULT;
 
@@ -754,12 +757,18 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
 
     let counted = 0;      // số sound đã xử lý trên tab hiện tại (mốc recycle)
     let failStreak = 0;   // số sound LIÊN TIẾP không đọc được count (mốc backoff)
+    let countBlockedEmitted = false;   // đã báo 'chặn kéo dài' chưa (chỉ báo MỘT lần)
     const BLOCK_REQUEUE_MAX = 3; // số vòng giữ lại 1 sound khi bị chặn diện rộng trước khi bỏ thật
 
     // Nghỉ backoff khi bị chặn: 30s → 2ph → 5ph (trần) + jitter 0–50% (so le giữa các
     // profile để không cùng tỉnh dậy → cùng bắn lại → cùng bị chặn = kẹt 300s).
     async function blockBackoff() {
-      const waits = [30000, 120000, 300000];
+      // TTC_BLOCK_BACKOFF_MS cho test rút ngắn (cùng khuôn TTC_IP_RETRY_MS / TTC_STARVE_RETRY_MS).
+      // Không có nó thì không test tự động được đường "bị chặn kéo dài → bỏ cuộc": phải chờ thật
+      // 30s + 2p + 5p × 3 = hơn 20 phút.
+      const waits = process.env.TTC_BLOCK_BACKOFF_MS
+        ? [Number(process.env.TTC_BLOCK_BACKOFF_MS)]
+        : [30000, 120000, 300000];
       const base = waits[Math.min(failStreak - 3, waits.length - 1)];
       const w = base + rand(0, Math.floor(base * 0.5));
       onStatus(profile.id, 'running',
@@ -908,6 +917,24 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
       } else if (!stop.requested) {
         failStreak++;
         countPenaltyUp();     // bị chặn → chậm tốc độ chung dần (mọi profile)
+
+        // ── BỊ CHẶN KÉO DÀI → BỎ CUỘC, để renderer dừng profile rồi tự bật lại ──
+        // Trước đây KHÔNG có điểm dừng: `failStreak` không bao giờ reset (mọi lần thử đều lỗi) và
+        // backoff chặn trần ở 5 phút → thử 1 sound mỗi ~6 phút MÃI MÃI. Mỗi sound còn được giữ 3
+        // vòng nên mất ~18–22 phút/sound; hàng đợi 20 sound ⇒ 6–7 TIẾNG, mà suốt thời gian đó vòng
+        // quét đứng hẳn vì hàng đợi đầy. Đo thật trên máy ảo (log 2026-08-07): 40 phút → Quét 24 ·
+        // Đã check 3 · Hợp lệ 0. Profile sống mà không sản xuất được gì.
+        //
+        // Ngưỡng 6 = đã đi hết thang backoff (30s → 2p → 5p) VÀ nghỉ ở mức trần thêm 2 lần nữa mà
+        // vẫn không đọc nổi một sound nào. Đủ để kết luận "chặn kéo dài", không phải nhiễu nhất thời.
+        // Phát MỘT LẦN thôi — renderer sẽ dừng profile, phát lại chỉ làm ngập log.
+        if (failStreak >= COUNT_BLOCK_GIVEUP && !countBlockedEmitted) {
+          countBlockedEmitted = true;
+          onStatus(profile.id, 'count-blocked',
+            `⛔ TikTok chặn TRANG ĐẾM của profile này quá lâu (${failStreak} sound liên tiếp lỗi,`
+            + ' đã nghỉ hết thang 30s → 2p → 5p mà vẫn không đọc nổi sound nào). Cào tiếp chỉ làm'
+            + ' TikTok siết sâu hơn — dừng profile này cho tài khoản nghỉ rồi tự bật lại.');
+        }
       }
 
       // FAIL DÂY CHUYỀN (≥3 sound liên tiếp lỗi = TikTok đang chặn cả trang /music/, sound

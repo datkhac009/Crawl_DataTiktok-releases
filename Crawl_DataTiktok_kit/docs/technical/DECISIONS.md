@@ -2051,3 +2051,74 @@ ngủ). Đã kiểm test có "cắn": bỏ dòng nhả slot → 2 khẳng địn
 | Phát hiện kẹt bằng "bao lâu không có dữ liệu MỚI" | Feed khoẻ vẫn có thể hàng phút không ra sound mới vì lọc trùng 173.000 link → báo oan hàng loạt. Phải đo "**cùng một** dữ liệu lặp lại bao lâu" — xem QĐ-34 |
 | Reset bộ đếm sau khi can thiệp mà quên reset ĐỒNG HỒ đi kèm | Vòng đọc kế tiếp đã "quá hạn" → báo kẹt ngay → cách vừa thử không có cơ hội tỏ hiệu quả. Mọi trần thời gian đều phải được reset cùng bộ đếm — xem QĐ-34 |
 | Dùng biến `const` khai báo PHÍA DƯỚI trong cùng hàm test | `ReferenceError: Cannot access 'src' before initialization` (vùng chết TDZ). Trong file test dài, khối mới thêm ở giữa dễ vướng — đọc lại nguồn vào biến riêng thay vì mượn biến có sẵn |
+
+---
+
+## QĐ-35 — Hai vòng lặp nền phải cùng kết thúc; và mọi backoff phải có ĐIỂM DỪNG (2026-08-07)
+
+Hai lỗi khác nhau, cùng lộ ra từ một đêm chạy trên máy ảo. Cả hai đều thuộc loại **app vẫn "sống"
+mà không sản xuất được gì** — thứ khó thấy nhất khi treo máy qua đêm.
+
+### Lỗi 1 — profile kẹt vĩnh viễn "Profile đang chạy."
+
+TikTok huỷ phiên giữa chừng → vòng QUÉT kết thúc, nhưng `countLoop` là vòng **vô hạn** (chỉ thoát
+khi `stop.requested`/`stop.draining`). Nên `Promise.all([quét xong, đếm chạy mãi])` **không bao giờ
+resolve** → `crawlOneProfile` không kết thúc → khối `finally` không chạy → `_active` giữ profile
+**mãi mãi** → mọi lần bấm ▶ Chạy đều bị từ chối.
+
+Tệ hơn: renderer nhận status `'error'` nên đổi hàng về nút **"▶ Chạy"** → người dùng **không bấm
+được "■ Dừng"** (`stopProfileById` thoát sớm vì hàng không còn trong `runningSet`). **Bế tắc hoàn
+toàn** — chỉ khởi động lại app mới thoát. Người dùng đã thử dừng/chạy lại, xoá `ChromiumProfile`,
+đăng nhập lại: đều vô ích, đúng như dự đoán của cơ chế này.
+
+**Sửa 2 lớp:**
+1. **Gốc rễ** — vòng quét xong thì đặt `stop.draining = true` để `countLoop` *check nốt hàng đợi rồi
+   thoát*. Dùng cờ **dừng mềm** nên không mất sound đã quét (QĐ-11). Lỗi có ở **cả 4 chế độ**.
+   ⚠ Phải đặt trên `stop`, **không** phải `scanStop` — `scanStop` chỉ là object có getter đọc lại
+   `stop`, gán vào nó thì bản vá **im lặng vô tác dụng**.
+2. **Lưới an toàn** — backend từ chối `"Profile đang chạy"` thì renderer **tự đưa hàng về trạng thái
+   đang chạy** để bấm được ■ Dừng. Bản đối xứng của lớp tự chữa đã có ở `stopProfileById`.
+
+### Lỗi 2 — backoff không có điểm dừng
+
+TikTok chặn **trang đếm** của riêng một profile. App backoff `30s → 2p → 5p` rồi **kẹt ở mức 5 phút
+mãi mãi**: `failStreak` không bao giờ reset vì mọi lần thử đều lỗi. Mỗi sound còn được giữ 3 vòng ⇒
+**~18–22 phút/sound**; hàng đợi 20 sound ⇒ **6–7 tiếng**, mà suốt thời gian đó vòng quét **đứng hẳn**
+vì hàng đợi đầy.
+
+Đo thật từ log: **40 phút → Quét 24 · Đã check 3 · Hợp lệ 0.**
+
+**Quyết định:** ≥6 sound liên tiếp lỗi ⇒ phát status riêng `count-blocked` → renderer **dừng profile
+đó rồi tự bật lại 5/15/30 phút** (dùng lại đúng cơ chế của "feed cạn"). Ngưỡng 6 = đã đi hết thang
+backoff **và** nghỉ ở mức trần thêm 2 lần nữa mà vẫn không đọc nổi một sound nào.
+
+⚠️ **TUYỆT ĐỐI không đi đường đổi IP cho ca này**, kể cả khi công tắc "Tự đổi IP" đang bật. Bằng
+chứng ngay trong ảnh người dùng: **5 profile khác trên CÙNG máy vẫn đếm bình thường** (88/74,
+144/126, 136/111). Chặn theo **tài khoản**, không theo IP — đổi IP cả máy là **dừng oan 5 profile
+khoẻ mà vẫn không chữa được gì**.
+
+**Người dùng chọn** "dừng + tự bật lại" thay vì "đẩy hết sang tab chờ": 20 sound đang xếp hàng bị
+mất, nhưng chúng gần như chắc chắn bị lọc bỏ (`Hợp lệ 0`), còn đẩy hết sang tab chờ thì mỗi đêm
+hàng trăm dòng vô dụng phải kiểm tay.
+
+### Kiểm chứng
+
+`crawl-modes.test.js` 74 → **83 khẳng định**. Dựng lại **cả hai** tình huống bằng mock, và kiểm
+**hành vi thật** chứ không chỉ đọc hằng số:
+- Huỷ phiên giữa chừng → đo `isProfileRunning` **trước khi** gọi `stopProfile`: profile **tự thoát
+  sau 6.3 giây** (nếu gọi `stopProfile` rồi mới đo thì che mất bug).
+- Chặn trang đếm → status `count-blocked` **thực sự phát**, và **đúng một lần**.
+
+Thêm 2 biến môi trường để test được (`TTC_LOGIN_RECHECK_MS`, `TTC_BLOCK_BACKOFF_MS`) — không có
+chúng thì phải chờ thật 15 phút và hơn 20 phút.
+
+Đã kiểm test có "cắn": bỏ dòng đặt `draining` → 2 khẳng định trượt; bỏ ngưỡng bỏ cuộc → 3 trượt.
+
+| KHÔNG nên làm lại | Vì sao |
+|---|---|
+| `Promise.all` giữa một vòng CÓ điểm dừng và một vòng VÔ HẠN | Vòng vô hạn giữ mãi lời hứa → hàm bao ngoài không bao giờ kết thúc → mọi việc dọn dẹp trong `finally` không chạy. Vòng nào cũng phải có đường được báo kết thúc |
+| Gán cờ lên object chỉ có **getter** đọc lại nơi khác | `scanStop` đọc `stop.requested \|\| stop.draining`; gán `scanStop.draining` chỉ thêm thuộc tính vào chính nó, không tới được nơi đọc. Bản vá **im lặng vô tác dụng** |
+| Backoff tăng dần mà **không có điểm dừng** | Chặn trần rồi thì lặp vô hạn: 1 sound mỗi ~6 phút suốt đêm, vòng quét đứng hẳn, sản lượng bằng 0. Mọi backoff phải trả lời được "sau bao lâu thì bỏ cuộc?" |
+| Dùng `error` cho trạng thái mà backend CHƯA dừng | Renderer đổi hàng về "▶ Chạy" → mất luôn nút "■ Dừng" → người dùng không còn đường can thiệp. Dùng status riêng và giữ hàng ở `running` |
+| Chữa vấn đề của MỘT tài khoản bằng thao tác cấp MÁY (đổi IP) | Dừng oan các profile khoẻ mà vẫn không chữa được. Phải kiểm bằng chứng phạm vi trước: các profile khác trên cùng máy có bị không? |
+| Đo trạng thái SAU khi đã gọi hàm dọn dẹp | `stopProfile()` rồi mới đo `isProfileRunning` thì profile nào cũng "đã thoát" — che mất đúng cái bug đang muốn bắt. Phải đo **trước** |

@@ -831,8 +831,28 @@ async function fireGroupRetry() {
 async function handleFeedStarved(profileId) {
   if (!runningSet.has(profileId)) return;   // đã dừng bằng đường khác
   // Công tắc BẬT → đường đổi IP (dừng HẾT + tắt/bật HMA + chạy lại cả nhóm).
-  // Công tắc TẮT → đường nhẹ bên dưới (dừng riêng profile đó + nghỉ 5/15/30 phút).
+  // Công tắc TẮT → đường nhẹ (dừng riêng profile đó + nghỉ 5/15/30 phút).
   if (_vpnAutoCycle) return cycleIpAndRestart(profileId);
+  return stopAndScheduleRestart(profileId, 'bị TikTok cắt feed');
+}
+
+// ── TIKTOK CHẶN TRANG ĐẾM KÉO DÀI → cũng dừng profile đó rồi tự bật lại (2026-08-07) ──
+// Log người dùng: bước đếm bị chặn, app backoff 30s → 2p → 5p rồi **kẹt ở mức 5 phút MÃI MÃI**
+// (`failStreak` không bao giờ reset vì mọi lần thử đều lỗi). Mỗi sound còn được giữ 3 vòng nên mất
+// ~18–22 phút/sound; hàng đợi 20 sound ⇒ **6–7 tiếng**. Suốt thời gian đó vòng quét đứng hẳn vì
+// hàng đợi đầy. Đo thật: 40 phút → Quét 24 · Đã check 3 · **Hợp lệ 0**.
+//
+// ⚠ TUYỆT ĐỐI KHÔNG đi đường đổi IP cho ca này, kể cả khi công tắc "Tự đổi IP" đang bật:
+// chặn này là theo **TÀI KHOẢN**, không phải theo IP — bằng chứng trong chính ảnh người dùng gửi:
+// 5 profile khác trên CÙNG máy vẫn đếm bình thường (88/74, 144/126, 136/111). Đổi IP cả máy để
+// chữa một tài khoản là dừng oan 5 profile khoẻ, mà vẫn không chữa được gì.
+async function handleCountBlocked(profileId) {
+  if (!runningSet.has(profileId)) return;
+  return stopAndScheduleRestart(profileId, 'bị TikTok chặn trang đếm kéo dài');
+}
+
+// Đường NHẸ dùng chung: dừng đúng profile đó + hẹn tự bật lại 5 → 15 → 30 phút.
+async function stopAndScheduleRestart(profileId, why) {
   const prev = _starve[profileId];
   // `streak` phải sống qua lần dừng: đếm số lần bị cắt LIÊN TIẾP để giãn thời gian nghỉ.
   const streak = ((prev && prev.streak) || 0) + 1;
@@ -841,16 +861,16 @@ async function handleFeedStarved(profileId) {
   // Dùng formatCountdown (đã có, dùng chung với chip pha chu kỳ) thay vì `Math.round(ms/60000)`:
   // cách cũ ra "0 phút" với mọi khoảng dưới 30 giây — vô nghĩa, và test đã bắt đúng lỗi này.
   const waitTxt = formatCountdown(waitMs);
-  const m = `⛔ "${nameOf(profileId)}" bị TikTok cắt feed (lần ${streak} liên tiếp) — DỪNG profile`
+  const m = `⛔ "${nameOf(profileId)}" ${why} (lần ${streak} liên tiếp) — DỪNG profile`
     + ` này, sẽ TỰ BẬT LẠI sau ${waitTxt}.`;
   $('crawlStatusMsg').textContent = m;
   appendLog(profileId, m);
-  toast(`"${nameOf(profileId)}" bị cắt feed — tự bật lại sau ${waitTxt}.`, 'err');
+  toast(`"${nameOf(profileId)}" ${why} — tự bật lại sau ${waitTxt}.`, 'err');
 
   try {
     await stopProfileById(profileId);
   } catch (e) {
-    appendLog(profileId, '⚠ Lỗi khi dừng profile bị cắt feed: ' + e.message);
+    appendLog(profileId, '⚠ Lỗi khi dừng profile: ' + e.message);
   }
   // ⚠ Đặt hẹn SAU khi dừng: `stopProfileById` xoá mọi hẹn đang có (người dùng bấm Dừng thì phải
   // huỷ hẹn), nên đặt trước sẽ bị chính nó xoá mất.
@@ -1780,6 +1800,14 @@ function initCrawlEvents() {
       // DỪNG LUÔN profile đó (người dùng chốt 2026-08-06, thay cho việc tự đổi IP — xem
       // handleFeedStarved). Không còn công tắc nào: cắt feed là dừng, khỏi hỏi.
       handleFeedStarved(s.profileId);
+    } else if (s.profileId && s.status === 'count-blocked') {
+      // TikTok chặn TRANG ĐẾM của profile này quá lâu (2026-08-07). Cùng cách xử với feed cạn:
+      // dừng profile đó rồi tự bật lại 5/15/30 phút.
+      // ⚠ Giống 'feed-starved', PHẢI giữ hàng ở 'running' — dùng 'error' sẽ làm hàng đổi về nút
+      // "▶ Chạy" trong khi profile chưa dừng, đúng cái bẫy đã gây bế tắc ngày 2026-08-07.
+      updateRowStatus(s.profileId, 'running', s.msg);
+      appendLog(s.profileId, s.msg);
+      handleCountBlocked(s.profileId);
     } else if (s.profileId && s.status === 'verify') {
       // Kết quả "🔑 Kiểm tra đăng nhập" — KHÔNG phải trạng thái của luồng crawl.
       // TUYỆT ĐỐI không gọi setRowRunning ở đây: kiểm tra phiên không làm profile chạy.
