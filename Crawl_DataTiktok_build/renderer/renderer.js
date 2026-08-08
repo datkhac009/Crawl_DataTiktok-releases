@@ -443,6 +443,18 @@ async function startProfileById(id) {
   if (!res.ok) {
     toast(`"${nameOf(id)}": ${res.msg}`, 'err');
     appendLog(id, 'Lỗi: ' + res.msg);
+    // BACKEND BẢO ĐANG CHẠY mà giao diện lại hiện nút "▶ Chạy" = UI đang LỆCH với backend.
+    // Phải tự chữa NGAY: đưa hàng về trạng thái ĐANG CHẠY để nút đổi thành "■ Dừng" — nếu không,
+    // người dùng KHÔNG có cách nào dừng nó (bấm Chạy thì bị từ chối, mà nút Dừng thì không hiện),
+    // và cách duy nhất thoát là khởi động lại app.
+    // Đã gặp thật (log 2026-08-07): TikTok hủy phiên giữa chừng → status 'error' làm hàng đổi về
+    // "▶ Chạy" trong khi backend vẫn giữ profile → bế tắc. Đây là bản đối xứng của lớp tự chữa
+    // sẵn có ở stopProfileById (backend bảo KHÔNG chạy → gỡ đánh dấu).
+    if (/đang chạy/i.test(res.msg || '')) {
+      setRowRunning(id, true);
+      updateRowStatus(id, 'running', 'Đang chạy (backend xác nhận) — bấm ■ Dừng nếu muốn dừng.');
+      appendLog(id, 'Giao diện đang lệch với backend — đã đưa hàng về trạng thái ĐANG CHẠY để bấm Dừng được.');
+    }
     return;
   }
   setRowRunning(id, true);

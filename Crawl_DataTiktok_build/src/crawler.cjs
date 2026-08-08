@@ -703,6 +703,38 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
   //      6h) → đấm tiếp chỉ bị chặn sâu hơn + nhân ba lượng điều hướng. Nghỉ tăng dần
   //      30s→2ph→5ph, đọc được 1 lần thì reset.
   const COUNT_RECYCLE_EVERY = 200;
+  // ── GHÉP vòng quét với vòng đếm ──
+  //
+  // ⚠ LỖI THẬT ĐÃ GẶP (2026-08-07, log người dùng): vòng quét kết thúc vì TikTok hủy phiên giữa
+  // chừng (chế độ khách) → `runScanLoop` return. Nhưng `countLoop` là vòng VÔ HẠN, chỉ thoát khi
+  // `stop.requested` hoặc `stop.draining` — cả hai đều KHÔNG được đặt. Nên:
+  //     Promise.all([scanLoop(xong), countLoop(chạy mãi)])  →  KHÔNG BAO GIỜ resolve
+  //     → `crawlOneProfile` không kết thúc → khối `finally` không chạy → `_active` GIỮ profile MÃI
+  //     → mọi lần bấm ▶ Chạy đều bị từ chối "Profile đang chạy."
+  // Tệ hơn: renderer nhận status 'error' nên đổi hàng về nút "▶ Chạy" → người dùng KHÔNG bấm được
+  // "■ Dừng" nữa (stopProfileById thoát sớm vì hàng không còn trong runningSet). Bế tắc hoàn toàn,
+  // chỉ khởi động lại app mới thoát. Đúng hiện tượng người dùng báo: dừng/chạy lại, xoá
+  // ChromiumProfile, đăng nhập lại — đều vô ích.
+  //
+  // CÁCH SỬA: vòng quét xong thì báo vòng đếm "check nốt hàng đợi rồi thoát" (`stop.draining`).
+  // Dùng `draining` chứ KHÔNG dùng `requested`: sound đã quét được mà chưa đếm vẫn được check nốt,
+  // không mất dữ liệu — đúng ngữ nghĩa Dừng mềm sẵn có (QĐ-11).
+  function joinScanAndCount(scanPromise) {
+    return Promise.race([
+      Promise.all([
+        // ⚠ Đặt trên `stop`, KHÔNG phải `scanStop`: `scanStop` chỉ là object có getter đọc lại
+        // `stop.requested || stop.draining`, gán vào nó không tới được `countLoop` (nó đọc
+        // `stop.draining`). Gán nhầm chỗ thì bản vá này im lặng vô tác dụng.
+        scanPromise.then(
+          (r) => { stop.draining = true; return r; },
+          (e) => { stop.draining = true; throw e; },   // lỗi cũng phải nhả vòng đếm
+        ),
+        countLoop(),
+      ]),
+      stop.promise,
+    ]);
+  }
+
   async function countLoop() {
     let sidePage = null, helper = null;
     async function newCountPage() {
@@ -1202,7 +1234,20 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
       }
     })();
 
-    await Promise.race([Promise.all([cycleLoop, countLoopDone]), stop.promise]);
+    // ⚠ CÙNG cái bẫy như 3 chế độ kia (xem joinScanAndCount): `cycleLoop` kết thúc vì phát hiện
+    // chế độ khách, nhưng `countLoopDone` là vòng vô hạn → Promise.all treo mãi → profile kẹt
+    // "đang chạy" cho tới khi khởi động lại app. Ở đây countLoop đã được tạo TRƯỚC nên không dùng
+    // joinScanAndCount được, phải tự đặt cờ draining y hệt.
+    await Promise.race([
+      Promise.all([
+        cycleLoop.then(
+          (r) => { stop.draining = true; return r; },
+          (e) => { stop.draining = true; throw e; },
+        ),
+        countLoopDone,
+      ]),
+      stop.promise,
+    ]);
     stop.stoppedEmitted = true;
     if (guestDetected && !stop.requested) {
       onStatus(profile.id, 'error',
@@ -1224,10 +1269,8 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
     // Chế độ 'current' = TAB CỦA NGƯỜI DÙNG → thoát kẹt chỉ cấp 1/2 (allowReload:false),
     // và TUYỆT ĐỐI không tự tải lại định kỳ để xả RAM (recycle:false) vì đó là tab họ đang xem.
     // Đua loop với tín hiệu Dừng: stop → resolve ngay, không chờ loop tháo gỡ (loop nền tự thoát).
-    await Promise.race([Promise.all([
-      runScanLoopWithStarveBackoff({ waitSelector: null, allowReload: false, recycle: false }),
-      countLoop(),
-    ]), stop.promise]);
+    await joinScanAndCount(
+      runScanLoopWithStarveBackoff({ waitSelector: null, allowReload: false, recycle: false }));
     stop.stoppedEmitted = true;
     onStatus(profile.id, 'stopped', `Đã dừng (giữ trình duyệt mở). Quét ${localCount} sound.`);
     return;
@@ -1298,14 +1341,12 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
     // Trang search có trình phát riêng: link sound ở đây KHÔNG có data-e2e="video-music"
     // nên selector phải nhận cả 2 dạng (xem readActiveSound).
     // Đua loop với tín hiệu Dừng: stop → resolve ngay, không chờ loop tháo gỡ (loop nền tự thoát).
-    await Promise.race([Promise.all([
+    await joinScanAndCount(
       runScanLoopWithStarveBackoff({
         prefix: `Tìm "${keyword}": `,
         waitSelector: 'a[data-e2e="video-music"], a[aria-label][href*="/music/"]',
         startMsg: 'Bắt đầu thu thập...',
-      }),
-      countLoop(),
-    ]), stop.promise]);
+      }));
     stop.stoppedEmitted = true;
     onStatus(profile.id, 'stopped', `Đã dừng. Quét ${localCount} sound.`);
     return;
@@ -1355,7 +1396,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
   }
   await page.bringToFront().catch(() => {});
 
-  await Promise.race([Promise.all([
+  await joinScanAndCount(
     runScanLoopWithStarveBackoff({
       waitSelector: 'a[data-e2e="video-music"]',
       watchLogin: true,
@@ -1363,9 +1404,7 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
       onGuestMidRun: () => onStatus(profile.id, 'error',
         'Phiên đăng nhập BỊ HỦY giữa chừng (TikTok chuyển sang chế độ khách) — thường do profile '
         + 'đang chạy trùng ở máy khác hoặc đổi vùng VPN. Hãy bấm 🦊 đăng nhập lại.'),
-    }),
-    countLoop(),
-  ]), stop.promise]);
+    }));
   stop.stoppedEmitted = true;
   onStatus(profile.id, 'stopped', `Đã dừng. Quét ${localCount} sound.`);
 }

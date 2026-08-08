@@ -72,7 +72,11 @@ async function checkLoginStateStable(page, { windowMs = STABLE_WINDOW_MS, gapMs 
 // Kiểm tra lúc bắt đầu là chưa đủ: TikTok có thể hủy phiên GIỮA CHỪNG (chạy trùng máy, đổi
 // vùng VPN, nghi ngờ hoạt động). Trước đây app cứ cào tiếp hàng giờ ở chế độ khách.
 // Trả về: 'ok' | 'guest'. Tự chốt phiên VÀNG mỗi lần xác nhận còn đăng nhập.
-const LOGIN_RECHECK_MS = 15 * 60 * 1000;
+// TTC_LOGIN_RECHECK_MS cho test rút ngắn (cùng khuôn TTC_IP_RETRY_MS / TTC_STARVE_RETRY_MS).
+// Cần thiết để test được đường "TikTok hủy phiên GIỮA CHỪNG" — đường đó từng làm profile kẹt
+// vĩnh viễn ở trạng thái "đang chạy" (xem joinScanAndCount trong crawler.cjs), mà chờ thật 15 phút
+// thì không test tự động được.
+const LOGIN_RECHECK_MS = Math.max(0, Number(process.env.TTC_LOGIN_RECHECK_MS) || 15 * 60 * 1000);
 
 function makeLoginWatcher(page, profilePath, stop = null) {
   let last = Date.now();

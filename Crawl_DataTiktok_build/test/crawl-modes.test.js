@@ -11,9 +11,12 @@ const Module = require('module');
 process.env.TTC_IP_RETRY_MS = '250';
 // Rut ngan backoff khi FEED CAN (that la 5/15/30 phut) de test duong tam dung + thu lai.
 process.env.TTC_STARVE_RETRY_MS = '300';
-// Rut ngan cho giua 2 luot doc so video (that la 2.5s). KHONG rut ngan duoc vong poll giao dien
-// (6 x 500ms co dinh trong crawler) nen cac kich ban DEM ben duoi van can runMs vai giay.
+// Rut ngan cho giua 2 luot doc so video (that la 2.5s). Ngan sach doc GIAO DIEN (2.5s/5s) khong
+// rut ngan duoc nen cac kich ban DEM ben duoi van can runMs vai giay.
 process.env.TTC_COUNT_RETRY_MS = '100';
+// Rut ngan nhip kiem lai phien dang nhap (that la 15 PHUT) — de test duoc duong "TikTok huy phien
+// GIUA CHUNG", duong tung lam profile ket vinh vien o trang thai "dang chay".
+process.env.TTC_LOGIN_RECHECK_MS = '500';
 
 const SRC = path.join(__dirname, '..', 'src');
 const browserPath = require.resolve(path.join(SRC, 'browser.cjs'));
@@ -58,6 +61,7 @@ function installThrottleSpy() {
 // ── Fake page: tra ve chuoi sound do kich ban quy dinh ──
 function makeFakePage(script) {
   let readIdx = 0;
+  const bornAt = Date.now();   // moc de gia lap "TikTok huy phien sau N ms" (xem guestAfterMs)
   const calls = { goto: [], musicGoto: 0, reload: 0, wheel: 0, click: [], waitForSelector: [], keyboard: [] };
   const page = {
     _calls: calls,
@@ -101,8 +105,13 @@ function makeFakePage(script) {
     // page.evaluate: phan biet theo cach crawler goi
     async evaluate(fn) {
       const src = String(fn);
-      // checkLoginState
-      if (src.includes('top-login-button')) return script.loginState || 'logged-in';
+      // checkLoginState.
+      // `guestAfterMs`: dang nhap TOT luc dau roi TikTok HUY PHIEN giua chung — dung tinh huong
+      // that trong log nguoi dung 2026-08-07, va la duong tung lam profile ket vinh vien.
+      if (src.includes('top-login-button')) {
+        if (script.guestAfterMs && Date.now() - bornAt >= script.guestAfterMs) return 'guest';
+        return script.loginState || 'logged-in';
+      }
       // diagnoseFeed — PHAI xet TRUOC readActiveSound: ca hai deu chua 'video-music' +
       // 'getBoundingClientRect' + 'aria-label', neu xet sau se bi readActiveSound an mat.
       if (src.includes('activeElement')) {
@@ -202,13 +211,13 @@ function installMocks(page, profileName) {
 
 // ── Chay 1 kich ban ──
 async function run({ name, mode, sounds, loginState, runMs, ipScript = ['ok'], profileName,
-                     links, navButton, countApi, countDom, countMode, extra = {} }) {
+                     links, navButton, countApi, countDom, countMode, noStop, guestAfterMs, extra = {} }) {
   // Xoa cache crawler de moi kich ban co trang thai phien sach
   for (const k of Object.keys(require.cache)) {
     if (k.includes('crawler') || k.includes('browser.cjs') || k.includes('profiles.cjs')
         || k.includes('ip-guard.cjs') || k.includes('count-throttle.cjs')) delete require.cache[k];
   }
-  const page = makeFakePage({ sounds, loginState, links, navButton, countApi, countDom });
+  const page = makeFakePage({ sounds, loginState, links, navButton, countApi, countDom, guestAfterMs });
   installMocks(page, profileName);
   installIpGuardMock(ipScript);
   installThrottleSpy();
@@ -236,9 +245,16 @@ async function run({ name, mode, sounds, loginState, runMs, ipScript = ['ok'], p
   if (!res.ok) return { name, error: res.msg, msgs };
 
   await new Promise(r => setTimeout(r, runMs));
-  crawler.stopProfile('p_test');
+  // ⚠ ĐO TRƯỚC khi gọi stopProfile: `noStop` dùng để kiểm profile có TỰ thoát khỏi `_active` khi
+  // vòng quét kết thúc (vd TikTok huỷ phiên giữa chừng) hay không. Gọi stopProfile rồi mới đo thì
+  // che mất bug — profile nào cũng thoát.
+  const stillRunningBeforeStop = crawler.isProfileRunning('p_test');
+  if (!noStop) crawler.stopProfile('p_test');
   await new Promise(r => setTimeout(r, 400));
-  return { name, msgs, data, pending, calls: page._calls, slots: slotLog };
+  return {
+    name, msgs, data, pending, calls: page._calls, slots: slotLog,
+    stillRunningBeforeStop, stillRunningAfter: crawler.isProfileRunning('p_test'),
+  };
 }
 
 // ── Cac kich ban ──
@@ -519,6 +535,33 @@ const SOUND_C = { href: '/music/original-sound-3333333333', name: 'original soun
   ok(retryOff.calls.musicGoto === 1,
     `TTC_COUNT_ATTEMPTS=1 -> TAT duoc viec thu lai (that: ${retryOff.calls.musicGoto})`);
   ok(retryOff.pending.length === 1, 'tat thu lai -> van vao tab cho nhu cu, khong mat link');
+
+  console.log('### KHANG DINH: TIKTOK HUY PHIEN GIUA CHUNG -> profile PHAI thoat "dang chay"');
+  // ⚠ BUG THAT (log nguoi dung 2026-08-07): vong quet ket thuc vi TikTok huy phien, nhung countLoop
+  // la vong VO HAN nen Promise.all KHONG BAO GIO resolve -> crawlOneProfile khong ket thuc ->
+  // `finally` khong chay -> `_active` giu profile MAI -> moi lan bam Chay deu bi "Profile dang
+  // chay.". Te hon: renderer nhan 'error' nen doi hang ve nut "▶ Chạy" -> khong bam Dung duoc ->
+  // BE TAC, chi khoi dong lai app moi thoat. Nguoi dung da thu dung/chay lai, xoa ChromiumProfile,
+  // dang nhap lai — deu vo ich.
+  // `noStop: true` = CO Y khong goi stopProfile, de xem profile co TU thoat khong.
+  // runMs phai du cho: nhip kiem lai phien (500ms) + chot 'guest' can 3 lan doc LIEN TIEP cach
+  // nhau 2s (~6s) + countLoop can not hang doi roi thoat. Ngan hon la kich ban khong chay toi noi
+  // va 3 khang dinh truot vi TEST SAI, khong phai code sai.
+  // `countApi: [API_OK]` = moi sound dem duoc NGAY. Co y: bo va nay dung `stop.draining` (dung
+  // MEM) nen countLoop check NOT hang doi roi moi thoat — khong mat du lieu. Neu de sound khong
+  // dem duoc thi moi cai ton ~7.6s va hang doi chua can kip trong runMs, khang dinh se truot vi
+  // TEST SAI chu khong phai code sai (da mac dung loi nay khi viet).
+  const guestMid = await run({
+    name: 'TikTok huy phien GIUA CHUNG -> profile tu thoat, khong ket "dang chay"',
+    mode: 'foryou', sounds: [SOUND_A, SOUND_B, SOUND_C], runMs: 14000,
+    countApi: [API_OK], guestAfterMs: 1500, noStop: true,
+  });
+  results.push(guestMid);
+  ok(guestMid.msgs.some(m => /BỊ HỦY giữa chừng/.test(m)),
+    'co phat hien phien bi huy giua chung', JSON.stringify(guestMid.msgs.slice(-3)));
+  ok(guestMid.stillRunningBeforeStop === false,
+    'profile TU THOAT khoi trang thai "dang chay" — KHONG can ai bam Dung');
+  ok(guestMid.stillRunningAfter === false, 'va van thoat sau do');
 
   console.log('### KHANG DINH: NHIP CUON TU GIAN theo ap luc hang doi (chong "dung feed")');
   // Truoc day vong quet chay HET TOC roi DUNG HAN khi hang doi day 20/20 — hanh vi bat/tat do la
