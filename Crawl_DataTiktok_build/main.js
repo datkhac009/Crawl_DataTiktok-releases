@@ -20,6 +20,7 @@ const vpn = require('./src/vpn-hma.cjs');
 const ipGuard = require('./src/ip-guard.cjs');
 const { withDeadline } = require('./src/google-api.cjs');
 const updater = require('./src/updater.cjs');
+const linkstore = require('./src/linkstore.cjs');
 const { getLogsDir } = require('./src/paths.cjs');
 
 app.setName(app.isPackaged ? 'TikTokCrawler' : 'TikTokCrawler-Dev');
