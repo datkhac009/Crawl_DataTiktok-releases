@@ -45,8 +45,27 @@ const PRIVATE_REPO_HINT =
   + 'truy cập ẩn danh). Hiện đang CẬP NHẬT THỦ CÔNG: tải .exe mới rồi thay trên từng máy. '
   + 'Nhớ cập nhật TẤT CẢ các máy — máy chạy bản cũ lẫn vào sẽ gây trùng dữ liệu trên Sheet.';
 
+// ── CHUẨN HOÁ Ô "GitHub repo phát hành" (2026-08-11) ──
+// Người dùng nhập tay ô này trên 5 máy, và đã mất thời gian 2 lần vì cùng một kiểu sai:
+// thêm dấu `/` ở cuối → URL thành `/repos/Owner/Repo//releases/latest` → GitHub trả **404**,
+// app báo "Không đọc được release" mà không hề nói vì sao. Đo thật:
+//   [Hung13010/Crawl_DataTiktok-releases]   -> HTTP 200
+//   [Hung13010/Crawl_DataTiktok-releases/]  -> HTTP 404
+// Nhận rộng rãi rồi tự cắt về đúng `Owner/Repo`: dán cả URL GitHub cũng được, thừa dấu `/`
+// hoặc khoảng trắng cũng được. Rẻ, và xoá hẳn một lớp lỗi vận hành lặp lại.
+function normalizeRepo(raw) {
+  let s = String(raw == null ? '' : raw).trim();
+  if (!s) return '';
+  s = s.replace(/^https?:\/\/(?:www\.)?github\.com\//i, '');   // dán cả URL
+  s = s.replace(/^\/+|\/+$/g, '');                              // dấu / đầu/cuối
+  s = s.replace(/\.git$/i, '');                                 // link clone
+  const parts = s.split('/').filter(Boolean);                   // bỏ `//` ở giữa
+  if (parts.length < 2) return '';
+  return parts[0] + '/' + parts[1];                             // bỏ đuôi /releases/tag/...
+}
+
 function _resolveRepo(repo) {
-  return (repo || process.env.UPDATE_REPO || DEFAULT_REPO || '').trim();
+  return normalizeRepo(repo) || normalizeRepo(process.env.UPDATE_REPO) || normalizeRepo(DEFAULT_REPO);
 }
 
 function _currentVersion() {
@@ -112,7 +131,24 @@ function checkForUpdates(mainWindow, { repo, manual = false } = {}) {
         const latest = (release.tag_name || '').replace(/^v/, '');
         const current = _currentVersion();
 
-        if (!latest || !isNewer(latest, current)) {
+        // ── CHO PHÉP CÀI BẢN KHÁC VERSION, KỂ CẢ CŨ HƠN (2026-08-11) ──
+        //
+        // Vì sao cần: dự án có 2 người, 2 repo phát hành riêng (xem QĐ-18). Người dùng muốn
+        // chuyển cả dàn 5 máy sang repo của người kia bằng cách **chỉ đổi ô repo**. Nhưng
+        // release mới nhất bên đó là 0.1.55 trong khi máy đang ở 0.1.70 → luật cũ
+        // `isNewer(latest, current)` trả false → app báo "Đã là bản mới nhất" và KHÔNG tải gì.
+        // Đó đúng là cái bẫy QĐ-18 đã ghi: *"tự báo nhầm đã là bản mới nhất dù thực tế đang
+        // chạy code khác hẳn"*. Hệ quả thật: phải đi thay .exe tay trên từng máy.
+        //
+        // Luật mới: version KHÁC nhau là có thể cài. Không cần lưu thêm trạng thái nào, và
+        // KHÔNG sinh vòng lặp — sau khi chuyển sang repo kia thì current == latest (bằng nhau)
+        // nên không còn đề nghị gì nữa.
+        //
+        // ⚠ CHỐT AN TOÀN: hạ version CHỈ được đề nghị khi người dùng **tự bấm Kiểm tra**
+        // (`manual`). Lần tự kiểm lúc khởi động tuyệt đối không hạ ngầm — cấu hình sai một ô
+        // sẽ âm thầm cho cả dàn máy tụt về bản cũ, mất các tính năng mà không ai hay.
+        const older = latest && !isNewer(latest, current) && latest !== current;
+        if (!latest || (!isNewer(latest, current) && !(manual && older))) {
           if (manual) send('update-not-available', { current });
           return;
         }
@@ -121,6 +157,8 @@ function checkForUpdates(mainWindow, { repo, manual = false } = {}) {
         send('update-available', {
           version: latest,
           current,
+          repo: REPO,
+          isDowngrade: !!older,   // renderer phải cảnh báo RÕ, không cài lặng lẽ
           changelog: release.body || '',
           download_url: exeAsset ? exeAsset.browser_download_url : null,
         });
@@ -337,4 +375,4 @@ async function ensureFirefox(mainWindow, { repo } = {}) {
   }
 }
 
-module.exports = { checkForUpdates, downloadAndUpdate, ensureFirefox, DEFAULT_REPO };
+module.exports = { checkForUpdates, downloadAndUpdate, ensureFirefox, DEFAULT_REPO, normalizeRepo, isNewer };

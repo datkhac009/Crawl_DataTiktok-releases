@@ -1748,15 +1748,28 @@ function setUpdateStatus(msg, type = '') {
 
 function showUpdateAvailable(d) {
   _pendingUpdate = d;
-  $('updateNewVer').textContent = 'v' + d.version;
+  // HẠ VERSION (đổi sang repo phát hành khác — xem updater.cjs) phải nhìn KHÁC HẲN bản nâng
+  // cấp bình thường. Người dùng bấm "Cập nhật ngay" theo phản xạ; nếu không nói rõ đây là đi
+  // LÙI thì họ mất các tính năng chỉ có ở bản đang chạy mà không hề biết.
+  $('updateNewVer').textContent = d.isDowngrade
+    ? `v${d.version}  ⚠ CŨ HƠN bản đang chạy (v${d.current})`
+    : 'v' + d.version;
   $('updateChangelog').textContent = d.changelog || '(không có ghi chú)';
   $('updateAvailBox').style.display = '';
   const btn = $('updateInstallBtn');
   if (d.download_url) {
     btn.disabled = false;
-    setUpdateStatus('Đã có bản mới v' + d.version + '. Nhấn “Cập nhật ngay”.', 'ok');
+    btn.textContent = d.isDowngrade ? '⬇ Chuyển sang bản này (hạ version)' : '⬆ Cập nhật ngay';
+    setUpdateStatus(
+      d.isDowngrade
+        ? `⚠️ Đây là HẠ VERSION: v${d.current} → v${d.version}, từ repo "${d.repo || '?'}". `
+          + 'Chỉ làm nếu bạn CHỦ Ý chuyển sang bản phát hành của repo đó — bản đang chạy có thể '
+          + 'có tính năng mà bản kia không có. Dữ liệu (profiles, config, known_links.txt) không bị đụng.'
+        : 'Đã có bản mới v' + d.version + '. Nhấn “Cập nhật ngay”.',
+      d.isDowngrade ? 'err' : 'ok');
   } else {
     btn.disabled = true;
+    btn.textContent = '⬆ Cập nhật ngay';
     setUpdateStatus('Có bản mới nhưng release thiếu file .exe để tải.', 'err');
   }
   openUpdateModal();
@@ -1781,6 +1794,18 @@ async function checkUpdatesManual() {
 
 async function installUpdate() {
   if (!_pendingUpdate || !_pendingUpdate.download_url) return;
+  // HẠ VERSION phải xác nhận tường minh. Cùng nguyên tắc với 🧹 Dọn trùng (QĐ-20): việc khó
+  // đảo ngược thì bắt buộc có bước xác nhận, không dựa vào việc người dùng đọc dòng trạng thái.
+  if (_pendingUpdate.isDowngrade && !confirm(
+      `HẠ VERSION: v${_pendingUpdate.current} → v${_pendingUpdate.version}\n`
+      + `Repo: ${_pendingUpdate.repo || '?'}\n\n`
+      + 'Bản đang chạy CÓ THỂ có tính năng mà bản kia không có. Chỉ làm nếu bạn chủ ý chuyển '
+      + 'sang bản phát hành của repo đó.\n\n'
+      + 'Dữ liệu KHÔNG bị đụng: profiles/, config/, known_links.txt giữ nguyên.\n\n'
+      + 'Xác nhận chuyển?')) {
+    setUpdateStatus('Đã huỷ — vẫn giữ bản đang chạy.', 'ok');
+    return;
+  }
   $('updateInstallBtn').disabled = true;
   $('updateLaterBtn').disabled = true;
   $('updateCheckBtn').disabled = true;

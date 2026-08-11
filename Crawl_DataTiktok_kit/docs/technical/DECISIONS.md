@@ -2218,3 +2218,97 @@ khẳng định**, 0 trượt.
 | Bật cờ "đã đọc được Sheet" từ một nguồn **cục bộ** | Cờ đó bảo vệ chống trùng LIÊN MÁY. Nguồn cục bộ không biết máy khác vừa đẩy gì |
 | Ghi đè file kho bằng nội dung Sheet | Cả mục đích của kho là để **dọn bớt Sheet** ⇒ kho chứa nhiều link Sheet không còn. Ghi đè là xoá đúng phần trí nhớ quý nhất. Chỉ được append |
 | Chạy test của `linkstore` mà không đặt `PORTABLE_EXECUTABLE_DIR` | `getBaseDir()` khi dev trỏ vào thư mục dự án ⇒ test ghi đè kho link THẬT |
+
+---
+
+## QĐ-37 — Đổi ô "GitHub repo phát hành" là CHUYỂN được bản, kể cả xuống bản cũ hơn (2026-08-11)
+
+### Bối cảnh
+
+Dự án có **2 người, 2 repo phát hành riêng** (QĐ-18). Người dùng muốn chạy bản của người kia
+(`Hung13010/...`) và **chuyển qua chuyển lại tự do** — nguyên văn: *"app có thể thay đổi liên tục
+nhờ cái phần Cập nhật... không nhất thiết phải chạy app của tôi vì tôi cũng muốn chạy bản của Hung
+vì lỡ nó nhanh hơn"*.
+
+Nhưng luật cũ `isNewer(latest, current)` **chặn hẳn** đường đó: release mới nhất bên kia là
+`0.1.55` trong khi máy đang ở `0.1.70` → app báo **"Đã là bản mới nhất"** và không tải gì. Đây
+đúng cái bẫy QĐ-18 đã ghi: *"tự báo nhầm đã là bản mới nhất dù thực tế đang chạy code khác hẳn"*.
+Hệ quả thật: phải đi thay `.exe` bằng tay trên **từng máy trong 5 máy**.
+
+### Quyết định
+
+Đổi luật từ **"bản mới hơn"** thành **"bản KHÁC"**. Không thêm trạng thái lưu trữ nào.
+
+**Vì sao không cần lưu "repo đang cài từ đâu":** sau khi chuyển xong thì `current == latest`
+(bằng nhau) → không đề nghị nữa. **Không sinh vòng lặp** bằng chính tính chất của phép so, không
+phải bằng một cờ nhớ thêm — ít trạng thái thì ít chỗ sai.
+
+**Đi được cả hai chiều mà chỉ cần tính năng này ở MỘT phía:**
+
+| Chiều | Cần gì |
+|---|---|
+| Bản mình (0.1.71) → bản Hung (0.1.55) | Tính năng này (hạ version) |
+| Bản Hung (0.1.55) → bản mình (0.1.71) | **Không cần gì** — 0.1.71 mới hơn nên updater gốc bên Hung tự nhận |
+
+### ⚠ Chốt an toàn — quan trọng hơn cả tính năng
+
+**Hạ version CHỈ được đề nghị khi người dùng tự bấm "Kiểm tra"** (`manual === true`). Lần tự kiểm
+lúc khởi động **tuyệt đối không** hạ ngầm. Lý do: ô repo nằm ở `%APPDATA%`, **riêng từng máy**;
+gõ sai một ô là cả dàn máy âm thầm tụt về bản cũ, mất các tính năng mà không ai hay. Hạ version
+phải luôn là **hành động chủ ý**.
+
+Giao diện nói thẳng, không cài lặng lẽ:
+- Nhãn version đổi thành `v0.1.55 ⚠ CŨ HƠN bản đang chạy (v0.1.71)`
+- Nút đổi chữ thành `⬇ Chuyển sang bản này (hạ version)`
+- Dòng trạng thái nói rõ chiều đi, tên repo, và *"bản đang chạy có thể có tính năng mà bản kia
+  không có"*
+- Thêm `confirm()` bắt buộc — cùng nguyên tắc với 🧹 Dọn trùng (QĐ-20): việc khó đảo ngược thì
+  phải có bước xác nhận, không dựa vào việc người dùng đọc dòng trạng thái
+
+### Sửa kèm — `normalizeRepo()`, xoá hẳn một lớp lỗi vận hành
+
+Người dùng nhập tay ô này trên 5 máy và **đã mất thời gian 2 lần vì cùng một kiểu sai**: thêm dấu
+`/` ở cuối. Đo thật:
+
+```
+[Hung13010/Crawl_DataTiktok-releases]   -> HTTP 200
+[Hung13010/Crawl_DataTiktok-releases/]  -> HTTP 404
+```
+
+Vì URL thành `/repos/Owner/Repo//releases/latest`. App chỉ báo *"Không đọc được release"* — không
+hề nói vì sao. Nay nhận rộng rãi rồi tự cắt về `Owner/Repo`: dán cả URL GitHub, thừa `/`, khoảng
+trắng, đuôi `.git`, đuôi `/releases/tag/v1` đều được. **Chuẩn hoá cả lúc LƯU** (`update-set-repo`)
+nên giá trị hỏng không bao giờ nằm lại trong store.
+
+(Bản vá này từng được viết rồi bị hoàn lại; lần này nó nằm trong phạm vi đúng của yêu cầu
+"chỉ cần ghi ô repo là chuyển được", nên đưa vào.)
+
+### Kiểm chứng
+
+`test/update-repo-switch.test.js` — **27 khẳng định**. Mock `https` + `electron` + `package.json`
+rồi nạp `updater.cjs` **thật** (không chép logic sang test — bài học QĐ-10).
+
+Đã kiểm test có "cắn":
+
+| Đột biến | Kết quả |
+|---|---|
+| Bỏ chốt "chỉ hạ version khi `manual`" | **2 trượt** (16, 17) |
+| Quay về luật cũ (chỉ nhận bản mới hơn) | **4 trượt** (12–15) |
+| Bỏ `normalizeRepo` | **2 trượt** (20, 21) — hiện nguyên URL `...-releases//releases/latest` |
+
+### Hai cái bẫy trong chính bộ test, đã sửa
+
+1. Mock chỉ có `https.get` → `req.end is not a function`. `checkForUpdates` dùng
+   `https.request()` rồi `req.end()`. Mock phải trả object có **cả** `on()` và `end()`, và chỉ
+   bắn dữ liệu **khi `end()` được gọi** — sai nhịp này thì khẳng định "không đề nghị gì" pass GIẢ.
+2. Mock đặt `app.getVersion()` nhưng `_currentVersion()` đọc `require('../package.json').version`
+   → tham số `currentVersion` **vô tác dụng**, mọi kịch bản chạy với version thật (0.1.70) nên
+   khẳng định "bằng nhau → không đề nghị" trượt oan. Phải giả lập đúng file `package.json`.
+
+| KHÔNG nên làm lại | Vì sao |
+|---|---|
+| Chỉ cho updater đi LÊN khi hệ có nhiều repo phát hành | Đổi repo thành vô tác dụng, app báo "đã mới nhất" trong khi đang chạy code khác hẳn → phải thay `.exe` tay trên từng máy |
+| Cho hạ version ở lần tự kiểm lúc khởi động | Gõ sai một ô cấu hình (riêng từng máy) là cả dàn máy âm thầm tụt bản, mất tính năng mà không ai hay |
+| Để việc hạ version nhìn giống nâng cấp bình thường | Người dùng bấm "Cập nhật ngay" theo phản xạ. Việc đi LÙI phải đổi nhãn, đổi chữ trên nút, và có `confirm()` |
+| Lưu thêm cờ "repo đang cài từ đâu" để chống lặp | Không cần: `current == latest` sau khi chuyển là đã tự dừng. Thêm trạng thái là thêm chỗ sai (và phải ghi được nó *trước* `app.quit()`) |
+| Tin tham số mock mà không kiểm hàm THẬT đọc từ đâu | `_currentVersion()` đọc `package.json`, không đọc `app.getVersion()` → mock vô tác dụng, test trượt oan và tưởng code sai |

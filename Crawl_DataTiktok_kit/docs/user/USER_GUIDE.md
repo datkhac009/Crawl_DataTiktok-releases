@@ -75,6 +75,35 @@ quét cần ~20 → hàng đợi đầy vĩnh viễn → **vòng quét đứng, 
 
 Đổi xong **áp dụng ngay** cho sound kế tiếp, không cần chạy lại profile.
 
+### Chuyển qua lại giữa 2 bản phát hành (2 repo)
+
+Dự án có **2 người, 2 repo phát hành riêng**. Bạn chuyển được qua lại chỉ bằng **một ô**:
+
+**⬆ Cập nhật → Nâng cao → GitHub repo phát hành** → gõ tên repo → **Lưu** → bấm **Kiểm tra**.
+
+| Muốn chạy bản của | Gõ vào ô |
+|---|---|
+| Bạn (`datkhac009`) | `datkhac009/Crawl_DataTiktok-releases` — hoặc **để trống** (mặc định) |
+| Hung13010 | `Hung13010/Crawl_DataTiktok-releases` |
+
+Dán cả URL GitHub cũng được, app tự cắt về dạng `Owner/Repo`. Thừa dấu `/` ở cuối cũng không sao
+nữa — trước đây nó gây lỗi *"Không đọc được release"*.
+
+⚠️ **Nếu bản bên kia CŨ HƠN bản đang chạy** thì app vẫn cho chuyển, nhưng:
+
+- Nhãn hiện `v0.1.55 ⚠ CŨ HƠN bản đang chạy (v0.1.71)`
+- Nút đổi thành **⬇ Chuyển sang bản này (hạ version)**
+- Có hộp xác nhận, phải bấm đồng ý
+
+**Chỉ khi bạn TỰ bấm "Kiểm tra"** thì app mới đề nghị hạ version. Lần tự kiểm lúc khởi động
+**không bao giờ** tự hạ — để một ô gõ sai không làm cả dàn máy âm thầm tụt về bản cũ.
+
+**Dữ liệu KHÔNG bị đụng** khi chuyển: `profiles/`, `config/`, `known_links.txt` giữ nguyên. Chỉ
+file `.exe` bị thay.
+
+⚠️ Nhớ **mỗi máy phải gõ riêng** — ô này lưu trong máy, không đồng bộ qua Sheet. Máy nào để trống
+là về mặc định `datkhac009`.
+
 ### Khi nào bật "Dùng profile Chromium riêng"?
 
 Bình thường app lưu phiên đăng nhập trong **một file cookie** và cho mọi profile **dùng chung

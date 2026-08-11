@@ -844,7 +844,10 @@ ipcMain.handle('update-get-repo', () => ({
   default: updater.DEFAULT_REPO,
 }));
 ipcMain.handle('update-set-repo', (_e, repo) => {
-  store.set('update_repo', (repo || '').trim());
+  // Chuẩn hoá TRƯỚC KHI LƯU (2026-08-11): người dùng đã mất thời gian 2 lần vì dán thừa dấu
+  // `/` ở cuối → GitHub 404. Cắt ở đây thì giá trị hỏng không bao giờ nằm lại trong store,
+  // và ô nhập tự hiện lại dạng đã sạch cho người dùng thấy mình gõ đúng chưa.
+  store.set('update_repo', updater.normalizeRepo(repo));
   return { ok: true };
 });
 

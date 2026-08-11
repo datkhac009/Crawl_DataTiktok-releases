@@ -32,7 +32,7 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 | `store-get`, `store-set` | gọi | Đọc/ghi electron-store (`profile_settings`, `count_concurrency`, `update_repo`…) |
 | `select-folder`, `export-results` | gọi | Hộp thoại chọn thư mục; xuất bảng dữ liệu ra CSV (UTF-8 BOM) |
 | `check-updates`, `download-and-update` | gọi | Kiểm tra & cài bản mới |
-| `update-get-repo`, `update-set-repo` | gọi | Repo GitHub phát hành (ô "Nâng cao" trong modal ⬆) |
+| `update-get-repo`, `update-set-repo` | gọi | Repo GitHub phát hành (ô "Nâng cao" trong modal ⬆). `update-set-repo` **chuẩn hoá trước khi lưu** qua `updater.normalizeRepo()` — nhận cả URL GitHub, thừa `/`, đuôi `.git`; giá trị hỏng không bao giờ nằm lại trong store ([QĐ-37](DECISIONS.md)) |
 | `download-progress`, `update-available`, `update-not-available`, `update-error` | nhận | Tiến trình tải + kết quả kiểm tra cập nhật |
 | `vpn-status` | gọi | Đọc trạng thái HMA VPN hiện tại (chỉ đọc, không đổi gì) — [QĐ-32](DECISIONS.md) |
 | `vpn-ipv6-risk` | gọi | Máy có IPv6 công khai (rò rỉ khi VPN tắt) hay không. Dùng để **phân mức cảnh báo** khi người dùng tắt HMA lúc còn profile chạy: có IPv6 → chúng đang **LỘ IP thật**; không có → chỉ lỗi mạng. Rẻ, đồng bộ, không spawn gì |
