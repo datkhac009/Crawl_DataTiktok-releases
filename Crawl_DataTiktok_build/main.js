@@ -6,7 +6,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const Store = require('electron-store');
 
 const profiles = require('./src/profiles.cjs');
@@ -337,54 +337,36 @@ ipcMain.handle('profile-start', async (_e, params) => {
     (msg) => send('crawl-status', { profileId: null, status: 'sheet-error', msg: 'Google Sheet: ' + msg })
   );
 
-  // Lọc trùng với link đã có trên Sheet — CHỈ đọc khi là profile ĐẦU TIÊN của phiên.
-  let seedUrls = [];
-  if (!crawler.isAnyRunning() && sheetsCfg.enabled && sa && sheetsCfg.spreadsheetId) {
+  // ── KHO LINK CỤC BỘ known_links.txt (2026-08-11) ──
+  // Nạp ĐỒNG BỘ, TRƯỚC khi crawler chạy — đọc file cạnh .exe chỉ tốn mili-giây nên không có
+  // nguy cơ chặn giao diện như đọc Sheet. Nạp kể cả khi Google Sheet đang tắt/lỗi: đây là bộ
+  // nhớ của RIÊNG máy này, không phụ thuộc mạng.
+  //
+  // ⚠ Truyền qua `seedKeys` của startProfile, KHÔNG gọi crawler.addSeedUrls() trước:
+  // startProfile() xóa `_collected` khi profile ĐẦU TIÊN chạy, nạp trước là bị xóa mất.
+  let seedKeys = [];
+  if (!crawler.isAnyRunning()) {
     try {
-      // Dùng refreshKnownLinks (không phải readLinks): nó vừa nạp vào bộ lọc ĐẨY vừa ĐẶT MỐC
-      // dòng. Nếu chỉ readLinks thì mốc vẫn 0 → lần đẩy đầu tiên lại phải đọc lại 156.000
-      // dòng lần nữa (đọc trùng vô ích ngay lúc khởi động).
-      const seed = await sheets.refreshKnownLinks({ full: true });
-      seedUrls = seed.links;
-      send('crawl-status', { profileId: null, status: 'info', msg: `Đã nạp ${seedUrls.length} link từ Sheet để lọc trùng...` });
-    } catch (e) {
-      // (2026-07-29) Chưa nạp được → sheets.enqueue() tự tạm dừng đẩy realtime cho tới khi
-      // nạp thành công (tránh đẩy mù gây trùng). Nói rõ điều đó ra UI để không tưởng nhầm là
-      // mất dữ liệu — dữ liệu vẫn hiện trong bảng, tự thử lại mỗi phút, hoặc bấm "Đẩy lên
-      // Sheet" để đẩy ngay (nút đó tự đọc lại danh sách mới nhất trước khi đẩy).
-      send('crawl-status', {
-        profileId: null, status: 'sheet-error',
-        msg: 'Không đọc được Sheet để lọc trùng: ' + e.message
-          + ' — TẠM DỪNG đẩy tự động lên Sheet (tránh trùng), dữ liệu vẫn hiện trong bảng.'
-          + ' App tự thử lại mỗi phút; muốn đẩy ngay thì bấm "Đẩy lên Sheet".',
-      });
-    }
-
-    // Nạp link đã có trên TAB CHỜ để không ghi trùng (QĐ-33). Lỗi thì chỉ cảnh báo — tab chờ
-    // là tính năng phụ, không được làm hỏng cả lượt chạy. Chưa nạp được thì tệ nhất là ghi
-    // trùng vài dòng trên tab chờ, không ảnh hưởng dữ liệu chính.
-    if (sheets.isPendingEnabled()) {
-      const tab = sheets.pendingTabName();
-      const p = await sheets.seedPendingLinks();
-      if (p.ok) {
-        send('crawl-status', { profileId: null, status: 'info',
-          msg: `Tab chờ "${tab}": đã nạp ${p.count} link để lọc trùng.` });
-      } else if (p.missingTab) {
-        // TAB KHÔNG TỒN TẠI → nói thẳng HẬU QUẢ (link sẽ bị BỎ) và chỉ đúng chỗ sửa. Không để
-        // người dùng phải suy ra từ câu lỗi của Google — cùng nguyên tắc QĐ-26.
-        send('crawl-status', { profileId: null, status: 'sheet-error',
-          msg: `Chưa có tab "${tab}" trên Sheet → link không đọc được số video sẽ bị BỎ. `
-            + `Tạo tab đó với 5 tiêu đề: Tên Sound | Link | Số Video | Profile | Tình trạng `
-            + `(hoặc điền tên tab khác vào ô "Tên tab CHỜ KIỂM TAY" trong ☁).` });
-      } else if (p.msg) {
-        send('crawl-status', { profileId: null, status: 'sheet-error',
-          msg: `Không đọc được tab chờ "${tab}": ${p.msg}` });
-      }
+      linkstore.ensureFile();          // chưa có thì tạo mới cạnh phần mềm
+      seedKeys = linkstore.all();
+    } catch (_) { seedKeys = []; }
+    if (seedKeys.length) {
+      sheets.addKnownKeys(seedKeys);   // chặn trùng ở CỬA ĐẨY luôn, không chỉ cửa quét
+      send('crawl-status', { profileId: null, status: 'info',
+        msg: `Đã nạp ${seedKeys.length.toLocaleString('vi-VN')} link từ kho cục bộ `
+          + `"${linkstore.FILE_NAME}" để lọc trùng (tức thì).` });
     }
   }
 
-  return crawler.startProfile(
-    { ...params, seedUrls },
+  // Link đẩy lên Sheet THÀNH CÔNG → ghi luôn vào kho cục bộ, không đợi vòng đồng bộ sau đọc
+  // ngược về (app tắt trước vòng đó là mất). Gán mỗi lần start đều được — chỉ thay hàm.
+  sheets.setOnPushed((urls) => { try { linkstore.addUrls(urls); } catch (_) {} });
+
+  // PHẢI tính TRƯỚC startProfile: sau khi nó chạy thì isAnyRunning() thành true.
+  const needSeed = !crawler.isAnyRunning() && sheetsCfg.enabled && sa && sheetsCfg.spreadsheetId;
+
+  const result = crawler.startProfile(
+    { ...params, seedUrls: [], seedKeys },
     (data) => {
       send('crawl-data', data);
       // Lịch sử theo ngày: đếm ĐÚNG số sound thực sự thu được (dòng vào bảng = cột "Hợp lệ").
@@ -423,6 +405,65 @@ ipcMain.handle('profile-start', async (_e, params) => {
       }
     }
   );
+
+  // ── ĐỌC SHEET Ở NỀN — KHÔNG CHẶN KHỞI ĐỘNG (2026-08-11) ──
+  //
+  // Trước đây chỗ này `await sheets.refreshKnownLinks({ full: true })` TRƯỚC khi khởi động
+  // crawler. Với Sheet 206.572 dòng thì lần đọc đó tải 13MB và mất hàng phút (READ_LINKS_
+  // TIMEOUT_MS = 120s, có retry 1 lần ⇒ xấu nhất ~4 phút), suốt thời gian đó giao diện đứng ở
+  // "Đang khởi động..." không báo gì — nhìn hệt như app treo.
+  //
+  // Giờ: crawl chạy NGAY bằng kho cục bộ, danh sách Sheet nạp ở nền qua crawler.addSeedUrls()
+  // — đúng cơ chế mà vòng đồng bộ định kỳ vẫn dùng, không thêm đường mới nào.
+  //
+  // ⚠ PHẢI đặt SAU startProfile: nó xóa `_collected` khi profile đầu tiên chạy, nạp trước là mất.
+  // ⚠ Sound thu được trong lúc đang nạp KHÔNG bị mất: `enqueue()` giữ chúng trong bộ đệm và
+  // `flush()` chặn ghi cho tới khi seed xong (xem cặp chốt `_seeded` trong sheets.cjs).
+  if (result && result.ok && needSeed) {
+    send('crawl-status', { profileId: null, status: 'info',
+      msg: 'Đang nạp danh sách link từ Google Sheet để lọc trùng (chạy nền, quét vẫn tiếp tục)...' });
+    // Dùng refreshKnownLinks (không phải readLinks): nó vừa nạp vào bộ lọc ĐẨY vừa ĐẶT MỐC
+    // dòng — thiếu mốc thì vòng đồng bộ đầu tiên lại phải đọc lại toàn bộ lần nữa.
+    sheets.refreshKnownLinks({ full: true })
+      .then((seed) => {
+        const addedScan = crawler.addSeedUrls(seed.links);
+        const addedStore = linkstore.addUrls(seed.links);
+        send('crawl-status', { profileId: null, status: 'info',
+          msg: `Đã nạp ${seed.links.length.toLocaleString('vi-VN')} link từ Sheet `
+            + `(+${addedScan} link mới vào bộ lọc quét`
+            + (addedStore ? `, +${addedStore} vào kho cục bộ` : '') + '). Đẩy tự động đã mở.' });
+      })
+      .catch((e) => {
+        send('crawl-status', { profileId: null, status: 'sheet-error',
+          msg: 'Không đọc được Sheet để lọc trùng: ' + e.message
+            + ' — quét vẫn chạy bằng kho cục bộ, nhưng TẠM DỪNG đẩy tự động (tránh trùng liên máy).'
+            + ' Dữ liệu vẫn hiện trong bảng và được giữ trong bộ đệm; app tự thử lại mỗi phút.' });
+      })
+      // Tab CHỜ nạp sau, tuần tự: tránh 2 lần đọc Sheet bắn cùng lúc làm nặng thêm quota.
+      // Lỗi thì chỉ cảnh báo — tab chờ là tính năng phụ, không được làm hỏng lượt chạy.
+      .then(async () => {
+        if (!sheets.isPendingEnabled()) return;
+        const tab = sheets.pendingTabName();
+        const p = await sheets.seedPendingLinks();
+        if (p.ok) {
+          send('crawl-status', { profileId: null, status: 'info',
+            msg: `Tab chờ "${tab}": đã nạp ${p.count} link để lọc trùng.` });
+        } else if (p.missingTab) {
+          // TAB KHÔNG TỒN TẠI → nói thẳng HẬU QUẢ (link sẽ bị BỎ) và chỉ đúng chỗ sửa. Không để
+          // người dùng phải suy ra từ câu lỗi của Google — cùng nguyên tắc QĐ-26.
+          send('crawl-status', { profileId: null, status: 'sheet-error',
+            msg: `Chưa có tab "${tab}" trên Sheet → link không đọc được số video sẽ bị BỎ. `
+              + `Tạo tab đó với 5 tiêu đề: Tên Sound | Link | Số Video | Profile | Tình trạng `
+              + `(hoặc điền tên tab khác vào ô "Tên tab CHỜ KIỂM TAY" trong ☁).` });
+        } else if (p.msg) {
+          send('crawl-status', { profileId: null, status: 'sheet-error',
+            msg: `Không đọc được tab chờ "${tab}": ${p.msg}` });
+        }
+      })
+      .catch((e) => { console.warn('[pending] Nạp tab chờ ở nền lỗi:', e.message); });
+  }
+
+  return result;
 });
 // Nhả khóa liên máy khi dừng → máy khác chạy được NGAY, không phải chờ hết 3 phút stale.
 // Không await trong handler dừng: nhả khóa là việc gọi mạng, không được làm nút Dừng chậm đi.
@@ -492,6 +533,53 @@ ipcMain.handle('sheets-clean-duplicates', async () => {
   if (r.err) return r.err;
   try { return await sheets.cleanDuplicates(r.cfg.spreadsheetId, r.cfg.tab || 'Data', r.sa); }
   catch (e) { return { ok: false, msg: e.message }; }
+});
+
+// ─────────────────────────────────────────
+// IPC: KHO LINK CỤC BỘ (known_links.txt cạnh .exe) — 2026-08-11
+// ─────────────────────────────────────────
+
+// Trạng thái để hiện lên giao diện: file nằm đâu, đang giữ bao nhiêu khoá.
+// force=true → đọc lại từ đĩa (sau khi người dùng tự sửa file bằng Notepad).
+ipcMain.handle('linkstore-info', (_e, force) => {
+  try {
+    const set = linkstore.load(!!force);
+    return { ok: true, path: linkstore.getFilePath(), count: set.size, file: linkstore.FILE_NAME };
+  } catch (e) { return { ok: false, msg: e.message }; }
+});
+
+// Mở file bằng ứng dụng mặc định (Notepad) để người dùng dán thêm link bằng tay.
+// Tạo file trước nếu chưa có — mở một đường dẫn không tồn tại thì Windows báo lỗi khó hiểu.
+ipcMain.handle('linkstore-open', async () => {
+  try {
+    const f = linkstore.ensureFile();
+    const err = await shell.openPath(f);
+    return err ? { ok: false, msg: err } : { ok: true, path: f };
+  } catch (e) { return { ok: false, msg: e.message }; }
+});
+
+// NÚT "Nạp Sheet vào kho": đọc TOÀN BỘ tab chính rồi ghi bổ sung vào known_links.txt.
+//
+// ⚠ GỘP THÊM, KHÔNG GHI ĐÈ. Người dùng dán tay link vào file này, và cả mục đích của tính năng
+// là để họ DỌN BỚT Sheet cho nhẹ — nghĩa là kho sẽ chứa nhiều link mà Sheet KHÔNG còn. Ghi đè
+// bằng nội dung Sheet là xoá sạch đúng phần trí nhớ quý nhất. `addUrls` vốn chỉ append.
+ipcMain.handle('linkstore-import-sheet', async () => {
+  const r = _sheetsCfgOrErr();
+  if (r.err) return r.err;
+  try {
+    linkstore.ensureFile();          // Sheet trống thì file vẫn phải tồn tại
+    const before = linkstore.count();
+    // Đọc thẳng cột link, KHÔNG qua refreshKnownLinks — hàm đó còn ĐẶT MỐC dòng cho vòng đồng
+    // bộ đang chạy; nút này chỉ lấy dữ liệu về kho, không được đụng vào mốc đó.
+    const got = await sheets.readLinkColumn(r.cfg.spreadsheetId, r.cfg.tab || 'Data', r.sa, { startRow: 1 });
+    const added = linkstore.addUrls(got.links);
+    // Nạp luôn vào bộ lọc ĐẨY của phiên hiện tại để bấm xong là có tác dụng ngay.
+    sheets.addKnownKeys(linkstore.all());
+    return {
+      ok: true, path: linkstore.getFilePath(), added, before,
+      total: linkstore.count(), sheetRows: got.rawRows, sheetLinks: got.links.length,
+    };
+  } catch (e) { return { ok: false, msg: e.message }; }
 });
 
 // ─────────────────────────────────────────
@@ -796,6 +884,7 @@ app.whenReady().then(() => {
   // tự nạp vào bộ lọc ĐẨY của nó).
   let _reseedBusy = false;
   let _lastFullReseedAt = 0;
+  let _lastFullPendingAt = 0;   // mốc RIÊNG cho tab chờ — xem ghi chú ở chỗ dùng
 
   setInterval(async () => {
     if (_reseedBusy || !crawler.isAnyRunning()) return;
@@ -803,7 +892,29 @@ app.whenReady().then(() => {
     if (!cfg.enabled || !cfg.spreadsheetId || !cfg.saJson) return;
     // `reseedMinutes` giờ là chu kỳ ĐỌC LẠI TOÀN BỘ (đồng bộ mốc); phần đuôi đọc mỗi phút.
     const fullEveryMin = Math.max(1, parseFloat(cfg.reseedMinutes) || 10);
-    const needFull = Date.now() - _lastFullReseedAt >= fullEveryMin * 60000;
+
+    // ── ĐỌC TRỌN CHỈ KHI SHEET CÒN NHỎ (2026-08-11) ──
+    //
+    // ĐO THẬT trên máy người dùng (log 2026-08-10, `reseedMinutes = 3`):
+    //   18 lần "Đọc TOÀN BỘ Sheet (201.347 dòng)" trong 8 tiếng, mỗi lần tải ~13MB và thu về
+    //   +7, +5, +8 link mới. Đọc 201.347 dòng để tìm 7 link — và trong 8 tiếng đó heap tiến
+    //   trình main leo từ 45MB lên 2.793MB (~344MB/giờ), kèm 273 lần Google API timeout 25s.
+    //   Với chu kỳ 3 phút mà một lần đọc trọn mất hàng phút thì app gần như tải Sheet liên tục,
+    //   tự bóp nghẹt băng thông của chính nó.
+    //
+    // Lần đọc trọn chỉ có MỘT tác dụng thật: đồng bộ lại mốc dòng sau khi ai đó XÓA dòng ở
+    // giữa bảng (vd chạy 🧹 Dọn trùng). Cái giá đó quá đắt với Sheet lớn.
+    //
+    // TỰ THÍCH ỨNG:
+    //   • Sheet NHỎ (< SMALL_SHEET_ROWS) → đọc trọn theo chu kỳ như cũ. Vài giây, và TỰ khỏi
+    //     cái bẫy "xóa dòng giữa bảng" vì mốc sai cũng không hại.
+    //   • Sheet LỚN → KHÔNG đọc trọn định kỳ nữa, chỉ đọc phần đuôi. Kho cục bộ
+    //     known_links.txt đã giữ lịch sử nên không cần Sheet làm bản lưu đầy đủ.
+    //     Muốn đồng bộ lại mốc sau khi dọn trùng thì khởi động lại app (lần seed đầu phiên
+    //     vẫn đọc trọn một lần), hoặc bấm nút "Nạp Sheet vào kho".
+    const SMALL_SHEET_ROWS = 5000;
+    const sheetBig = sheets.sheetRowCount() >= SMALL_SHEET_ROWS;
+    const needFull = !sheetBig && (Date.now() - _lastFullReseedAt >= fullEveryMin * 60000);
 
     _reseedBusy = true;
     try {
@@ -811,9 +922,13 @@ app.whenReady().then(() => {
       if (r.full) _lastFullReseedAt = Date.now();
       if (r.rawRows > 0) {
         const addedScan = crawler.addSeedUrls(r.links);
+        // Link do MÁY KHÁC vừa đẩy lên cũng chảy về kho cục bộ, để lần mở app sau không phải
+        // hỏi Sheet mới biết. Đây là cách kho tự đầy lên theo thời gian.
+        const addedStore = linkstore.addUrls(r.links);
         if (addedScan > 0 || r.full) {
           console.log(`[reseed] ${r.full ? `Đọc TOÀN BỘ Sheet (${r.rawRows} dòng)` : `Đọc phần mới (${r.rawRows} dòng từ dòng ${r.from})`}`
-            + `: +${addedScan} link mới vào bộ lọc quét.`);
+            + `: +${addedScan} link mới vào bộ lọc quét`
+            + (addedStore ? `, +${addedStore} vào kho cục bộ.` : '.'));
         }
       }
     } catch (e) {
@@ -826,7 +941,14 @@ app.whenReady().then(() => {
     // Lỗi ở đây KHÔNG được làm hỏng việc đọc tab chính → try/catch riêng.
     try {
       if (sheets.isPendingEnabled()) {
-        const p = await sheets.refreshPendingKnown({ full: needFull });
+        // ⚠ Dùng mốc RIÊNG, KHÔNG dùng `needFull` của tab chính (2026-08-11): từ nay tab chính
+        // cỡ lớn không bao giờ đọc trọn nữa, mà tab chờ thì NHỎ và rất cần đọc trọn định kỳ —
+        // đó là đường duy nhất để máy này thấy link máy khác vừa ghi vào tab chờ. Dùng chung
+        // cờ sẽ vô tình tắt luôn việc đọc trọn tab chờ → quay lại đúng lỗi tab chờ đầy dòng
+        // trùng mà 2026-08-06 đã vá.
+        const pendFull = Date.now() - _lastFullPendingAt >= fullEveryMin * 60000;
+        const p = await sheets.refreshPendingKnown({ full: pendFull });
+        if (p.ok && p.full) _lastFullPendingAt = Date.now();
         if (p.ok && p.added > 0) {
           console.log(`[pending] Đọc ${p.full ? 'TOÀN BỘ' : 'phần mới'} tab chờ: +${p.added} link`
             + ` (tổng đã biết: ${p.count}).`);

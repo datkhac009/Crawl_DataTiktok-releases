@@ -247,6 +247,24 @@
           </div>
           <div class="section-desc">Quét lại cột Link, xoá bớt dòng thừa nếu bị trùng. Tab càng lớn càng lâu (có thể tới vài phút) — sẽ hiện xem trước số dòng sẽ xoá trước khi xoá thật.</div>
         </div>
+
+        <div class="section">
+          <div class="section-title">Kho link cục bộ (lọc trùng)</div>
+          <div class="section-desc" style="margin-bottom:8px">
+            File <b>known_links.txt</b> nằm cạnh file phần mềm, giữ toàn bộ link đã biết trên máy này.
+            App nạp nó <b>tức thì</b> lúc bắt đầu chạy nên có bộ lọc trùng ngay, không phải chờ tải Sheet.
+            Nhờ vậy bạn có thể <b>dọn bớt Sheet cho nhẹ</b> mà vẫn không thu lại link cũ.
+            Mỗi dòng một link — dán tay thêm được. App chỉ <b>thêm</b> vào file, không bao giờ xoá.
+            <b>⚠ Đừng xoá file này</b> — hãy sao lưu cùng thư mục <code>profiles/</code>.
+          </div>
+          <div id="linkStoreInfo" class="section-desc" style="margin-bottom:8px">Đang đọc...</div>
+          <div class="row gap wrap">
+            <button class="btn btn-sm" id="linkStoreImportBtn" title="Đọc toàn bộ cột Link trên Google Sheet và ghi những link CHƯA có vào kho. Dùng để nạp kho lần đầu, hoặc chốt kho trước khi dọn Sheet. Chỉ thêm, không xoá gì.">⬇ Nạp từ Google Sheet vào kho</button>
+            <button class="btn btn-sm" id="linkStoreOpenBtn" title="Mở file để dán thêm link bằng tay">📝 Mở file</button>
+            <button class="btn btn-sm" id="linkStoreReloadBtn" title="Đọc lại file từ đĩa sau khi bạn tự sửa">🔄 Đọc lại file</button>
+          </div>
+          <span id="linkStoreResult" class="status-msg"></span>
+        </div>
       </div>
 
       <div class="modal-foot">

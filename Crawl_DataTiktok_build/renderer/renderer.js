@@ -1535,6 +1535,50 @@ async function cleanSheetDuplicates() {
 }
 
 // ══════════════════════════════════════════
+// KHO LINK CỤC BỘ — known_links.txt cạnh .exe (2026-08-11)
+// ══════════════════════════════════════════
+// Hiện đường dẫn + số khoá mỗi lần mở modal ☁, để người dùng biết file nằm đâu mà không phải
+// mở File Explorer đi tìm. force=true khi bấm "Đọc lại file" (sau khi tự sửa bằng Notepad).
+async function showLinkStoreInfo(force) {
+  const el = $('linkStoreInfo');
+  if (!el) return;
+  try {
+    const r = await api.linkStoreInfo(!!force);
+    el.textContent = r && r.ok
+      ? `Đang giữ ${r.count.toLocaleString('vi-VN')} link — ${r.path}`
+      : `Không đọc được kho: ${(r && r.msg) || 'lỗi không rõ'}`;
+  } catch (e) {
+    el.textContent = 'Không đọc được kho: ' + e.message;
+  }
+}
+
+async function importSheetToLinkStore() {
+  const btn = $('linkStoreImportBtn');
+  const out = $('linkStoreResult');
+  btn.disabled = true;
+  out.style.color = '';
+  out.textContent = '⏳ Đang đọc toàn bộ cột Link trên Sheet (Sheet lớn có thể mất vài phút)...';
+  try {
+    const r = await api.linkStoreImportSheet();
+    if (!r || !r.ok) {
+      out.textContent = (r && r.msg) || 'Nạp thất bại.';
+      out.style.color = 'var(--primary-hover)';
+      return;
+    }
+    out.style.color = 'var(--ok)';
+    out.textContent = r.added
+      ? `Đã ghi thêm ${r.added.toLocaleString('vi-VN')} link mới vào kho (${r.before.toLocaleString('vi-VN')} → ${r.total.toLocaleString('vi-VN')}). Đọc ${r.sheetRows.toLocaleString('vi-VN')} dòng Sheet.`
+      : `Kho đã có đủ — không link nào mới trong ${r.sheetRows.toLocaleString('vi-VN')} dòng Sheet. Tổng ${r.total.toLocaleString('vi-VN')} link.`;
+    showLinkStoreInfo();
+  } catch (e) {
+    out.textContent = 'Lỗi: ' + e.message;
+    out.style.color = 'var(--primary-hover)';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ══════════════════════════════════════════
 // LỊCH SỬ THU THẬP THEO NGÀY
 // ══════════════════════════════════════════
 // Số liệu do main process ghi vào config/history.json mỗi khi có 1 sound vào bảng
@@ -1668,12 +1712,24 @@ function initSheets() {
     await loadSheetsConfig();
     $('sheetsTestResult').textContent = '';
     $('sheetsCleanDupResult').textContent = '';
+    $('linkStoreResult').textContent = '';
     $('sheetsModal').classList.add('open');
+    showLinkStoreInfo();   // không await: modal phải mở ngay, số khoá điền vào sau
   });
   $('sheetsModalClose').addEventListener('click', () => $('sheetsModal').classList.remove('open'));
   $('sheetsSaveBtn').addEventListener('click', saveSheetsConfig);
   $('sheetsTestBtn').addEventListener('click', testSheets);
   $('sheetsCleanDupBtn').addEventListener('click', cleanSheetDuplicates);
+  $('linkStoreImportBtn').addEventListener('click', importSheetToLinkStore);
+  $('linkStoreReloadBtn').addEventListener('click', () => showLinkStoreInfo(true));
+  $('linkStoreOpenBtn').addEventListener('click', async () => {
+    const out = $('linkStoreResult');
+    try {
+      const r = await api.linkStoreOpen();
+      if (!r || !r.ok) { out.textContent = 'Không mở được file: ' + ((r && r.msg) || ''); out.style.color = 'var(--primary-hover)'; }
+      else { out.textContent = 'Đã mở file. Sửa xong bấm "🔄 Đọc lại file" để app nạp lại.'; out.style.color = ''; }
+    } catch (e) { out.textContent = 'Lỗi: ' + e.message; out.style.color = 'var(--primary-hover)'; }
+  });
 }
 
 // ══════════════════════════════════════════

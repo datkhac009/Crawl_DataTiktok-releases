@@ -25,6 +25,9 @@ Renderer chạy trong sandbox, gọi main qua `window.api` (khai báo ở `prelo
 | `sheets-get-config`, `sheets-set-config`, `sheets-test` | gọi | Đọc/ghi cấu hình Sheet; 🔌 Test kết nối (trả cả danh sách tab có thật) |
 | `sheets-push-manual` | gọi | ☁ Đẩy bù thủ công (tự lọc trùng, bấm nhiều lần không tạo trùng) |
 | `sheets-scan-duplicates`, `sheets-clean-duplicates` | gọi | 🧹 Dọn trùng: bước quét (chỉ đọc, để xem trước) và bước xoá thật |
+| `linkstore-info` | gọi | Trạng thái kho cục bộ: đường dẫn + số khoá. Tham số `force=true` = đọc lại từ đĩa sau khi người dùng tự sửa file |
+| `linkstore-import-sheet` | gọi | ⬇ Nạp từ Google Sheet vào kho — đọc TOÀN BỘ cột Link rồi **gộp thêm** vào `known_links.txt`. **Không bao giờ ghi đè** ([QĐ-36](DECISIONS.md)) |
+| `linkstore-open` | gọi | Mở `known_links.txt` bằng ứng dụng mặc định để dán link tay (tự tạo file nếu chưa có) |
 | `history-get`, `history-clear` | gọi | Đọc/xóa lịch sử thu thập theo ngày (`config/history.json`) |
 | `store-get`, `store-set` | gọi | Đọc/ghi electron-store (`profile_settings`, `count_concurrency`, `update_repo`…) |
 | `select-folder`, `export-results` | gọi | Hộp thoại chọn thư mục; xuất bảng dữ liệu ra CSV (UTF-8 BOM) |

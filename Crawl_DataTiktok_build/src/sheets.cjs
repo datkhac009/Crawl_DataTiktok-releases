@@ -191,6 +191,38 @@ let _sheetRows = 0;
 function sheetRowCount() {
   return _sheetRows;
 }
+// ── BÁO RA NGOÀI NHỮNG LINK VỪA GHI THÀNH CÔNG LÊN SHEET (2026-08-11) ──
+// main.js dùng để ghi LUÔN vào kho link cục bộ (linkstore.cjs), không đợi vòng đồng bộ sau
+// đọc ngược về — nếu đợi, app tắt giữa chừng là những link vừa đẩy không kịp vào kho.
+let _onPushed = null;
+function setOnPushed(fn) { _onPushed = typeof fn === 'function' ? fn : null; }
+// Gọi ở CẢ BA đường đẩy (nút đẩy bù, flush tab chính, flush tab chờ). Bọc try/catch vì đây là
+// callback của bên ngoài — nó lỗi thì tuyệt đối không được làm hỏng kết quả đẩy đã thành công.
+function _notifyPushed(rows) {
+  if (!_onPushed) return;
+  try { _onPushed((rows || []).map(r => r && r[1]).filter(Boolean)); } catch (_) {}
+}
+
+// ── NẠP KHOÁ ĐÃ CHUẨN HOÁ SẴN (từ known_links.txt cạnh .exe — xem linkstore.cjs) ──
+//
+// ⚠ CỐ Ý KHÔNG đặt `_seeded = true` (khác bản gốc bên repo tham chiếu, có chủ đích).
+// `_seeded` có nghĩa hẹp: "phiên này đã ĐỌC ĐƯỢC SHEET", và nó là thứ duy nhất chặn enqueue()
+// đẩy mù lúc chưa biết trên Sheet có gì. Kho cục bộ là bộ nhớ của RIÊNG máy này — máy khác vừa
+// đẩy link mới lên Sheet thì nó không hề biết. Bật `_seeded` ở đây sẽ cho đẩy trong lúc lần đọc
+// Sheet còn đang chạy nền → sinh đúng cái trùng LIÊN MÁY mà cờ này dựng ra để chặn.
+// Vì lần đọc Sheet giờ chạy NỀN (không chặn quét), việc chờ nó xong mới đẩy gần như không tốn
+// gì: dòng vẫn nằm trong buffer + vẫn hiện trong bảng, chỉ lên Sheet muộn hơn một chút.
+function addKnownKeys(keys) {
+  let added = 0;
+  for (const k of keys || []) {
+    if (k && !_knownLinks.has(k)) {
+      _knownLinks.add(k);
+      added++;
+    }
+  }
+  return added;
+}
+
 function updateKnownLinks(links) {
   let added = 0;
   for (const u of links || []) {
@@ -240,7 +272,9 @@ async function pushDedup(cfgRaw, rows) {
 
   // Append theo lô 200 dòng/lần cho nhẹ request.
   for (let i = 0; i < fresh.length; i += 200) {
-    await appendRows(spreadsheetId, tab, fresh.slice(i, i + 200), sa);
+    const lot = fresh.slice(i, i + 200);
+    await appendRows(spreadsheetId, tab, lot, sa);
+    _notifyPushed(lot);   // ghi vào kho cục bộ theo từng lô, không đợi hết vòng
   }
   return {
     ok: true,
@@ -564,13 +598,35 @@ function isEnabled() {
   return !!_cfg;
 }
 
+// Trần bộ đệm khi CHƯA seed xong. Chặn kịch bản Sheet chết cả đêm mà buffer phình vô hạn
+// (mỗi dòng ~200 byte, 20.000 dòng ≈ 4MB — đủ giữ nhiều giờ sản lượng mà không đáng lo).
+// Vượt trần thì thôi không giữ thêm: dòng vẫn hiện trong bảng, vẫn đẩy được bằng nút tay.
+const BUFFER_MAX_UNSEEDED = 20000;
+
 function enqueue(row) {
   if (!_cfg) return;
-  // CHƯA nạp được danh sách link cũ lần nào (xem ghi chú ở _seeded phía trên) → không biết
-  // link nào đã có trên Sheet, đẩy lúc này chỉ để tạo trùng. Tạm giữ lại (vẫn hiện trong
-  // bảng ở app), main.js tự thử đọc lại mỗi phút, nạp xong sẽ tự đẩy bình thường; muốn đẩy
-  // ngay trong lúc chờ thì dùng nút "Đẩy lên Sheet" (tự đọc mới nhất trước khi đẩy).
-  if (!_seeded) return;
+  // ── CHƯA đọc được Sheet lần nào → GIỮ LẠI TRONG BỘ ĐỆM, KHÔNG BỎ (sửa 2026-08-11) ──
+  //
+  // Trước đây chỗ này `return` thẳng, tức dòng bị loại khỏi đường đẩy VĨNH VIỄN (chỉ còn hiện
+  // trong bảng, phải bấm "Đẩy lên Sheet" bằng tay). Hồi đó vô hại vì main.js AWAIT lần đọc
+  // Sheet trước khi crawler chạy nên cửa sổ "chưa seed" gần như bằng 0.
+  //
+  // Từ 2026-08-11 lần đọc Sheet chuyển sang chạy NỀN (để quét bắt đầu ngay, không đứng ở
+  // "Đang khởi động..." hàng phút với Sheet 206.000 dòng) → cửa sổ đó dài ra thật, và mọi
+  // sound thu được trong lúc đó sẽ âm thầm không bao giờ lên Sheet.
+  //
+  // Giữ lại là AN TOÀN, không sinh trùng: chống trùng thật nằm ở CỬA GHI chứ không phải cửa
+  // nhận — `flush()` lọc lại toàn bộ lô theo `_knownLinks` NGAY TRƯỚC KHI GHI, và còn đọc lại
+  // phần đuôi Sheet trước đó (QĐ-09). Điều duy nhất phải bảo đảm là KHÔNG ghi trước khi seed
+  // xong — việc đó do chính `flush()` gác (xem chốt `_seeded` ở đầu hàm đó).
+  const key0 = normalizeKey(row && row[1]);
+  if (!_seeded) {
+    if (key0 && _knownLinks.has(key0)) return;                                  // kho cục bộ đã biết
+    if (key0 && _buffer.some((r) => normalizeKey(r && r[1]) === key0)) return;   // đang xếp hàng
+    if (_buffer.length >= BUFFER_MAX_UNSEEDED) return;
+    _buffer.push(row);
+    return;   // KHÔNG hẹn giờ flush: chờ seed xong đã, flush() cũng sẽ tự chặn
+  }
   const key = normalizeKey(row && row[1]);
   // Chống trùng LIÊN MÁY: link đã có trên Sheet (máy khác đẩy, biết qua lần đọc lại
   // định kỳ) → bỏ ngay từ cửa, kể cả khi máy mình đã tốn công check số video cho nó.
@@ -610,6 +666,14 @@ function flush() {
     _timer = null;
   }
   if (!_cfg || !_buffer.length) return _flushChain;
+  // ⛔ CHƯA đọc được Sheet lần nào → KHÔNG ĐƯỢC GHI (chốt an toàn của việc đọc Sheet ở nền,
+  // 2026-08-11). Chưa biết trên Sheet đang có gì thì ghi lúc này chính là tạo trùng liên máy.
+  // Giữ nguyên bộ đệm và hẹn thử lại — lần đọc nền xong là `_seeded` bật, lô này lên bình
+  // thường và được lọc đầy đủ. Đây là cặp đôi của việc `enqueue()` giờ GIỮ thay vì BỎ.
+  if (!_seeded) {
+    ensureTimer(3000);
+    return _flushChain;
+  }
   // Đang bị chặn vì quota → hoãn cả lô, giữ nguyên trong bộ đệm rồi hẹn thử lại. KHÔNG ghi
   // lúc này (sẽ lại 429) và KHÔNG bỏ dữ liệu.
   if (quota.isCoolingDown()) {
@@ -662,6 +726,7 @@ function flush() {
         const k = normalizeKey(r && r[1]);
         if (k) _knownLinks.add(k);
       }
+      _notifyPushed(pending);   // → kho link cục bộ (linkstore) ghi ngay
       // Cộng luôn vào tổng số dòng + đẩy mốc đọc lên: dòng mình vừa ghi cũng nằm ở cuối tab,
       // nếu không cộng thì badge trên UI bị tụt lại tới lần đọc sau, và lần đọc tăng dần kế
       // tiếp sẽ đọc lại chính mấy dòng mình vừa ghi (vô ích).
@@ -888,6 +953,9 @@ function flushPending() {
         const k = normalizeKey(r && r[1]);
         if (k) _pendingKnown.add(k);
       }
+      // Link ghi được lên TAB CHỜ cũng vào kho cục bộ: sound đó đã được xử lý xong, lần sau
+      // quét trúng lại thì không cần đưa vào tab chờ lần nữa.
+      _notifyPushed(toWrite);
       _pendingWritten += toWrite.length;
       // Đẩy mốc đọc lên: dòng mình vừa ghi cũng nằm ở cuối tab, không cộng thì lần đọc tăng dần
       // kế tiếp sẽ đọc lại chính mấy dòng vừa ghi (vô ích, và làm mốc lệch dần).
@@ -946,6 +1014,8 @@ module.exports = {
   pushDedup,
   dropFromBuffer,
   updateKnownLinks,
+  addKnownKeys,
+  setOnPushed,
   scanDuplicates,
   deleteRows,
   cleanDuplicates,

@@ -40,7 +40,7 @@ Chọn ở cột **Chế độ** hoặc trong ⚙️ Cài đặt.
 | Không tải ảnh/video | Giảm RAM/CPU đáng kể. Nên bật khi chạy dài |
 | Tải lại feed sau mỗi N lần cuộn | Xả bộ nhớ. Số nhỏ = an toàn hơn nhưng feed hay nhảy về đầu |
 | Số luồng đếm video đồng thời | **Cài đặt chung toàn app.** Khuyến nghị 2 — càng cao càng dễ bị TikTok chặn |
-| **Chế độ đếm** | **Riêng từng máy.** `Nhanh` (mặc định) cho máy ảo/máy yếu · `Kiên nhẫn` cho máy mạnh — xem mục dưới |
+| **Chế độ đếm** | **Riêng từng máy.** Để `Nhanh` (mặc định) trên **mọi** máy — xem mục dưới |
 | Dùng profile Chromium riêng cho tài khoản này | **Riêng từng profile.** Mặc định **tắt**. Bật khi profile đó bị **mất đăng nhập liên tục** — đổi lại tốn thêm ~150–250MB RAM (xem mục dưới) |
 | Thời lượng mỗi pha (chu kỳ) | Quét bao nhiêu giờ, xem bao nhiêu phút, nghỉ giữa 2 pha bao lâu |
 
@@ -56,8 +56,17 @@ Cùng một file `.exe` chạy trên mọi máy, nhưng **máy mạnh và máy �
 | Thử lại khi TikTok trả trang lỗi | **có**, 1 lượt | không |
 | Tự bỏ lượt thử lại khi hàng đợi tắc | **có** | — |
 
-**Máy chính (mạnh) → chọn Kiên nhẫn.** API về trong ~1s và đọc giao diện xong trong ~3s, nên kiên
-nhẫn gần như **không mất gì**, mà có thêm cơ hội đọc được link chậm.
+**Cả 5 máy đều nên để Nhanh — kể cả máy mạnh.** (Sửa lại lời khuyên cũ, 2026-08-10: bản trước
+của tài liệu này khuyên máy mạnh dùng Kiên nhẫn. Đo lại thì sai.)
+
+Lý do, tính từ chính hai bộ tham số ở bảng trên:
+
+- **Khi đọc THÀNH CÔNG, hai chế độ giống hệt nhau** (~1 giây). Các mốc chờ 8s/20s và 2.5s/30s là
+  *trần*, đọc xong sớm thì không ai chờ tới trần — nên "kiên nhẫn hơn" không mang lại gì.
+- **Khi đọc THẤT BẠI, Kiên nhẫn luôn đắt hơn** ở mọi tốc độ máy: 23,3s so với 21,8s trên máy mạnh;
+  27,8s so với 23,5s trên VPS lag.
+- **Kiên nhẫn KHÔNG có lượt thử lại.** Đây là điểm quyết định: cùng một link mà TikTok trả trang
+  lỗi lần đầu, `Nhanh` thử lại và đọc được số video, còn `Kiên nhẫn` mất luôn sound đó sang tab chờ.
 
 ⚠️ **Máy ảo yếu → PHẢI để Nhanh.** Đo thật trên VPS lag: chế độ Kiên nhẫn làm **một** sound lỗi
 chiếm slot đếm **của cả app** tới **~28 giây** → thông lượng tụt còn ~4 sound/phút trong khi vòng

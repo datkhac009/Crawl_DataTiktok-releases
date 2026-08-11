@@ -2122,3 +2122,99 @@ chúng thì phải chờ thật 15 phút và hơn 20 phút.
 | Dùng `error` cho trạng thái mà backend CHƯA dừng | Renderer đổi hàng về "▶ Chạy" → mất luôn nút "■ Dừng" → người dùng không còn đường can thiệp. Dùng status riêng và giữ hàng ở `running` |
 | Chữa vấn đề của MỘT tài khoản bằng thao tác cấp MÁY (đổi IP) | Dừng oan các profile khoẻ mà vẫn không chữa được. Phải kiểm bằng chứng phạm vi trước: các profile khác trên cùng máy có bị không? |
 | Đo trạng thái SAU khi đã gọi hàm dọn dẹp | `stopProfile()` rồi mới đo `isProfileRunning` thì profile nào cũng "đã thoát" — che mất đúng cái bug đang muốn bắt. Phải đo **trước** |
+
+---
+
+## QĐ-36 — Kho link CỤC BỘ cạnh .exe; đọc Sheet chuyển sang chạy NỀN; thôi đọc trọn Sheet lớn (2026-08-11)
+
+### Bối cảnh — ba số đo trên máy người dùng
+
+Log `crawler_2026-08-10`, cấu hình `reseedMinutes = 3`, Sheet **206.572 dòng**:
+
+| Đo được | Số |
+|---|---|
+| Lần "Đọc TOÀN BỘ Sheet (201.347 dòng)" trong 8 tiếng | **18** |
+| Link mới thu về mỗi lần đọc trọn | **+5 … +8** |
+| Google API timeout 25s trong ngày | **273** |
+| Heap tiến trình main, 09:14 → 17:14 | 45 MB → **2.793 MB** (~344 MB/giờ) |
+| RAM còn trống / tổng | **0,5 / 15,8 GB**, Pages/sec **1.936** (giã ổ đĩa) |
+
+Đọc 201.347 dòng để tìm 7 link. Và vì `profile-start` **`await`** lần đọc đó *trước* khi khởi
+động crawler, giao diện đứng ở "Đang khởi động..." hàng phút — người dùng thấy đúng như app treo.
+
+Ba vấn đề khác nhau nhưng cùng một gốc: **Sheet đang bị dùng làm nơi lưu trữ lịch sử**, trong khi
+nó chỉ nên là kênh trao đổi giữa các máy.
+
+### Quyết định
+
+**1. Kho cục bộ `known_links.txt` đặt cạnh `.exe`** (`src/linkstore.cjs`).
+Mỗi dòng một khoá; nạp đồng bộ lúc khởi động, chỉ tốn mili-giây. Người dùng dán tay được, và
+app **chỉ append, không bao giờ xoá**.
+
+**2. Lần đọc Sheet chuyển sang chạy NỀN** — crawl bắt đầu ngay bằng kho cục bộ.
+
+**3. Sheet lớn thì THÔI đọc trọn định kỳ.** Ngưỡng `SMALL_SHEET_ROWS = 5000`:
+- Sheet nhỏ → đọc trọn theo chu kỳ (vài giây, và **tự miễn nhiễm** với lỗi mốc dòng khi ai đó xoá dòng giữa bảng).
+- Sheet lớn → chỉ đọc phần đuôi. Kho cục bộ đã giữ lịch sử nên Sheet không cần làm bản lưu đầy đủ.
+
+**4. Link đẩy lên Sheet thành công → ghi kho NGAY** (`sheets.setOnPushed`), không đợi vòng đồng bộ
+sau đọc ngược về; app tắt trước vòng đó là mất.
+
+### Hệ quả BẮT BUỘC phải xử — chỗ suýt sai
+
+Bỏ `await` làm lộ ra một cái bẫy có sẵn: `enqueue()` trước đây **bỏ thẳng** dòng khi chưa seed
+(`if (!_seeded) return`). Hồi đó vô hại vì cửa sổ "chưa seed" gần bằng 0. Đọc ở nền làm cửa sổ đó
+dài ra thật ⇒ **mọi sound thu được trong lúc đang nạp sẽ âm thầm không bao giờ lên Sheet.**
+
+Sửa thành **cặp chốt**:
+- `enqueue()` **GIỮ** dòng trong bộ đệm (trần `BUFFER_MAX_UNSEEDED = 20000`), không bỏ.
+- `flush()` **KHÔNG ghi** khi `!_seeded`, hẹn lại 3s.
+
+An toàn vì chống trùng thật nằm ở **cửa ghi**: `flush()` lọc lại cả lô theo `_knownLinks` ngay
+trước khi ghi, và còn đọc lại phần đuôi Sheet trước đó (QĐ-09).
+
+### Điểm CỐ Ý làm khác repo tham chiếu
+
+Bản gốc gọi `sheets.updateKnownLinks(storeKeys)` để nạp kho — hàm đó **bật `_seeded = true`**.
+Ta dùng `addKnownKeys()` riêng, **không bật cờ**. Lý do: `_seeded` nghĩa hẹp là *"phiên này đã
+đọc được Sheet"*, và nó là thứ duy nhất chặn đẩy mù. Kho cục bộ là bộ nhớ của **riêng máy này** —
+máy khác vừa đẩy link mới lên Sheet thì nó không hề biết. Bật cờ ở đây = cho đẩy trong lúc lần đọc
+nền còn đang chạy = sinh đúng cái trùng liên máy mà cờ này dựng ra để chặn. Với 5 máy chạy chung
+một Sheet, đây là đánh đổi không đáng.
+
+### Giới hạn thành thật
+
+- Sheet lớn **không còn đồng bộ lại mốc dòng** trong phiên. Sau khi chạy 🧹 Dọn trùng thì phải
+  khởi động lại app (lần seed đầu phiên vẫn đọc trọn một lần) hoặc bấm "⬇ Nạp từ Google Sheet vào kho".
+- Kho là **file cục bộ, không chia sẻ giữa các máy**. Mỗi máy tự đầy kho theo những gì nó đọc được.
+- **Mất file = mất bộ lọc trùng** khi Sheet đã dọn nhỏ. Phải sao lưu cùng `profiles/`.
+- Rò rỉ 344 MB/giờ: đây là **nghi phạm số một** (2.748 MB ÷ 18 lần đọc trọn ≈ 153 MB/lần), nhưng
+  **chưa chứng minh nhân quả** — chưa chụp heap snapshot. Bản sửa này làm giảm hẳn số lần đọc trọn,
+  nên nếu rò rỉ tụt theo thì đó là bằng chứng; nếu không tụt thì phải truy tiếp.
+
+### Kiểm chứng
+
+`test/linkstore.test.js` — **32 khẳng định**, 13 mục. Cách ly bắt buộc bằng
+`PORTABLE_EXECUTABLE_DIR` đặt **trước mọi `require`**: `getBaseDir()` ở chế độ dev trỏ thẳng vào
+thư mục dự án, không cách ly là **ghi đè kho link thật của người dùng**.
+
+Đã kiểm test có "cắn" (đột biến rồi hoàn nguyên):
+
+| Đột biến | Kết quả |
+|---|---|
+| `enqueue` trả về hành vi CŨ (bỏ dòng khi chưa seed) | **3 khẳng định trượt** (25, 26, 28) |
+| Bỏ chốt `_seeded` ở `flush` | **1 trượt** (24) |
+| Cho `addKnownKeys` bật `_seeded` như bản gốc | **1 trượt** (22) |
+
+Toàn bộ 20 file test cũ vẫn đạt; riêng 5 file dính `sheets.cjs`: 31 + 22 + 52 + 10 + 20 = **135
+khẳng định**, 0 trượt.
+
+| KHÔNG nên làm lại | Vì sao |
+|---|---|
+| `await` một lời gọi mạng dài **trước** khi khởi động việc chính | Sheet 206.000 dòng: `READ_LINKS_TIMEOUT_MS` 120s × 2 lượt ⇒ xấu nhất ~4 phút giao diện đứng im, không báo gì, nhìn hệt app treo |
+| Đọc trọn một bảng lớn theo chu kỳ ngắn hơn thời gian đọc nó | Chu kỳ 3 phút mà một lần đọc mất hàng phút ⇒ app tải Sheet gần như liên tục, tự bóp nghẹt băng thông của chính nó |
+| Dùng Google Sheet làm **nơi lưu trữ lịch sử** | Nó là kênh trao đổi giữa các máy. Lịch sử để dưới máy thì tra tức thì, không tốn quota, không phụ thuộc mạng |
+| Bỏ dòng ở **cửa nhận** vì "chưa biết Sheet có gì" | Dòng mất vĩnh viễn khỏi đường đẩy. Phải GIỮ ở cửa nhận và gác ở **cửa ghi** — nơi vốn đã có đủ bộ lọc |
+| Bật cờ "đã đọc được Sheet" từ một nguồn **cục bộ** | Cờ đó bảo vệ chống trùng LIÊN MÁY. Nguồn cục bộ không biết máy khác vừa đẩy gì |
+| Ghi đè file kho bằng nội dung Sheet | Cả mục đích của kho là để **dọn bớt Sheet** ⇒ kho chứa nhiều link Sheet không còn. Ghi đè là xoá đúng phần trí nhớ quý nhất. Chỉ được append |
+| Chạy test của `linkstore` mà không đặt `PORTABLE_EXECUTABLE_DIR` | `getBaseDir()` khi dev trỏ vào thư mục dự án ⇒ test ghi đè kho link THẬT |

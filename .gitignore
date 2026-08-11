@@ -16,6 +16,13 @@ profile.lock
 *.zip
 *.7z
 
+# Kho lọc trùng cục bộ (QĐ-36) — dữ liệu chạy, KHÔNG phải mã nguồn.
+# Repo này PUBLIC: file thật của người dùng đang có 208.060 link (13,3 MB), không đẩy lên.
+# Không dùng dấu / ở đầu — file này nằm cạnh .exe nên mỗi máy một chỗ khác nhau
+# (Crawl_DataTiktok_Release/ khi đóng gói, Crawl_DataTiktok_build/ khi chạy dev, gốc repo nếu
+# người dùng tự để đó). Mẫu không có / khớp ở MỌI cấp.
+known_links.txt
+
 # Khóa/bí mật
 *.pem
 *.key

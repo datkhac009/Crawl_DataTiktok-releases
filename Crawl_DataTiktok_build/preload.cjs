@@ -41,6 +41,10 @@ contextBridge.exposeInMainWorld('api', {
   sheetsTest: (cfg) => ipcRenderer.invoke('sheets-test', cfg),
   sheetsScanDuplicates: () => ipcRenderer.invoke('sheets-scan-duplicates'),
   sheetsCleanDuplicates: () => ipcRenderer.invoke('sheets-clean-duplicates'),
+  // Kho link cục bộ known_links.txt cạnh .exe (2026-08-11)
+  linkStoreInfo: (force) => ipcRenderer.invoke('linkstore-info', force),
+  linkStoreImportSheet: () => ipcRenderer.invoke('linkstore-import-sheet'),
+  linkStoreOpen: () => ipcRenderer.invoke('linkstore-open'),
 
   // HMA VPN — tắt/bật lại lấy IP mới khi TikTok cắt feed
   vpnStatus: () => ipcRenderer.invoke('vpn-status'),

@@ -6,6 +6,7 @@
 ```
 <thư mục chứa .exe>/
 ├── Crawl_DataTiktok.exe
+├── known_links.txt            # KHO LỌC TRÙNG cục bộ (QĐ-36) — sao lưu như profiles/
 ├── config/
 │   ├── profiles.json          # danh sách profile: id, tên, tên thư mục
 │   └── history.json           # lịch sử thu thập theo ngày (giữ 400 ngày)
@@ -23,6 +24,31 @@
         ├── ChromiumProfile/        # CHỈ khi bật "profile Chromium riêng" (QĐ-27) — 100–200MB
         └── Data/profile/           # profile Firefox gốc (nếu import từ Firefox Portable)
 ```
+
+## `known_links.txt` — kho lọc trùng cục bộ ([QĐ-36](DECISIONS.md))
+
+Nằm **ngay cạnh file .exe**. Mỗi dòng một khoá sound (`music:<id>`); dòng trống và dòng bắt đầu
+bằng `#` bị bỏ qua.
+
+```
+# KHO LINK CUC BO — dung de loc trung khi quet va khi day len Google Sheet.
+music:7386469951525243690
+music:7432072491125836590
+```
+
+**Vì sao có:** Sheet đã 206.572 dòng; mỗi phiên đọc trọn cột Link mất hàng phút và ngốn quota,
+mà nội dung gần như không đổi giữa hai phiên. Kho này nạp **tức thì** (mili-giây) lúc khởi động
+nên crawl có bộ lọc trùng ngay, và Sheet chỉ còn là **kênh trao đổi giữa các máy** — dọn nhỏ được.
+
+| Đặc tính | Chi tiết |
+|---|---|
+| Ai ghi | App: link đọc từ Sheet, link vừa đẩy lên Sheet thành công (`setOnPushed`), và nút "⬇ Nạp từ Google Sheet vào kho" |
+| Ai đọc | Đầu mỗi phiên (đồng bộ, trước khi crawler chạy) → nạp vào **cả** bộ lọc quét và bộ lọc đẩy |
+| Ghi kiểu gì | **Chỉ APPEND, không bao giờ xoá và không bao giờ ghi đè.** Ghi lỗi thì lùi lại bộ nhớ cho khớp đĩa |
+| Người dùng sửa tay | Được — dán link thô kiểu gì cũng nhận (link dài, `?lang=vi`, dán cả dòng từ cột Sheet, có BOM). Sửa xong bấm "🔄 Đọc lại file" |
+| Phạm vi | **Riêng từng máy**, không chia sẻ. Mỗi máy tự đầy kho theo những gì nó đọc được |
+
+⚠️ **MẤT FILE NÀY = MẤT BỘ LỌC TRÙNG** khi Sheet đã dọn nhỏ. Sao lưu cùng `profiles/`.
 
 ## Cấu hình ứng dụng (electron-store)
 

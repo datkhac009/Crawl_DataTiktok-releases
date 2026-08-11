@@ -1470,9 +1470,15 @@ function startProfile(params, onData, onStatus, onPending) {
     _skippedDup = 0;
     _loggedFirstKey = false;
     _collected.clear();
+    // `seedKeys` = khoá ĐÃ chuẩn hoá, đến từ kho cục bộ known_links.txt (linkstore.cjs).
+    // Nhận riêng thay vì nhét chung vào seedUrls để khỏi chạy normalizeKey lần hai trên
+    // 200.000 chuỗi — công vô ích ngay lúc khởi động, lúc máy đang bận nhất.
+    for (const k of (params.seedKeys || [])) { if (k) _collected.add(k); }
+    const fromStore = _collected.size;
     for (const u of (params.seedUrls || [])) { const k = normalizeKey(u); if (k) _collected.add(k); }
     _seedCount = _collected.size;
-    console.log(`[dedup] Phiên mới — nạp ${_seedCount} key từ Sheet để lọc trùng.`
+    console.log(`[dedup] Phiên mới — nạp ${_seedCount} key để lọc trùng`
+      + ` (${fromStore} từ kho cục bộ, ${_seedCount - fromStore} từ Sheet).`
       + (_seedCount ? ` Ví dụ: ${[..._collected].slice(0, 3).join(', ')}` : ''));
   }
 

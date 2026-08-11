@@ -41,6 +41,7 @@ sound TikTok. Mỗi profile = một tài khoản TikTok, chạy độc lập, c�
 | `quota-guard.cjs` | **Cầu dao quota**: gặp 429 → tạm ngưng gọi API 60s, không mất dữ liệu (QĐ-24) |
 | `google-api.cjs` | Xác thực Service Account + `httpRequest` (có timeout) — **dùng chung** cho `sheets.cjs` và `sheet-lock.cjs` |
 | `sheets.cjs` | Đẩy dữ liệu lên Google Sheets, chống trùng liên máy |
+| `linkstore.cjs` | **Kho lọc trùng cục bộ** `known_links.txt` cạnh `.exe` — nạp tức thì lúc khởi động, chỉ append ([QĐ-36](DECISIONS.md)) |
 | `sheet-lock.cjs` | **Khóa liên máy**: chặn 1 profile chạy trên 2+ máy, qua tab `_locks` **ẩn** trên Sheet |
 | `profiles.cjs` | Thêm/sửa/xóa/import profile, ánh xạ id → thư mục |
 | `history.cjs` | **Lịch sử theo ngày**: đếm sound thu được, ghi `config/history.json` (ghi trễ + atomic) |
@@ -179,13 +180,25 @@ Mỗi thư mục profile chứa:
 
 ## Chống trùng dữ liệu
 
-Hai tầng, dùng **chung một hàm khóa** (`linkkey.cjs`) nên không bao giờ lệch nhau:
+Ba nguồn, dùng **chung một hàm khóa** (`linkkey.cjs`) nên không bao giờ lệch nhau:
 
-- **Khi quét**: bộ nhớ link đã thu thập trong phiên + link nạp từ Sheet.
-- **Khi đẩy**: chặn ngay ở cửa enqueue, lọc lại trước khi ghi, ghi nhớ link đã ghi thành công.
-- **Liên máy**: mỗi máy đọc **phần mới thêm ở cuối** cột Link **mỗi phút** (đọc tăng dần từ
-  mốc dòng — rẻ vì chỉ vài trăm dòng), cộng đọc lại **toàn bộ** mỗi 10 phút để đồng bộ mốc
-  (chỉnh trong modal ☁). Cửa sổ sinh trùng co từ 5–15 phút xuống ~1 phút — xem QĐ-09.
+- **Kho cục bộ** (`known_links.txt` cạnh `.exe`, [QĐ-36](DECISIONS.md)): nguồn **chính** giữ lịch
+  sử của máy này. Nạp **đồng bộ** lúc khởi động — đo thật **208.053 khoá / 381 ms** — nên crawl có
+  bộ lọc trùng **ngay**, không phải chờ tải Sheet. Chỉ append, không bao giờ xoá.
+- **Khi quét**: kho cục bộ + link đã thu trong phiên + link nạp từ Sheet (nạp ở **nền**).
+- **Khi đẩy**: chặn ngay ở cửa enqueue, lọc lại trước khi ghi, ghi nhớ link đã ghi thành công, và
+  link ghi thành công **chảy về kho ngay** (`setOnPushed`) chứ không đợi vòng đồng bộ đọc ngược về.
+- **Liên máy**: mỗi máy đọc **phần mới thêm ở cuối** cột Link **mỗi phút** (đọc tăng dần từ mốc
+  dòng — rẻ vì chỉ vài trăm dòng). Cửa sổ sinh trùng ~1 phút — xem QĐ-09.
+
+**Đọc lại TOÀN BỘ Sheet chỉ còn khi Sheet còn nhỏ** (`SMALL_SHEET_ROWS = 5000`). Sheet lớn thì
+không đọc trọn định kỳ nữa: đo thật trên Sheet 206.572 dòng, 18 lần đọc trọn trong 8 tiếng chỉ thu
++5…+8 link mỗi lần, kèm 273 lần Google API timeout — app tự bóp nghẹt băng thông của chính nó
+([QĐ-36](DECISIONS.md)).
+
+⚠️ **Đánh đổi:** Sheet lớn không còn tự đồng bộ lại mốc dòng trong phiên. Sau khi chạy 🧹 Dọn trùng
+thì khởi động lại app (lần seed đầu phiên vẫn đọc trọn một lần) hoặc bấm **⬇ Nạp từ Google Sheet
+vào kho**.
 
 Link sound original được **rút gọn về dạng chuẩn** `/music/original-sound-<id>` — cùng một
 sound với 2 kiểu slug khác nhau không còn bị tính là 2 sound.
