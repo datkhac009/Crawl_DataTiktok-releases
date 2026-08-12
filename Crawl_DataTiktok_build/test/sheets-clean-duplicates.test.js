@@ -99,7 +99,7 @@ const CFG = { spreadsheetId: 'SHEET_ID', tab: 'Data', sa: { client_email: 'a@b.c
   {
     const { sheets } = installMock([
       ['s1', 'https://tiktok.com/music/original-sound-7651689970457004808', 12000, 'jsbfan@cosoinan.com', ''],
-      ['s1', 'https://tiktok.com/music/original-sound-7651689970457004808', 39000, 'uslhqtchxt263@hotmail.com(UK)', ''],
+      ['s1', 'https://tiktok.com/music/original-sound-7651689970457004808', 39000, 'acc1@example.com(UK)', ''],
       ['s1', 'https://tiktok.com/music/original-sound-7651689970457004808', 5000, 'khac@mail.com', ''],
     ]);
     const r = await sheets.scanDuplicates(CFG.spreadsheetId, CFG.tab, CFG.sa);

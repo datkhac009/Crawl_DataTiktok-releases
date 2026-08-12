@@ -91,7 +91,7 @@ const fingerprint = require('../src/fingerprint.cjs');
 
 // ── Thu muc profile tam ──
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ttc-persist-'));
-const profileDir = path.join(tmp, 'someone@hotmail.com(UK)');
+const profileDir = path.join(tmp, 'someone@example.com(UK)');
 fs.mkdirSync(profileDir, { recursive: true });
 const SESSION_COOKIES = [
   { name: 'sessionid', value: 'abc', domain: '.tiktok.com', path: '/' },
@@ -224,8 +224,8 @@ console.log('\n=== Che do profile Chromium rieng ===\n');
   // ma 4 profile con lai van chay nhu cu. Neu tab dem cua profile TAT lai an theo profile BAT
   // (hoac nguoc lai) thi ca hai deu hong.
   console.log('\n9. Tron 2 che do cung may: profile bat / tat khong an theo nhau');
-  const dirOn = path.join(tmp, 'bat@hotmail.com(UK)');
-  const dirOff = path.join(tmp, 'tat@hotmail.com(KR)');
+  const dirOn = path.join(tmp, 'bat@example.com(UK)');
+  const dirOff = path.join(tmp, 'tat@example.com(KR)');
   for (const d of [dirOn, dirOff]) {
     fs.mkdirSync(d, { recursive: true });
     fs.writeFileSync(path.join(d, 'session.state.json'),
@@ -259,7 +259,7 @@ console.log('\n=== Che do profile Chromium rieng ===\n');
   // chung chung, mat han dong "DA dang nhap / la KHACH" ma nguoi dung dua vao de biet co phai
   // bam dang nhap lai khong.
   console.log('\n10. Nut 🦊 van bao duoc "da dang nhap" o che do persistent');
-  const dir2 = path.join(tmp, 'chandoan@hotmail.com(US)');
+  const dir2 = path.join(tmp, 'chandoan@example.com(US)');
   fs.mkdirSync(dir2, { recursive: true });
   fs.writeFileSync(path.join(dir2, 'session.state.json'),
     JSON.stringify({ cookies: SESSION_COOKIES, origins: [] }), 'utf8');
@@ -273,7 +273,7 @@ console.log('\n=== Che do profile Chromium rieng ===\n');
 
   // Thu muc da co san (lan chay thu 2) + KHONG co cookie nao -> phai bao la KHACH, khong
   // duoc im lang bao "da mo trinh duyet" nhu the moi thu on.
-  const dir3 = path.join(tmp, 'khach@hotmail.com(US)');
+  const dir3 = path.join(tmp, 'khach@example.com(US)');
   fs.mkdirSync(path.join(browser.persistDir(dir3), 'Default'), { recursive: true });
   const ctxG = await browser.acquireProfileContext(dir3, { headless: true, persistent: true });
   const info2 = browser.getSessionInfo(dir3);
@@ -290,7 +290,7 @@ console.log('\n=== Che do profile Chromium rieng ===\n');
   // thi di trinh duyet an RIENG. Fake nem loi o chromium.launch() nen "nem loi" o day CHINH LA
   // bang chung da di duong trinh duyet an rieng (cung cach muc 9 chung minh cho profile TAT).
   console.log('\n11. Chay HIEN: tab dem tach ra trinh duyet an, khong ke vao cua so profile');
-  const dirVis = path.join(tmp, 'hien@hotmail.com(US)');
+  const dirVis = path.join(tmp, 'hien@example.com(US)');
   fs.mkdirSync(dirVis, { recursive: true });
   fs.writeFileSync(path.join(dirVis, 'session.state.json'),
     JSON.stringify({ cookies: SESSION_COOKIES, origins: [] }), 'utf8');
@@ -311,7 +311,7 @@ console.log('\n=== Che do profile Chromium rieng ===\n');
 
   // Chay AN thi van phai dung chung nhu cu — day la nua con lai cua quyet dinh, de-vo nhat khi
   // ai do "don dep" bang cach tach ca hai truong hop (mat luon phan tiet kiem 1 instance).
-  const dirHid = path.join(tmp, 'an@hotmail.com(US)');
+  const dirHid = path.join(tmp, 'an@example.com(US)');
   fs.mkdirSync(dirHid, { recursive: true });
   fs.writeFileSync(path.join(dirHid, 'session.state.json'),
     JSON.stringify({ cookies: SESSION_COOKIES, origins: [] }), 'utf8');
@@ -333,7 +333,7 @@ console.log('\n=== Che do profile Chromium rieng ===\n');
   // trong cung cua so. Fake nem loi o chromium.launch() nen "KHONG nem loi" chinh la bang chung
   // khong he mo them trinh duyet nao.
   console.log('\n12. Bat "HIEN tab dem": dung chung context profile, KHONG mo browser thu 2');
-  const dirShow = path.join(tmp, 'soi@hotmail.com(US)');
+  const dirShow = path.join(tmp, 'soi@example.com(US)');
   fs.mkdirSync(dirShow, { recursive: true });
   fs.writeFileSync(path.join(dirShow, 'session.state.json'),
     JSON.stringify({ cookies: SESSION_COOKIES, origins: [] }), 'utf8');

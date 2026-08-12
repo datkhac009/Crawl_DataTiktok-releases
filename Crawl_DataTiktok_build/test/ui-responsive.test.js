@@ -14,9 +14,9 @@ const WIDTHS = [1180, 960, 860, 720, 640];  // 1180 = kho mac dinh, 720 = kho to
 
 // Profile ten dai + trang thai dai giong THUC TE (email 29 ky tu, log chu ky dai)
 const FAKE_PROFILES = [
-  'gytsjcmozy074@hotmail.com(UK)', 'lykrxron2448@hotmail.com(UK)',
-  'tudesfdmf892@hotmail.com(UK)', 'uslhqtchxt263@hotmail.com(UK)',
-  'yqkisoiac853@hotmail.com(UK)',
+  'acc2@example.com(UK)', 'acc5@example.com(UK)',
+  'acc4@example.com(UK)', 'acc1@example.com(UK)',
+  'acc3@example.com(UK)',
 ];
 const LONG_STATUS = 'Chu kỳ [Quét]: tải lại feed để xả RAM (đã quét 693 sound)...';
 
@@ -61,7 +61,7 @@ const LONG_STATUS = 'Chu kỳ [Quét]: tải lại feed để xả RAM (đã qu�
           const tr = document.createElement('tr');
           tr.innerHTML = `<td>${i}</td><td>original sound - nguoi dung co ten rat dai de test</td>`
             + `<td>https://www.tiktok.com/music/original-sound-7612345678901234567</td>`
-            + `<td>88100</td><td>gytsjcmozy074@hotmail.com(UK)</td>`;
+            + `<td>88100</td><td>acc2@example.com(UK)</td>`;
           tb.appendChild(tr);
         }
       }

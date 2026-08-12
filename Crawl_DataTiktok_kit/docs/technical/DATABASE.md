@@ -102,7 +102,7 @@ không có nhịp tim thì coi như đã tắt. Dùng để **cảnh báo** (kh�
 ```json
 { "days": {
     "2026-08-03": { "valid": 230,
-                    "byProfile": { "rsgweakde533@hotmail.com(UK)": 93, "nytshoo083@hotmail.com(UK)": 92 } }
+                    "byProfile": { "acc6@example.com(UK)": 93, "acc7@example.com(UK)": 92 } }
 } }
 ```
 
