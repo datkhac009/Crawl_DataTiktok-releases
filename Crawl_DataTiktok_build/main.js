@@ -687,8 +687,32 @@ ipcMain.handle('vpn-cycle', async (_e, arg) => {
 });
 
 // ── Lịch sử thu thập theo ngày ──
+//
+// GỘP THỐNG KÊ CỦA BẢN PHÁT HÀNH KHÁC trước khi trả bảng (2026-08-12).
+// Từ QĐ-37 người dùng chuyển qua lại giữa 2 repo phát hành. Bản kia ghi thống kê vào khoá
+// `daily_stats` của CÙNG electron-store này (cả hai bản đều `app.setName('TikTokCrawler')`),
+// còn bản này ghi `config/history.json`. Không gộp thì cào cả buổi bên kia rồi quay về đây sẽ
+// thấy thiếu số — đã gặp thật: 5.852 sound ở file này, 216 sound bên kia, mỗi bên chỉ thấy nửa.
+//
+// Đặt ở ĐÂY (và ở lúc khởi động) chứ không phải trong `history.cjs`: file đó bị QĐ-23 ràng buộc
+// chỉ được require `fs`/`path`/`paths.cjs`, nên nó nhận object thuần còn việc đọc store là của
+// main.js. `mergeExternalDays` tự chống cộng trùng nên gọi bao nhiêu lần cũng an toàn.
+function _mergeExternalHistory(where) {
+  try {
+    const n = history.mergeExternalDays(store.get('daily_stats'));
+    if (n > 0) console.log(`[history] Gộp thêm ${n} sound từ thống kê của bản phát hành khác (${where}).`);
+    return n;
+  } catch (e) {
+    console.warn('[history] Gộp thống kê bản khác lỗi (bỏ qua, không ảnh hưởng số liệu đang có):', e.message);
+    return 0;
+  }
+}
+
 ipcMain.handle('history-get', (_e, limit) => {
-  try { return { ok: true, days: history.getDays({ limit: limit || 60 }) }; }
+  try {
+    _mergeExternalHistory('mở bảng Lịch sử');
+    return { ok: true, days: history.getDays({ limit: limit || 60 }) };
+  }
   catch (e) { return { ok: false, msg: e.message, days: [] }; }
 });
 ipcMain.handle('history-clear', () => {
@@ -856,6 +880,10 @@ ipcMain.handle('update-set-repo', (_e, repo) => {
 // ─────────────────────────────────────────
 app.whenReady().then(() => {
   createWindow();
+
+  // Gộp ngay lúc mở app, không đợi người dùng bấm 📊 Lịch sử — để số liệu đúng kể cả khi họ
+  // chỉ liếc qua rồi đóng. Rẻ: đọc 1 khoá trong store + so vài chục số, không gọi mạng.
+  _mergeExternalHistory('khởi động app');
   // Tự kiểm tra cập nhật lúc khởi động (im lặng nếu đã là bản mới nhất).
   setTimeout(() => updater.checkForUpdates(mainWindow, { repo: store.get('update_repo') }), 3000);
   // Tự tải Firefox nếu lib\ms-playwright thiếu (máy triển khai từ bản build cũ không kèm

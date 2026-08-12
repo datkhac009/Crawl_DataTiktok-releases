@@ -2312,3 +2312,101 @@ rồi nạp `updater.cjs` **thật** (không chép logic sang test — bài họ
 | Để việc hạ version nhìn giống nâng cấp bình thường | Người dùng bấm "Cập nhật ngay" theo phản xạ. Việc đi LÙI phải đổi nhãn, đổi chữ trên nút, và có `confirm()` |
 | Lưu thêm cờ "repo đang cài từ đâu" để chống lặp | Không cần: `current == latest` sau khi chuyển là đã tự dừng. Thêm trạng thái là thêm chỗ sai (và phải ghi được nó *trước* `app.quit()`) |
 | Tin tham số mock mà không kiểm hàm THẬT đọc từ đâu | `_currentVersion()` đọc `package.json`, không đọc `app.getVersion()` → mock vô tác dụng, test trượt oan và tưởng code sai |
+
+---
+
+## QĐ-38 — Chạy bản phát hành nào cũng thấy ĐỦ lịch sử: tự gộp `daily_stats` của bản kia (2026-08-12)
+
+### Bối cảnh
+
+QĐ-37 cho chuyển qua lại giữa 2 repo phát hành. Nhưng hai bản **ghi cùng một loại số liệu vào
+hai chỗ khác nhau**:
+
+| | Bản này (`datkhac009`) | Bản kia (`Hung13010`) |
+|---|---|---|
+| Module | `history.cjs` | `stats.cjs` |
+| Nơi lưu | `<cạnh .exe>/config/history.json` | khoá `daily_stats` trong electron-store |
+| Định dạng | `{ days: { ngày: { valid, byProfile: {tên: n} } } }` | `{ ngày: { profileId: { n: tên, c: số } } }` |
+
+Đo thật trên máy người dùng sau khi họ chuyển sang bản kia lúc 18:42:
+
+```
+history.json : 05/08 → 11/08   5.852 sound   (đứng im từ lúc chuyển)
+daily_stats  : 11/08 → 12/08     216 sound   (bản kia ghi tiếp)
+```
+
+Mỗi bản chỉ đọc file của mình → bấm 📊 Lịch sử ở bản kia chỉ thấy 216 sound, **nhìn như mất
+5.852 sound** dù cả hai vẫn nằm nguyên trên đĩa. Ngày 11/08 bị cắt làm đôi (91 + 62).
+
+### Quyết định
+
+**Sửa MỘT phía là đủ.** Cả hai bản đều `app.setName('TikTokCrawler')` nên **dùng chung một
+electron-store** → bản này **đọc được thẳng `daily_stats`** mà bản kia ghi ra. Không cần bản kia
+đổi gì, không cần nhờ tác giả bên đó.
+
+`history.mergeExternalDays(daily)` chạy ở **2 điểm**: lúc khởi động app, và mỗi lần mở bảng Lịch
+sử. Rẻ (đọc 1 khoá trong store + so vài chục số, không gọi mạng) nên gọi 2 chỗ cho chắc.
+
+**Giữ nguyên QĐ-23:** `history.cjs` vẫn **chỉ** require `fs`/`path`/`paths.cjs`. Nó nhận **object
+thuần**; việc đọc electron-store là của `main.js` (nơi vốn đã có `store`). Có khẳng định riêng
+khoá lại điều này (test 27–28).
+
+### ⚠ Chống cộng trùng — bắt buộc, không phải tuỳ chọn
+
+Hàm chạy mỗi lần mở app và mỗi lần mở bảng, mà số bên kia **vẫn tăng tiếp** mỗi lần người dùng
+quay sang chạy bản đó. Không chống trùng thì mỗi lần mở app là số lịch sử **tự phình lên** —
+hỏng dữ liệu thật, không đảo ngược được.
+
+Cách làm: ghi lại đã gộp bao nhiêu cho từng **(ngày, profileId)** vào khoá `_mergedFromDailyStats`,
+lần sau chỉ cộng **phần chênh**.
+
+Sống sót được nhờ một tính chất sẵn có của `history.cjs`: `_load()` giữ **nguyên cả object** đọc
+được (`_data = j`), không dựng lại `{ days: j.days }`. Ai sửa chỗ đó thành dựng lại thì khoá đánh
+dấu **bị xoá mỗi lần app ghi file** → lần mở app sau cộng trùng toàn bộ. Đã có khẳng định khoá
+đúng tính chất này (test 25–26).
+
+### Hai lỗi thật đã mắc phải khi làm
+
+**1. Theo dõi theo TÊN thay vì theo `profileId` — test bắt được.** Tên **không duy nhất**: 2
+profile khác id có thể trùng tên, và mọi bản ghi thiếu tên đều gom vào `(không rõ)`. Bản đầu
+theo dõi theo tên nên bản ghi thứ hai bị coi là "số giảm" rồi bị bỏ — **mất số** (12 thay vì 15).
+`profileId` mới là định danh ổn định bên kia; tên chỉ dùng để cộng vào `byProfile`.
+
+**2. Di trú dữ liệu thật suýt cộng trùng 216 sound.** Trước khi có tính năng này, tôi đã gộp
+**bằng tay** một lần bằng script, và script đó ghi khoá đánh dấu theo **tên**. Code mới đọc theo
+`profileId` → không khớp → sẽ cộng lại toàn bộ (6.068 → 6.284). Đã phát hiện bằng cách **mô phỏng
+code mới trên đúng file thật** trước khi phát hành, rồi chuyển khoá đánh dấu sang `profileId`.
+
+⚠ **Bài học:** đổi khoá định danh của một cấu trúc đã ghi xuống đĩa là **di trú dữ liệu**, không
+phải sửa code. Phải hỏi "dữ liệu đang có ngoài kia theo định dạng nào?" — ở đây dữ liệu đó do
+chính tôi tạo ra 40 phút trước nên rất dễ quên.
+
+### Giới hạn thành thật
+
+- **Một chiều.** Bản kia vẫn không thấy lịch sử của bản này. Làm chiều ngược lại được (map tên →
+  `profileId` qua `profiles.json`) nhưng phải ghi vào store của bản kia — rủi ro hơn, lợi ích ít
+  hơn, nên chưa làm.
+- **Theo từng máy.** Không gộp liên máy — đúng ràng buộc QĐ-23.
+- **Số bên kia bị giảm thì KHÔNG trừ ngược.** Nếu họ xoá lịch sử bên đó, số ở đây giữ nguyên —
+  vì trừ đi là xoá mất cả phần mà **chính bản này** tự đếm được trong cùng ngày.
+- Nếu bản kia đổi tên khoá `daily_stats` thì tính năng **im lặng ngừng hoạt động** (không lỗi,
+  không gộp). Chấp nhận: hỏng theo kiểu mất tính năng, không hỏng theo kiểu hỏng dữ liệu.
+
+### Kiểm chứng
+
+`test/history-merge.test.js` — **28 khẳng định**, 9 mục. Cách ly bằng `PORTABLE_EXECUTABLE_DIR`
+đặt trước mọi `require` (không cách ly là ghi đè lịch sử thật — cùng bẫy QĐ-36).
+
+Dùng đúng số thật của người dùng cho mục 1 (91 + 62 = 153, và 14 + 21 = 35 cho một profile cụ thể).
+Phủ: gộp vào ngày đã có, tạo ngày mới, **gọi 3 lần vẫn chỉ cộng 1 lần**, bên kia cào thêm thì chỉ
+cộng phần chênh, bên kia giảm thì không trừ ngược, đầu vào rác không sinh ngày rác, thiếu tên thì
+gom lại chứ không mất số, khoá đánh dấu sống sót qua vòng ghi của app, và QĐ-23 còn nguyên.
+
+| KHÔNG nên làm lại | Vì sao |
+|---|---|
+| Dùng **tên** làm khoá định danh khi gộp số liệu | Tên không duy nhất: trùng tên, hoặc thiếu tên thì gom chung → bản ghi thứ hai bị coi là "số giảm" và bị bỏ, **mất số** |
+| Gộp số liệu tích luỹ mà không ghi lại "đã gộp tới đâu" | Hàm chạy mỗi lần mở app/mở bảng → số tự phình lên mỗi lần, hỏng dữ liệu thật không đảo ngược được |
+| Trừ ngược khi nguồn ngoài báo số NHỎ hơn | Xoá mất cả phần mà chính bản này tự đếm được trong cùng ngày. Chỉ cộng phần dương |
+| Đổi khoá định danh của cấu trúc **đã ghi xuống đĩa** mà không di trú | Dữ liệu cũ không khớp → cộng trùng toàn bộ. Phải mô phỏng code mới trên **đúng file thật** trước khi phát hành |
+| Kiểm ràng buộc "không được require X" trên **nguyên văn** mã nguồn | Chính phần ghi chú giải thích ràng buộc có nhắc tên X → khẳng định trượt oan. Phải **bỏ comment** trước khi đo (đã bị lừa một lần) |
+| Cho `history.cjs` tự đọc electron-store | Phá QĐ-23 (file đó chỉ được require `fs`/`path`/`paths.cjs`). Nhận **object thuần**, để `main.js` đọc store |

@@ -116,6 +116,12 @@ Giữ 400 ngày rồi tự dọn ngày cũ nhất. File hỏng thì đọc lại
 ⚠️ Số liệu **của riêng từng máy** — không gộp liên máy (gộp sẽ phải ghi thêm lên Google Sheet,
 tăng tải API). Xem QĐ-23.
 
+**Tự gộp số liệu của bản phát hành KHÁC** ([QĐ-38](DECISIONS.md)): bản của `Hung13010` ghi thống kê
+theo ngày vào khoá `daily_stats` của **cùng electron-store** (hai bản cùng `app.setName('TikTokCrawler')`).
+Lúc khởi động app và mỗi lần mở 📊 Lịch sử, app đọc khoá đó rồi cộng **phần chênh** vào `history.json`
+— nên chuyển qua lại giữa 2 bản vẫn thấy đủ số. Chống cộng trùng bằng khoá `_mergedFromDailyStats`
+(ghi đã gộp bao nhiêu cho từng **ngày + profileId**). Một chiều: bản kia vẫn không thấy số của bản này.
+
 ### `ChromiumProfile/` — chỉ khi profile ĐÓ bật chế độ profile Chromium riêng
 
 Thư mục `user-data-dir` thật của Chromium (`Default/`, `Cookies`, `Local Storage/`,

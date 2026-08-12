@@ -106,6 +106,67 @@ function recordSound(profileName) {
   _scheduleSave();
 }
 
+// ── GỘP THỐNG KÊ CỦA BẢN PHÁT HÀNH KHÁC (2026-08-12) ──
+//
+// VÌ SAO CẦN: dự án có 2 repo phát hành và từ v0.1.71 người dùng chuyển qua lại tự do (QĐ-37).
+// Bản kia ghi thống kê theo ngày vào khoá `daily_stats` của **cùng một electron-store** (cả hai
+// bản đều `app.setName('TikTokCrawler')`), còn bản này ghi `config/history.json`. Hệ quả đã gặp
+// thật: cào cả buổi trên bản kia rồi quay về đây thì 📊 Lịch sử chỉ thấy nửa số liệu — nhìn như
+// mất dữ liệu, dù thực ra cả hai vẫn nằm nguyên trên đĩa, chỉ là mỗi bản đọc file của mình.
+//
+// Định dạng bên kia: { 'YYYY-MM-DD': { <profileId>: { n: <tên profile>, c: <số sound> } } }
+// May là nó lưu sẵn TÊN profile nên khớp thẳng vào `byProfile` ở đây, không phải tra id → tên.
+//
+// ⚠ NHẬN OBJECT THUẦN, KHÔNG tự đọc electron-store. Giữ đúng QĐ-23: file này chỉ được require
+// `fs`/`path`/`paths.cjs`. `main.js` đã có `store` sẵn nên nó đọc rồi truyền vào đây.
+//
+// ⚠ CHỐNG CỘNG TRÙNG: ghi lại đã gộp bao nhiêu cho từng (ngày, profile) vào `_mergedFromDailyStats`,
+// lần sau chỉ cộng PHẦN CHÊNH. Bắt buộc phải có — hàm này chạy mỗi lần mở app và mỗi lần mở bảng
+// Lịch sử, mà số bên kia thì vẫn tăng tiếp mỗi khi người dùng quay sang chạy bản đó.
+// Khoá lạ này sống sót qua các lần app tự ghi file vì `_load()` giữ NGUYÊN cả object đọc được
+// (`_data = j`) chứ không dựng lại `{ days }` — đừng đổi chỗ đó.
+//
+// Trả về số sound thực sự cộng thêm (0 = không có gì mới).
+function mergeExternalDays(daily) {
+  if (!daily || typeof daily !== 'object') return 0;
+  const data = _load();
+  data.days = data.days || {};
+  const merged = data._mergedFromDailyStats || (data._mergedFromDailyStats = {});
+  let added = 0;
+
+  for (const dayKey of Object.keys(daily)) {
+    // Chỉ nhận đúng dạng ngày — khoá lạ trong store không được tạo ra ngày rác trong bảng.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) continue;
+    const profiles = daily[dayKey];
+    if (!profiles || typeof profiles !== 'object') continue;
+
+    const day = data.days[dayKey] || (data.days[dayKey] = { valid: 0, byProfile: {} });
+    day.byProfile = day.byProfile || {};
+    const seen = merged[dayKey] || (merged[dayKey] = {});
+
+    // ⚠ Theo dõi "đã gộp bao nhiêu" theo **profileId** (khoá bên kia), KHÔNG theo tên.
+    // Tên KHÔNG duy nhất: 2 profile khác id có thể trùng tên, và mọi bản ghi thiếu tên đều gom
+    // vào "(không rõ)". Bản đầu tôi theo dõi theo tên nên cái thứ hai bị coi là "số giảm" rồi bị
+    // bỏ — mất số. Test 23/24 bắt đúng lỗi này (12 thay vì 15).
+    // Tên chỉ dùng để cộng vào `byProfile` cho khớp định dạng của file này.
+    for (const [pid, rec] of Object.entries(profiles)) {
+      const name = String((rec && rec.n) || '(không rõ)');
+      const now = Number(rec && rec.c) || 0;
+      const delta = now - (seen[pid] || 0);
+      // delta <= 0: đã gộp rồi, hoặc số bên kia bị giảm (họ xoá lịch sử). KHÔNG trừ ngược —
+      // trừ đi là xoá mất số mà CHÍNH bản này đã tự đếm được trong cùng ngày.
+      if (delta <= 0) continue;
+      day.byProfile[name] = (day.byProfile[name] || 0) + delta;
+      day.valid = (day.valid || 0) + delta;
+      seen[pid] = now;
+      added += delta;
+    }
+  }
+
+  if (added > 0) _scheduleSave();
+  return added;
+}
+
 // Trả về danh sách ngày MỚI NHẤT TRƯỚC để renderer hiện bảng.
 // [{ date, valid, byProfile: {name: n} }]
 function getDays({ limit = 60 } = {}) {
@@ -126,4 +187,4 @@ function clearAll() {
   flush();
 }
 
-module.exports = { recordSound, getDays, clearAll, flush, todayKey, KEEP_DAYS };
+module.exports = { recordSound, getDays, clearAll, flush, todayKey, mergeExternalDays, KEEP_DAYS };
