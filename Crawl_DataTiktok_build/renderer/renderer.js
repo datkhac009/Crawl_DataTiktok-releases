@@ -176,6 +176,19 @@ function setRowRunning(id, running) {
   if (btn) {
     btn.textContent = running ? '■ Dừng' : '▶ Chạy';
     btn.classList.toggle('btn-primary', !running);
+    // ⚠ PHẢI MỞ KHOÁ khi chuyển sang "■ Dừng" (sửa 2026-08-13).
+    // Bất biến của app là *"nút Dừng luôn bấm được"* — nhưng trước đây nó chỉ được thi hành ở
+    // MỘT chỗ: `applyVpnCooldown()` bỏ qua các hàng đang chạy. Chỗ đó không phủ được đường
+    // NGƯỢC LẠI — hàng bị khoá TRƯỚC rồi mới bắt đầu chạy:
+    //   1. HMA biến động → applyVpnCooldown() khoá hàng chưa chạy, ghi chữ "⏳ 59s"
+    //   2. Profile khởi động → setRowRunning(id, true) đổi chữ thành "■ Dừng"…
+    //      …mà KHÔNG mở khoá → nút TẮT nhưng mang chữ "■ Dừng"
+    // Và nó KHÔNG TỰ KHỎI: hết 59 giây thì applyVpnCooldown() lại *bỏ qua* đúng hàng này vì
+    // giờ nó đã nằm trong `runningSet`. Người dùng mất hẳn đường dừng riêng từng profile
+    // (ảnh chụp thật: 4 profile đang quét, cả 4 nút Dừng đều tắt).
+    // Đây đúng bài học QĐ-32: một ràng buộc chỉ cài ở MỘT trong nhiều đường dẫn tới nó thì
+    // kể như chưa có. Nên thi hành ở CẢ HAI đầu.
+    if (running) { btn.disabled = false; btn.title = ''; }
   }
   const sel = document.querySelector(`#profileTableBody .mode-select[data-id="${CSS.escape(id)}"]`);
   const kw = document.querySelector(`#profileTableBody .mode-keyword[data-id="${CSS.escape(id)}"]`);

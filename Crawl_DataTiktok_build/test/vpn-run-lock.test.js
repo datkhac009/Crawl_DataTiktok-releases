@@ -369,6 +369,74 @@ function ok(cond, label, detail) {
   // Tra runningSet ve nhu ban dau cho cac buoc sau (neu co).
   await page.evaluate(() => T.setRunning(['p3']));
 
+  // ══════════════════════════════════════════════════════════════════════
+  // LOI THAT (2026-08-13): nut "■ Dung" bi TAT, va KHONG TU KHOI
+  // ══════════════════════════════════════════════════════════════════════
+  // Nguoi dung gui anh: 4 profile dang quet ("Chu ky [Quet]: da quet 39 sound"), ca 4 nut
+  // "■ Dung" tren tung hang deu bi tat -> mat han duong dung rieng tung profile.
+  //
+  // Chuoi su viec:
+  //   1. HMA bien dong -> applyVpnCooldown() khoa cac hang CHUA chay, ghi chu "⏳ 59s"
+  //   2. Profile khoi dong -> setRowRunning(id,true) doi chu thanh "■ Dung"
+  //      …ma KHONG mo khoa -> nut TAT nhung mang chu "■ Dung"
+  //   3. Het 59 giay: applyVpnCooldown() *bo qua* dung hang nay (`runningSet.has(id)` -> return)
+  //      nen KHONG BAO GIO mo lai. Ket vinh vien toi khi ve lai bang.
+  //
+  // Bat bien cua app la "nut Dung LUON bam duoc" — truoc day chi thi hanh o MOT dau
+  // (applyVpnCooldown bo qua hang dang chay), khong phu duong NGUOC LAI (bi khoa TRUOC roi moi
+  // chay). Dung bai hoc QD-32: rang buoc cai o mot trong nhieu duong = ke nhu chua co.
+  console.log('\n=== 9. Nut "■ Dung" phai bam duoc KE CA khi hang bi khoa TRUOC roi moi chay ===');
+  {
+    // ⚠ Dung `addScriptTag`, KHONG `page.evaluate(chuoi)`: evaluate danh gia chuoi nhu BIEU THUC
+    // nen chuoi bat dau bang `function` -> SyntaxError "Unexpected token 'function'". Bo test nay
+    // von da dung addScriptTag cho HARNESS — di theo dung khuon do.
+    // Dung LAI page san co (da co FNS + HARNESS); `const` o top-level cua script nam trong pham vi
+    // tu vung toan cuc nen script thu hai thay duoc `runningSet`, `$`, `applyVpnCooldown`…
+    await page.evaluate(() => T.reset());
+    // ⚠ `T.setRunning()` chi sua `Set`, KHONG dong bo DOM — cac muc test truoc da ghi lai chu nut
+    // p3 thanh "▶ Chạy". Phai dung chinh `setRowRunning` de dua CA HAI ve dung trang thai, neu
+    // khong thi khang dinh 9.6 truot vi du lieu ban dau sai chu khong phai code sai.
+    await page.evaluate(() => { T.setRunning([]); });
+    await page.addScriptTag({ content: extractFn(SRC, 'setRowRunning') + `
+      window.__t = {
+        lock() { T.setRunLock(true, 'vpn-off'); T.apply(); },
+        unlock() { T.setRunLock(false); T.setCooldown(0); T.apply(); },
+        start(id) { setRowRunning(id, true); },
+        btn(id) { const b = document.querySelector('button[data-act="run"][data-id="' + id + '"]');
+                  return { text: b.textContent, disabled: b.disabled }; },
+      };
+    ` });
+    // Dua p3 ve dung trang thai DANG CHAY bang chinh setRowRunning (dong bo ca Set lan DOM).
+    await page.evaluate(() => window.__t.start('p3'));
+
+    // p1 CHUA chay -> bi khoa dung nhu thiet ke
+    await page.evaluate(() => window.__t.lock());
+    let b = await page.evaluate(() => window.__t.btn('p1'));
+    ok(b.disabled === true, '9.1 hang CHUA chay bi khoa khi VPN tat (dung thiet ke)');
+    ok(b.text === '⛔ VPN tắt', '9.2 va doi nhan bao dung ly do', b.text);
+
+    // …roi profile do BAT DAU CHAY trong luc van dang khoa
+    await page.evaluate(() => window.__t.start('p1'));
+    b = await page.evaluate(() => window.__t.btn('p1'));
+    ok(b.text === '■ Dừng', '9.3 doi chu thanh "■ Dừng"');
+    ok(b.disabled === false,
+      '9.4 *** LOI THAT ***: nut "■ Dừng" PHAI bam duoc ngay ca khi hang bi khoa TRUOC do — '
+      + 'khong thi nguoi dung mat han duong dung rieng tung profile');
+
+    // …va het gio khoa cung khong duoc lam no tat lai
+    await page.evaluate(() => window.__t.unlock());
+    b = await page.evaluate(() => window.__t.btn('p1'));
+    ok(b.disabled === false && b.text === '■ Dừng',
+      '9.5 het khoa van bam duoc va van la "■ Dừng" (applyVpnCooldown bo qua hang dang chay)');
+
+    // Hang dang chay san (p3) van phai nguyen ven qua ca chu trinh khoa/mo
+    await page.evaluate(() => { window.__t.lock(); });
+    b = await page.evaluate(() => window.__t.btn('p3'));
+    ok(b.disabled === false && b.text === '■ Dừng',
+      '9.6 hang DANG chay san khong bao gio bi khoa (duong cu, chong hoi quy)', JSON.stringify(b));
+    await page.close();
+  }
+
   await browser.close();
 
   console.log('\n' + '='.repeat(78));

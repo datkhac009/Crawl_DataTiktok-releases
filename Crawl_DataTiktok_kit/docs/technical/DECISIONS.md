@@ -1620,6 +1620,40 @@ mãi), app đang tự đổi IP thì bộ canh đứng ngoài, và cảnh báo k
 có `await` → SyntaxError → cả harness không nạp được và Playwright báo `"T is not defined"`, một
 thông báo **chẳng liên quan gì** tới nguyên nhân. Hàm trích phải kéo theo `async` phía trước.
 
+### Bổ sung 3 (2026-08-13): nút "■ Dừng" bị TẮT và KHÔNG TỰ KHỎI — cùng cái bẫy, lần thứ ba
+
+**Lỗi thật, người dùng gửi ảnh:** 4 profile đang quét (`Chu kỳ [Quét]: đã quét 39 sound`), **cả 4
+nút "■ Dừng" trên từng hàng đều bị tắt** → mất hẳn đường dừng riêng từng profile.
+
+**Nguyên nhân:** `setRowRunning()` đổi chữ nút thành `■ Dừng` nhưng **không mở khoá lại**.
+
+```
+1. HMA biến động → applyVpnCooldown() khoá hàng CHƯA chạy, ghi chữ "⛔ VPN tắt"
+2. Profile khởi động → setRowRunning(id,true) đổi chữ thành "■ Dừng"… mà KHÔNG mở khoá
+   → nút TẮT nhưng mang chữ "■ Dừng"
+3. Hết 59 giây: applyVpnCooldown() *bỏ qua* đúng hàng này (`runningSet.has(id)` → return)
+   → KHÔNG BAO GIỜ mở lại. Kẹt vĩnh viễn tới khi bảng được vẽ lại.
+```
+
+Bất biến *"nút Dừng LUÔN bấm được"* trước đây chỉ được thi hành ở **một đầu** — `applyVpnCooldown()`
+bỏ qua hàng đang chạy. Đầu đó không phủ được đường **ngược lại**: bị khoá **TRƯỚC** rồi mới bắt đầu
+chạy. Nay thi hành ở **cả hai đầu**.
+
+⚠️ **Đây là lần thứ BA cùng một cái bẫy** (xem 2 dòng "Cài một ràng buộc chỉ ở MỘT trong nhiều
+đường" ở bảng dưới): lần 1 là `renderProfiles()` vẽ lại ghi đè nhãn nút; lần 2 là đường "người dùng
+tự tắt/bật HMA"; lần này là đường "bị khoá trước rồi mới chạy". Câu hỏi phải hỏi mỗi lần đặt một
+ràng buộc lên UI: **"có bao nhiêu đường dẫn tới trạng thái này, và tôi đã cài ở đủ chưa?"**
+
+**Đường thoát trong lúc chưa cập nhật:** nút **"■ Dừng ô đã chọn"** ở thanh trên không bao giờ bị
+tắt (không có dòng code nào disable nó) — tick rồi bấm. Dùng **🕓 Dừng mềm** nếu không muốn mất số
+sound đã quét mà chưa đếm (ảnh người dùng lệch 39/26, 37/25, 46/34 ≈ 37 sound).
+
+**Kiểm chứng:** `vpn-run-lock.test.js` mục 9 — **6 khẳng định** dựng lại đúng chuỗi trên bằng DOM
+thật. Đã kiểm test có "cắn": bỏ dòng mở khoá → **3 khẳng định trượt**, và 9.6 in ra đúng dấu vân
+tay của lỗi: `{"text":"■ Dừng","disabled":true}`. Tổng file lên **77 khẳng định**.
+
+---
+
 ---
 
 ## QĐ-33 — Link TikTok trả "Something went wrong": KHÔNG bỏ nữa, đưa sang TAB CHỜ kiểm tay
