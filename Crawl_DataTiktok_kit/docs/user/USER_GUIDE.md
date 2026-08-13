@@ -148,8 +148,37 @@ Lưu ý:
 | Nút | Hành vi |
 |---|---|
 | **▶ Chạy đã chọn** | Chạy các profile đã tick — bật **lần lượt từng profile**, không bật ồ ạt |
-| **■ Dừng đã chọn** | Dừng **ngay lập tức** — sound trong hàng đợi chưa check sẽ bị bỏ |
-| **🕓 Dừng mềm đã chọn** | Ngừng quét ngay nhưng **check nốt** hàng đợi rồi mới dừng |
+| **■ Dừng ô đã chọn** | Ngừng quét ngay nhưng **CHECK NỐT** hàng đợi rồi mới dừng hẳn — **không mất sound** |
+| **⏹ Dừng ngay ô đã chọn** | **Cắt tức thì** — sound trong hàng đợi chưa check sẽ bị **BỎ**. Có hỏi xác nhận kèm số sound sẽ mất |
+
+### Bấm "■ Dừng" thì profile vẫn chạy thêm một lúc — ĐÚNG, không phải lỗi
+
+Từ **v0.1.74**, nút **■ Dừng** (cả trên từng hàng lẫn trên thanh trên) là **dừng mềm**: nó ngừng
+quét **ngay**, nhưng **check nốt** những sound đã quét mà chưa kịp đếm số video rồi mới dừng hẳn.
+
+Lý do: số sound **mất** khi dừng cứng = **cột Quét − cột Đã check**. Với 6 profile, mỗi profile
+tối đa 20 sound chờ, một lần bấm Dừng có thể mất tới ~120 sound đã quét được.
+
+Trong lúc đó log ghi rõ từng sound:
+
+```
+Dừng mềm: đang check nốt "original sound - mohammad tilavi" (còn 72 sound chờ)...
+Bỏ "original sound  - Shanenahshane" (1 < 1000 video)
+Dừng mềm: đang check nốt "original sound - aso_gak2" (còn 69 sound chờ)...
+```
+
+và nút đổi thành **⏹ Dừng ngay** — **bấm lần nữa là cắt luôn**.
+
+⚠️ **Khi nào phải cắt ngay:**
+
+| Tình huống | Làm gì |
+|---|---|
+| **VPN tụt / bạn sắp tắt HMA** | **Cắt ngay** (bấm nút lần 2, hoặc **⏹ Dừng ngay ô đã chọn**). Mỗi giây profile còn chạy là một giây gửi request bằng **IP thật** |
+| Log kẹt ở `TikTok đang chặn trang đếm` | **Cắt ngay** — bước đếm đang hỏng nên hàng đợi gần như không tiêu được (đo thật: 20 sound cần 6–7 tiếng) |
+| Bình thường, muốn nghỉ | Bấm **■ Dừng** một lần rồi để yên — app tự dừng khi check xong |
+
+✅ Các đường **TỰ ĐỘNG** (feed cạn, bị chặn trang đếm, VPN tụt) vẫn **cắt ngay** như cũ — không
+bị chậm lại vì thay đổi này.
 
 **Bật lần lượt (từ 2026-07-31):** chọn nhiều profile rồi bấm ▶ thì app bật **từng profile
 một** — chờ profile vừa bật quét được sound đầu tiên mới bật profile kế tiếp (tối đa chờ 25

@@ -1958,6 +1958,81 @@ ngủ). Đã kiểm test có "cắn": bỏ dòng nhả slot → 2 khẳng địn
 
 ---
 
+## QĐ-39 — Nút "■ Dừng" mặc định là DỪNG MỀM; đường thoát "bấm lần 2 = cắt ngay" (2026-08-13)
+
+**Người dùng chốt:** *"quét được 300 check đang ở 260, ấn dừng là nó dừng luôn — đúng ra phải đợi
+check xong 40 link nữa thì mới dừng được"*.
+
+**Cơ chế đã CÓ SẴN, chỉ là nút không gọi tới.** `softStopProfile()` (cờ `stop.draining`) và cả dòng
+log tiến độ đã nằm trong `crawler.cjs` từ lâu — đúng dòng người dùng dán về từ bản Hung (2 bản chung
+gốc nên giống hệt):
+
+```js
+onStatus(profile.id, 'running', `Dừng mềm: đang check nốt "${item.name}" (còn ${soundQueue.length} sound chờ)...`);
+```
+
+Thiếu duy nhất: nút "■ Dừng" trên hàng **và** nút toolbar đều gọi `api.profileStop` (cứng). Muốn có
+hành vi đó phải bấm một nút RIÊNG là `🕓 Dừng mềm ô đã chọn` — mà tính năng cứu dữ liệu nằm sau một
+nút phụ thì thực tế **không ai dùng** (đúng bài học QĐ-33: mặc định sai lệch về phía mất dữ liệu).
+
+Thiệt hại đo được: số sound mất = **cột Quét − cột Đã check**, trần hàng đợi 20/profile × 6 profile
+⇒ tới **~120 sound** mỗi lần bấm Dừng.
+
+**Quyết định:** `stopProfileById` mặc định gọi `profileSoftStop`; thêm tham số `opts.force`.
+
+### ⚠ Đường thoát là BẮT BUỘC, không phải tuỳ chọn
+
+Nếu "Dừng" luôn chờ hàng đợi cạn thì có **hai ca kẹt thật**:
+
+| Ca | Vì sao dừng mềm hỏng |
+|---|---|
+| **VPN tụt / người dùng tắt HMA** | Mỗi giây profile còn chạy là một giây gửi request bằng **IP THẬT** (QĐ-32). Không thể ngồi chờ |
+| **TikTok chặn trang đếm** | Chính bước đếm đang hỏng ⇒ hàng đợi gần như không tiêu được — QĐ-35 đo thật **20 sound cần 6–7 tiếng**. Người dùng **treo máy** nên profile treo cả đêm mà không ai thấy |
+
+Nên: **bấm lần 2 (lúc đang check nốt) = cắt ngay**, nhãn nút đổi thành `⏹ Dừng ngay`. Backend đã sẵn
+sàng: `countLoop` chạy `while (!stop.requested)` nên dừng cứng giữa lúc drain vẫn cắt tức thì.
+
+**Mọi đường TỰ ĐỘNG bị ép `force: true`** (`stopAndScheduleRestart`, dùng chung cho 'feed cạn' và
+'chặn trang đếm'). Ca "chặn trang đếm" mà dừng mềm là profile **treo vĩnh viễn** — có khẳng định
+riêng khoá lại điều này.
+
+**Toolbar:** đổi `🕓 Dừng mềm ô đã chọn` → `⏹ Dừng ngay ô đã chọn` (cắt cứng, có `confirm()` nói rõ
+số sound sẽ mất — cùng nguyên tắc với 🧹 Dọn trùng, QĐ-20). Giữ 2 nút trùng chức năng thì người dùng
+phải đoán; và ca "cần gấp" xứng đáng có đường tường minh chứ không chỉ nằm sau thao tác bấm-2-lần.
+
+### Ba cái bẫy trong chính bộ test, đều đã sửa
+
+1. **`extractFn` không hiểu tham số mặc định dạng object.** Nó đếm ngoặc từ dấu `{` **đầu tiên**, mà
+   `function f(id, opts = {})` có `{}` ngay trong ngoặc tròn ⇒ depth về 0 ngay ⇒ "thân hàm" cụt ngủn
+   ⇒ **5 khẳng định trượt OAN** trong khi mã nguồn hoàn toàn đúng. Sửa: bỏ qua trọn danh sách tham
+   số rồi mới đếm. Lỗi này có ở **cả hai** file (`vpn-run-lock`, `starve-restart`).
+2. **Khẳng định khớp NGUYÊN VĂN thân dòng.** `/stopProfileById\(profileId\)/` và
+   `/if \(!runningSet\.has\(id\)\) return;/` trượt chỉ vì thêm tham số / thêm một lệnh, dù **bất
+   biến vẫn còn nguyên**. Khẳng định phải bám vào **bất biến** (so vị trí "huỷ hẹn trước guard"),
+   không bám vào cách viết.
+3. **Harness thiếu `_draining`** ⇒ `ReferenceError` ngay khi chạy `setRowRunning`. Đây là test làm
+   **đúng việc**: cách trích mã nguồn thật khiến thêm phụ thuộc mới là bị bắt ngay, không lệch âm thầm.
+
+⚠ **Và một lỗi thật do chính comment của tôi tự cảnh báo mà vẫn mắc:** đặt `const _draining` ngay
+cạnh `stopProfileById` (giữa file) trong khi `setRowRunning` ở đầu file đọc nó ⇒ vùng chết TDZ.
+`module-refs.test.js` bắt được (`THIEU KHAI BAO: _draining (dòng 511, 6 chỗ)`). Đã chuyển lên đầu
+file cùng `runningSet`. Đúng bẫy QĐ-21 với `_runningSelectedBatch`.
+
+**Kiểm chứng:** `vpn-run-lock.test.js` mục 10 (**9 khẳng định**, file lên **86**) + sửa 2 khẳng định
+cũ. Đã kiểm có "cắn": bỏ nhánh dừng mềm → trượt 10.3; bỏ `force` ở đường tự động → trượt khẳng định
+mới; đảo thứ tự huỷ hẹn → `starve-restart` trượt. **23/23 file test đạt.**
+
+| KHÔNG nên làm lại | Vì sao |
+|---|---|
+| Để tính năng **cứu dữ liệu** nằm sau một nút phụ, nút chính thì phá dữ liệu | Lặp lại QĐ-33: mặc định phải chọn theo **hậu quả khi sai**. Mất ~120 sound mỗi lần bấm Dừng, im lặng |
+| Đổi "Dừng" thành chờ-hàng-đợi mà **không có đường cắt ngay** | VPN tụt thì mỗi giây là một giây dùng IP thật; chặn trang đếm thì drain mất 6–7 tiếng ⇒ profile treo cả đêm |
+| Cho đường **tự động** dùng dừng mềm | "Chặn trang đếm" là chính bước đếm hỏng ⇒ drain KHÔNG BAO GIỜ xong ⇒ hẹn tự-bật-lại không bao giờ chạy |
+| Hàm trích mã nguồn đếm ngoặc từ `{` đầu tiên | Tham số mặc định `opts = {}` làm thân hàm cụt ⇒ khẳng định trượt oan, mất hàng giờ truy nhầm hướng |
+| Viết khẳng định khớp **nguyên văn** một dòng code | Thêm một tham số là trượt, dù bất biến còn nguyên. Bám vào bất biến, không bám cách viết |
+| Giữ 2 nút toolbar **trùng chức năng** sau khi đổi hành vi nút chính | Người dùng phải đoán nút nào khác nút nào |
+
+---
+
 ## Những điều KHÔNG nên làm lại
 
 | Đã thử | Kết quả |

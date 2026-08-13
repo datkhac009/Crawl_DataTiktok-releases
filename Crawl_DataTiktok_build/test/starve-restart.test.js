@@ -28,7 +28,16 @@ function extractFn(src, name) {
   let at = src.indexOf(`function ${name}(`);
   if (at < 0) throw new Error(`Khong tim thay function ${name}() trong renderer.js`);
   if (/async\s+$/.test(src.slice(Math.max(0, at - 8), at))) at = src.lastIndexOf('async', at);
-  const open = src.indexOf('{', at);
+  // Bo QUA danh sach tham so truoc khi dem ngoac: `function f(id, opts = {})` co `{}` ngay
+  // trong ngoac tron -> dem tu dau `{` dau tien se ve 0 ngay -> "than ham" cut ngun, moi
+  // khang dinh tren no truot OAN. (Sua 2026-08-13, cung luc voi vpn-run-lock.test.js.)
+  const lp = src.indexOf('(', src.indexOf(`function ${name}(`));
+  let pd = 0, i0 = lp;
+  for (; i0 < src.length; i0++) {
+    if (src[i0] === '(') pd++;
+    else if (src[i0] === ')') { pd--; if (pd === 0) break; }
+  }
+  const open = src.indexOf('{', i0);
   let depth = 0;
   for (let i = open; i < src.length; i++) {
     if (src[i] === '{') depth++;
@@ -279,7 +288,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   // Duong nhe nam trong `stopAndScheduleRestart` (tach ra 2026-08-07 de dung chung cho ca
   // 'feed can' lan 'bi chan trang dem keo dai').
   const light = fn('stopAndScheduleRestart');
-  ok(/await stopProfileById\(profileId\)[\s\S]*scheduleStarveRestart/.test(light),
+  ok(/await stopProfileById\(profileId[\s\S]*scheduleStarveRestart/.test(light),
     'dat hen SAU khi await dung xong — dat truoc thi chinh stopProfileById xoa mat hen');
   const starved = fn('handleFeedStarved');
   ok(/stopAndScheduleRestart\(profileId/.test(starved),
@@ -292,9 +301,16 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   ok(!/vpnCycle|profilesStopAll|vpnIpv6Risk/.test(starved),
     'TUYET DOI khong dung vao VPN, khong dung profile khac');
   const stop = fn('stopProfileById');
-  ok(/cancelStarveRestart\(id[\s\S]*if \(!runningSet\.has\(id\)\) return;/.test(stop),
+  // Do THU TU bang vi tri, khong khop nguyen van than dong: dong `return` som da doi tu
+  // `return;` thanh `{ _draining.delete(id); return; }` khi them dung mem (2026-08-13) va
+  // khang dinh cu truot OAN du bat bien van con nguyen. Khang dinh phai bam vao BAT BIEN
+  // ("huy hen truoc khi return som"), khong bam vao cach viet.
+  const iCancel = stop.indexOf('cancelStarveRestart(id');
+  const iGuard = stop.search(/if \(!runningSet\.has\(id\)\)/);
+  ok(iCancel >= 0 && iGuard > iCancel,
     'huy hen TRUOC dong `if (!runningSet.has(id)) return` — luc dem nguoc profile khong nam trong '
-    + 'runningSet, kiem sau thi bam Dung khong huy duoc gi');
+    + 'runningSet, kiem sau thi bam Dung khong huy duoc gi',
+    `cancel@${iCancel} guard@${iGuard}`);
   const fire = fn('fireStarveRestart');
   ok(/vpnRunLocked\(\)/.test(fire), 'truoc khi bat lai phai kiem VPN (khong bat khi VPN dang tat)');
   ok(/if \(runningSet\.has\(id\)\)/.test(fire), 'nguoi dung da tu bat thi khong bat lan 2');

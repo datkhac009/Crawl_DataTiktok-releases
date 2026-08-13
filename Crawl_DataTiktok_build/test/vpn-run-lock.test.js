@@ -27,7 +27,17 @@ function extractFn(src, name) {
   // thanh `function watchVpnTunnel` -> than ham co `await` -> SyntaxError, ca harness khong nap
   // duoc va bao "T is not defined" (thong bao cha lien quan gi den nguyen nhan).
   if (/async\s+$/.test(src.slice(Math.max(0, at - 8), at))) at = src.lastIndexOf('async', at);
-  const open = src.indexOf('{', at);
+  // Bo QUA danh sach THAM SO truoc khi dem ngoac. Bat dau dem tu dau `{` DAU TIEN la sai voi
+  // tham so mac dinh dang object: `function f(id, opts = {})` -> gap `{` roi `}` ngay trong
+  // ngoac tron -> depth ve 0 -> "than ham" chi la mau `...opts = {}`, moi khang dinh tren than
+  // ham do deu TRUOT trong khi ma nguon hoan toan dung (da bi lua that: 5 khang dinh truot oan).
+  const lp = src.indexOf('(', src.indexOf(`function ${name}(`));
+  let pd = 0, i0 = lp;
+  for (; i0 < src.length; i0++) {
+    if (src[i0] === '(') pd++;
+    else if (src[i0] === ')') { pd--; if (pd === 0) break; }
+  }
+  const open = src.indexOf('{', i0);
   let depth = 0;
   for (let i = open; i < src.length; i++) {
     if (src[i] === '{') depth++;
@@ -56,6 +66,10 @@ const PAGE = `<!doctype html><meta charset="utf-8">
 const HARNESS = `
   const $ = (id) => document.getElementById(id);
   const runningSet = new Set(['p3']);        // p3 dang CHAY -> nut cua no la "■ Dừng"
+  // Profile dang DUNG MEM (check not hang doi). setRowRunning doc bien nay de chon nhan nut
+  // "■ Dừng" hay "⏹ Dừng ngay" -> thieu no la ReferenceError, test bao loi ngay (dung y do
+  // cua cach trich ma nguon that: doi ten/them phu thuoc la test bat duoc, khong lech am tham).
+  const _draining = new Set();
   const getCheckedIds = () => [...document.querySelectorAll('#profileTableBody .row-check:checked')]
     .map(c => c.dataset.id);
   let _vpnCooldownUntil = 0;
@@ -452,8 +466,14 @@ function ok(cond, label, detail) {
   // Duong NHE (`stopAndScheduleRestart`) tach ra 2026-08-07 de dung chung cho ca 'feed can' lan
   // 'bi chan trang dem keo dai' — mot ban logic duy nhat (QĐ-10).
   const light = fn('stopAndScheduleRestart');
-  ok(/stopProfileById\(profileId\)/.test(light),
+  ok(/stopProfileById\(profileId\b/.test(light),
     'duong nhe -> DUNG dung profile do');
+  // Tu 2026-08-13 `stopProfileById` MAC DINH la dung MEM (check not hang doi). Duong TU DONG
+  // nay BAT BUOC phai ep `force`, vi ca "bi chan trang dem" thi CHINH buoc dem dang hong ->
+  // hang doi khong bao gio tieu het (QD-35 do that: 20 sound can 6-7 tieng). Dung mem o day
+  // = profile treo vinh vien qua dem, ma nguoi dung treo may nen khong ai thay.
+  ok(/stopProfileById\(profileId,\s*\{\s*force:\s*true\s*\}\)/.test(light),
+    'duong nhe phai ep force:true — dung mem se KHONG BAO GIO xong khi trang dem bi chan');
   ok(!/vpnCycle|profilesStopAll|startProfilesStaggered|vpnIpv6Risk/.test(light),
     'TUYET DOI khong dung vao VPN, khong dung profile khac');
   ok(!/_vpnRunLock|_vpnCooldownUntil/.test(light),
@@ -500,6 +520,48 @@ function ok(cond, label, detail) {
   ok(!/_vpnAutoCycle/.test(fn('startVpnWatcher')) && !/_vpnAutoCycle/.test(watch),
     'bo canh chay BAT KE cong tac "Tu doi IP" — nguoi dung chot: "ke ca app tu dong hay la toi '
     + 'thi deu phai khoa 59 giay"');
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // 10. NUT "■ Dung" = DUNG MEM (check not hang doi roi moi dung han)
+  // Nguoi dung chot 2026-08-13: "quet duoc 300 check dang o 260, an dung la no dung luon —
+  // dung ra phai doi check xong 40 link nua". So sound MAT khi dung cung = Quet - Da check.
+  // ══════════════════════════════════════════════════════════════════════════════
+  console.log('\n=== 10. Nut "■ Dung" phai CHECK NOT hang doi roi moi dung han ===');
+  const stopFn = fn('stopProfileById');
+
+  ok(/api\.profileSoftStop\(id\)/.test(stopFn),
+    '10.1 duong MAC DINH goi profileSoftStop (check not), khong phai profileStop');
+
+  ok(/async function stopProfileById\(id,\s*opts\s*=\s*\{\}\)/.test(stopFn),
+    '10.2 nhan opts.force de duong TU DONG con ep dung cung duoc');
+
+  // Duong thoat BAT BUOC: khong co no thi 2 ca ket that — VPN tut (moi giay la mot giay dung
+  // IP THAT) va trang dem bi chan (hang doi khong bao gio tieu, QD-35: 20 sound = 6-7 tieng).
+  ok(/!opts\.force\s*&&\s*!_draining\.has\(id\)/.test(stopFn),
+    '10.3 bam lan HAI (dang check not) = CAT NGAY — duong thoat cho VPN tut / trang dem bi chan');
+
+  ok(/api\.profileStop\(id\)/.test(stopFn),
+    '10.4 van con duong dung CUNG that su (khong phai chi doi ten)');
+
+  // Huy hen tu-bat-lai phai nam TRUOC moi `return`, ke ca return cua nhanh dung mem moi —
+  // nguoi dung bam Dung = ho tiep quan, app khong duoc tu bat lai (QD-32).
+  const softIdx = stopFn.indexOf('profileSoftStop');
+  ok(stopFn.indexOf('cancelStarveRestart') < softIdx && stopFn.indexOf('cancelGroupRetry') < softIdx,
+    '10.5 huy hen tu-bat-lai TRUOC nhanh dung mem — khong thi app tu bat lai profile vua tat');
+
+  // Nhan nut phai doi, neu khong nguoi dung tuong nut hong (bam Dung ma profile van chay).
+  const rowFn = fn('setRowRunning');
+  ok(/_draining\.has\(id\)/.test(rowFn) && /Dừng ngay/.test(rowFn),
+    '10.6 nhan nut doi thanh "⏹ Dừng ngay" khi dang check not');
+  ok(/if\s*\(!running\)\s*_draining\.delete\(id\)/.test(rowFn),
+    '10.7 dung han thi quen trang thai draining — khong thi lan chay sau nut hien sai nhan');
+
+  // Nut toolbar "cat ngay" phai HOI TRUOC vi day la hanh dong MAT DU LIEU khong hoan tac
+  // duoc (cung nguyen tac voi 🧹 Don trung, QD-20).
+  const forceFn = fn('forceStopSelected');
+  ok(/force:\s*true/.test(forceFn), '10.8 nut "⏹ Dung ngay o da chon" ep force');
+  ok(/confirm\(/.test(forceFn) && /profileScanned/.test(forceFn) && /profileChecked/.test(forceFn),
+    '10.9 hoi xac nhan va noi RO so sound se mat (Quet - Da check), khong noi chung chung');
 
   console.log(`\n${failed ? '❌' : '✅'} ${failed} khang dinh TRUOT`);
   console.log('\nDONE');

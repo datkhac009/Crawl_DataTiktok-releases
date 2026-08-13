@@ -7,6 +7,11 @@ const $ = (id) => document.getElementById(id);
 let profilesCache = [];
 let profileSettings = {};            // id -> { mode, keyword, headless, originalOnly, minVideos, delayMin, delayMax }
 const runningSet = new Set();        // id đang chạy
+// id đang DỪNG MỀM (đã ngừng quét, còn check nốt hàng đợi). `setRowRunning` đọc biến này để
+// chọn nhãn nút "■ Dừng" hay "⏹ Dừng ngay", mà nó được gọi RẤT SỚM lúc dựng bảng → khai báo
+// phải nằm ở ĐẦU FILE, không được để cạnh `stopProfileById`: `const` nằm dưới sẽ vướng vùng
+// chết (TDZ) → ReferenceError → chết cả giao diện. Đúng bẫy QĐ-21 với `_runningSelectedBatch`.
+const _draining = new Set();
 const profileScanned = {};           // id -> số sound quét được (feed, trước khi check)
 const profileChecked = {};           // id -> số sound đã đi qua bước check số video (kể cả '?')
 const profileValid = {};             // id -> số sound đạt bộ lọc video, đã đẩy vào bảng kết quả
@@ -172,9 +177,12 @@ function getCheckedIds() {
 
 function setRowRunning(id, running) {
   if (running) runningSet.add(id); else runningSet.delete(id);
+  if (!running) _draining.delete(id);   // dừng hẳn rồi thì quên trạng thái "đang check nốt"
   const btn = document.querySelector(`#profileTableBody button[data-act="run"][data-id="${CSS.escape(id)}"]`);
   if (btn) {
-    btn.textContent = running ? '■ Dừng' : '▶ Chạy';
+    // Đang check nốt hàng đợi → nhãn phải nói rõ bấm thêm là CẮT NGAY, nếu không người dùng
+    // tưởng nút hỏng (bấm Dừng mà profile vẫn chạy) rồi bấm loạn.
+    btn.textContent = running ? (_draining.has(id) ? '⏹ Dừng ngay' : '■ Dừng') : '▶ Chạy';
     btn.classList.toggle('btn-primary', !running);
     // ⚠ PHẢI MỞ KHOÁ khi chuyển sang "■ Dừng" (sửa 2026-08-13).
     // Bất biến của app là *"nút Dừng luôn bấm được"* — nhưng trước đây nó chỉ được thi hành ở
@@ -474,7 +482,21 @@ async function startProfileById(id) {
   updateRowStatus(id, 'running', 'Đang khởi động...');
 }
 
-async function stopProfileById(id) {
+// Bấm "■ Dừng" = DỪNG MỀM: ngừng quét ngay nhưng CHECK NỐT hàng đợi rồi mới dừng hẳn.
+// Người dùng chốt 2026-08-13: *"quét được 300 check đang ở 260, ấn dừng là nó dừng luôn — đúng
+// ra phải đợi check xong 40 link nữa"*. Số sound mất khi dừng cứng = cột Quét − cột Đã check
+// (USER_GUIDE), với hàng đợi 20/profile × 6 profile là mất tới ~120 sound mỗi lần dừng.
+//
+// ⚠ ĐƯỜNG THOÁT BẮT BUỘC — bấm lần thứ HAI thì cắt ngay. Không có nó thì có 2 ca kẹt thật:
+//   1. VPN tụt lúc 3h sáng → phải dừng NGAY vì mọi request đang đi bằng IP thật (QĐ-32).
+//   2. TikTok chặn trang đếm → hàng đợi gần như không tiêu được: QĐ-35 đo thật **20 sound cần
+//      6–7 tiếng**. Dừng mềm lúc đó = profile không bao giờ dừng.
+// Backend đã sẵn sàng cho việc này: `countLoop` chạy `while (!stop.requested)` nên dừng cứng
+// giữa lúc đang check nốt vẫn cắt tức thì, và `softStopProfile` tự bỏ qua nếu đã dừng cứng rồi.
+//
+// `opts.force = true` cho các đường TỰ ĐỘNG (feed cạn / chặn trang đếm) — chúng phải dừng dứt
+// điểm để còn hẹn bật lại, mà ca "chặn trang đếm" thì drain vốn không bao giờ xong.
+async function stopProfileById(id, opts = {}) {
   // NGƯỜI DÙNG bấm Dừng = họ tiếp quản → huỷ hẹn tự-bật-lại-sau-khi-bị-cắt-feed, kể cả khi profile
   // đang trong lúc đếm ngược (lúc đó nó KHÔNG nằm trong runningSet nên phải xoá TRƯỚC dòng return
   // bên dưới, không thì bấm Dừng lúc đang chờ sẽ không huỷ được gì).
@@ -485,7 +507,26 @@ async function stopProfileById(id) {
   cancelGroupRetry('người dùng bấm Dừng');
   if (_vpnCycling) _vpnCancelRestart = true;
   _vpnDownGroup = [];
-  if (!runningSet.has(id)) return;
+  if (!runningSet.has(id)) { _draining.delete(id); return; }
+
+  // Lần bấm ĐẦU = mềm. Lần bấm THỨ HAI (đang check nốt) = người dùng muốn cắt ngay.
+  if (!opts.force && !_draining.has(id)) {
+    _draining.add(id);
+    setRowRunning(id, true);            // vẽ lại nhãn nút → "⏹ Dừng ngay"
+    updateRowStatus(id, 'running', 'Dừng mềm: check nốt hàng đợi rồi dừng...');
+    appendLog(id, 'Dừng mềm: ngừng quét NGAY, check nốt sound còn trong hàng đợi rồi mới dừng hẳn.'
+      + ' Bấm "⏹ Dừng ngay" nếu muốn cắt luôn (sẽ mất số sound chưa check).');
+    const soft = await api.profileSoftStop(id);
+    if (soft && soft.ok === false) {    // backend bảo không chạy → đồng bộ lại UI như đường cứng
+      _draining.delete(id);
+      setRowRunning(id, false);
+      updateRowStatus(id, 'stopped', 'Chờ');
+      appendLog(id, 'Profile không chạy — đã đồng bộ lại trạng thái giao diện.');
+    }
+    return;
+  }
+
+  _draining.delete(id);
   appendLog(id, 'Đang dừng...');
   // Đặt badge TRƯỚC await: backend phát 'stopped' gần như tức thì, nếu đặt sau await thì
   // dòng này GHI ĐÈ mất thông báo "Đã dừng." vừa nhận được → badge kẹt ở "Đang dừng..."
@@ -881,7 +922,11 @@ async function stopAndScheduleRestart(profileId, why) {
   toast(`"${nameOf(profileId)}" ${why} — tự bật lại sau ${waitTxt}.`, 'err');
 
   try {
-    await stopProfileById(profileId);
+    // ⚠ BẮT BUỘC `force` — đây là đường TỰ ĐỘNG, không phải người dùng bấm:
+    //  · "chặn trang đếm": chính bước đếm đang hỏng nên drain KHÔNG BAO GIỜ xong (QĐ-35: 20
+    //    sound cần 6–7 tiếng) → dừng mềm ở đây là profile treo vĩnh viễn, mất trọn đêm.
+    //  · "feed cạn": phải dừng dứt điểm rồi mới hẹn bật lại; drain kéo dài làm lệch hẹn.
+    await stopProfileById(profileId, { force: true });
   } catch (e) {
     appendLog(profileId, '⚠ Lỗi khi dừng profile: ' + e.message);
   }
@@ -1084,7 +1129,16 @@ async function stopSelected() {
   if (!ids.length) return toast('Tick chọn profile cần dừng.', 'err');
   // Việc HUỶ tự-chạy-lại-sau-đổi-IP nằm trong stopProfileById (một chỗ duy nhất, che cả nút
   // "■ Dừng" trên từng hàng).
-  for (const id of ids) if (runningSet.has(id)) await stopProfileById(id);
+  const live = ids.filter((id) => runningSet.has(id));
+  for (const id of live) await stopProfileById(id);
+  // Nói rõ app đang CHỜ CÓ CHỦ Ý, không phải nút hỏng. Vòng chờ im lặng luôn bị báo là "app
+  // treo" (QĐ-21) — mà ở đây profile còn chạy tiếp vài phút sau khi bấm Dừng nên càng dễ hiểu lầm.
+  const pending = live.filter((id) => _draining.has(id));
+  if (pending.length) {
+    const left = pending.reduce((s, id) => s + Math.max(0, (profileScanned[id] || 0) - (profileChecked[id] || 0)), 0);
+    toast(`Đang check nốt ${left} sound của ${pending.length} profile rồi mới dừng hẳn.`
+      + ` Cần cắt luôn thì bấm "⏹ Dừng ngay ô đã chọn".`, 'ok');
+  }
 }
 
 // Kiểm tra phiên đăng nhập THẬT: mở TikTok hỏi thẳng từng profile (không đếm cookie trong
@@ -1117,18 +1171,20 @@ async function verifyLogins() {
   }
 }
 
-// Dừng mềm: ngừng quét ngay, check nốt hàng đợi sound rồi mới dừng hẳn (không mất sound).
-async function softStopSelected() {
-  const ids = getCheckedIds();
-  if (!ids.length) return toast('Tick chọn profile cần dừng mềm.', 'err');
-  let n = 0;
-  for (const id of ids) {
-    if (!runningSet.has(id)) continue;
-    await api.profileSoftStop(id);
-    appendLog(id, 'Dừng mềm: ngừng quét, chờ check nốt hàng đợi...');
-    n++;
-  }
-  if (n) toast(`Đã dừng mềm ${n} profile — sẽ tự dừng hẳn sau khi check nốt hàng đợi.`, 'ok');
+// CẮT NGAY: vứt hàng đợi, dừng tức thì. Từ 2026-08-13 nút "■ Dừng" mặc định là dừng MỀM, nên
+// đây là đường thoát tường minh cho ca cần gấp — nhất là VPN tụt, lúc đó mỗi giây profile còn
+// chạy là một giây gửi request bằng IP THẬT (QĐ-32), không thể ngồi chờ check nốt hàng đợi.
+async function forceStopSelected() {
+  const ids = getCheckedIds().filter((id) => runningSet.has(id));
+  if (!ids.length) return toast('Tick chọn profile cần dừng.', 'err');
+  const lost = ids.reduce((s, id) => s + Math.max(0, (profileScanned[id] || 0) - (profileChecked[id] || 0)), 0);
+  // Đây là hành động MẤT DỮ LIỆU không hoàn tác được → phải xác nhận, cùng nguyên tắc với
+  // 🧹 Dọn trùng (QĐ-20). Nói thẳng số sound sẽ mất chứ không nói chung chung.
+  if (lost > 0 && !confirm(`Cắt ngay ${ids.length} profile?\n\n`
+    + `⚠ ${lost} sound đã quét mà CHƯA check số video sẽ bị BỎ HẲN.\n\n`
+    + `Muốn giữ thì bấm Huỷ rồi dùng "■ Dừng ô đã chọn" (check nốt rồi mới dừng).`)) return;
+  for (const id of ids) await stopProfileById(id, { force: true });
+  toast(`Đã cắt ngay ${ids.length} profile${lost > 0 ? ` — bỏ ${lost} sound chưa check.` : '.'}`, 'ok');
 }
 
 // ══════════════════════════════════════════
@@ -2045,7 +2101,7 @@ async function init() {
 
   $('runSelectedBtn').addEventListener('click', runSelected);
   $('stopSelectedBtn').addEventListener('click', stopSelected);
-  $('softStopSelectedBtn').addEventListener('click', softStopSelected);
+  $('softStopSelectedBtn').addEventListener('click', forceStopSelected);
   $('verifyLoginsBtn').addEventListener('click', verifyLogins);
   $('settingsSelectedBtn').addEventListener('click', () => openSettingsModal(getCheckedIds()));
 
