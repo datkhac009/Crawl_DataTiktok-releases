@@ -37,6 +37,15 @@ service-account*.json
 # ══════════════════════════════════════════════════════════════════
 Crawl_DataTiktok_Release/
 
+# App VoiceOrMusic — sống ở REPO RIÊNG: github.com/datkhac009/VoiceOrMusic_Release
+#   • VoiceOrMusic_Release/ là KẾT QUẢ ĐÓNG GÓI (.exe + win-unpacked: dll, locales, pak…).
+#     Hơn 70 file tự sinh, build lại là có — chúng làm ngập Source Control mà chẳng để làm gì.
+#     File .exe đi theo Releases trên GitHub chứ không nằm trong mã nguồn.
+#   • VoiceOrMusic_build/ đã có .git RIÊNG với remote riêng. Để repo này nhìn thấy thì git sẽ
+#     đòi biến nó thành submodule — sai hẳn ý. Bỏ qua ở đây, quản lý bên repo của nó.
+VoiceOrMusic_Release/
+VoiceOrMusic_build/
+
 # ══════════════════════════════════════════════════════════════════
 #  Nặng / tự sinh lại được
 # ══════════════════════════════════════════════════════════════════
