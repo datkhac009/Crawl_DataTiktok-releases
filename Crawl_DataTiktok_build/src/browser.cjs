@@ -199,13 +199,28 @@ function _hasTikTokLogin(state) {
 // Nguyên nhân mất: app tự lưu đè file session mỗi 20s bằng cookie hiện có; chỉ cần MỘT lần
 // lưu vào đúng lúc trình duyệt đang thiếu cookie là bản tốt mất VĨNH VIỄN, và vì lần sau
 // khởi động bằng bản khuyết nên không bao giờ tự hồi phục.
-const _AUTH_COOKIES = [
+// ⚠ TÁCH LÀM 2 NHÓM (sửa 2026-08-17) — trước đây gộp làm một và nó đã CHẶN ĐỨNG việc lưu
+// session suốt nhiều ngày. Đo trên máy thật: MỘT phiên chạy ghi 10.111 dòng "BỎ QUA lưu
+// session", trong đó 10.098 dòng cùng một lý do duy nhất là thiếu `s_v_web_id`. Hậu quả:
+// 3/6 profile có `session.state.json` đứng im 5–7 NGÀY — cookie mới của TikTok không hề
+// được ghi xuống đĩa, nên mỗi lần khởi động lại app đều nạp phiên cũ cả tuần → đúng con
+// đường dẫn tới chế độ KHÁCH mà QĐ-04 sinh ra để chặn.
+//
+// Gốc rễ: chỉ cần MỘT cookie trong danh sách bị thiếu là chặn TOÀN BỘ lượt lưu. Mà
+// `s_v_web_id` KHÔNG phải cookie xác thực, cũng KHÔNG phải cookie định tuyến — nó là ID
+// xác minh thiết bị do script verify của TikTok đặt, và Chromium ở đây không bao giờ sinh
+// lại nó. Bằng chứng nó không cần thiết: 3 profile đó vẫn cào tốt suốt 7 ngày mà không có.
+const _CRITICAL_COOKIES = [
   'sessionid', 'sessionid_ss', 'sid_guard', 'sid_tt', 'uid_tt', 'uid_tt_ss',
   'sid_ucp_v1', 'ssid_ucp_v1', 'multi_sids', 'cmpl_token', 'tt_session_tlb_tag',
   'tt-target-idc', 'tt-target-idc-sign', 'store-idc',
   'store-country-code', 'store-country-code-src', 'store-country-sign',
-  'passport_fe_beating_status', 's_v_web_id',
 ];
+// Cookie PHỤ: thiếu thì KHÔNG chặn lưu, nhưng được MANG THEO từ file cũ (xem `_saveSession`)
+// nên vẫn không mất gì. Đây mới đúng tinh thần QĐ-04: mục đích là "không đánh mất cookie",
+// mà chặn cả lượt lưu thì chính những cookie MỚI cũng không bao giờ được ghi — cũng là mất.
+const _CARRY_COOKIES = ['passport_fe_beating_status', 's_v_web_id'];
+const _AUTH_COOKIES = [..._CRITICAL_COOKIES, ..._CARRY_COOKIES];
 
 // ════════ CHỐNG CHẠY TRÙNG PROFILE (2026-07-27) ════════
 // Chạy CÙNG một profile ở 2 nơi cùng lúc là nguyên nhân số 1 khiến TikTok hủy phiên đăng
@@ -291,9 +306,28 @@ function _sessionRegression(prev, newCookies) {
   const oldSid = oldM.get('sessionid'), newSid = newM.get('sessionid');
   if (newSid && oldSid && newSid !== oldSid) return null;   // đăng nhập MỚI → cho lưu
   if (oldSid && !newSid) return 'phiên mới MẤT cookie đăng nhập (sessionid)';
-  const lost = _AUTH_COOKIES.filter(n => oldM.has(n) && !newM.has(n));
+  // CHỈ xét nhóm CỐT LÕI. Nhóm `_CARRY_COOKIES` không được chặn ở đây — chúng được mang
+  // theo trong `_saveSession` nên không mất, mà cũng không làm hỏng cả lượt lưu.
+  const lost = _CRITICAL_COOKIES.filter(n => oldM.has(n) && !newM.has(n));
   if (lost.length) return `phiên mới thiếu ${lost.length} cookie xác thực/định tuyến (${lost.slice(0, 4).join(', ')}${lost.length > 4 ? '…' : ''})`;
   return null;
+}
+
+// Bộ cookie sẽ GHI XUỐNG ĐĨA = cookie MỚI + cookie phụ MANG THEO từ file cũ (chỉ khi bộ mới
+// không có, và chưa hết hạn). Tách thành hàm riêng vì đây là phần dễ sai nhất của việc lưu:
+// mang theo nhầm = phiên cũ sống dậy; không mang theo = mất đúng thứ QĐ-04 muốn giữ.
+function _mergeCarryCookies(prevCookies, newCookies) {
+  const out = (newCookies || []).slice();
+  if (!prevCookies || !prevCookies.length) return out;
+  const newM = _tiktokCookieMap(newCookies);
+  const nowSec = Date.now() / 1000;
+  for (const c of prevCookies) {
+    if (!c || !String(c.domain || '').includes('tiktok')) continue;
+    if (!_CARRY_COOKIES.includes(c.name) || newM.has(c.name)) continue;
+    if (typeof c.expires === 'number' && c.expires > 0 && c.expires < nowSec) continue;
+    out.push(c);
+  }
+  return out;
 }
 
 function _setSessionInfo(profilePath, source, error, state) {
@@ -453,8 +487,9 @@ async function _saveSession(profilePath, ctx) {
       console.warn(`[browser] BỎ QUA lưu session ${path.basename(profilePath)} — ${why}. Giữ nguyên file cũ.`);
       return;
     }
+    const merged = _mergeCarryCookies(prev && prev.cookies, cookies);
     const origins = (prev && prev.origins) || [];
-    _writeStateAtomic(file, JSON.stringify({ cookies, origins }));
+    _writeStateAtomic(file, JSON.stringify({ cookies: merged, origins }));
   } catch (_) { /* context có thể đã đóng — bỏ qua */ }
 }
 

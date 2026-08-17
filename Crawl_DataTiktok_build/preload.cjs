@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('api', {
   verifyLogins: (profileIds) => ipcRenderer.invoke('verify-logins', profileIds),
   profilesStopAll: () => ipcRenderer.invoke('profiles-stop-all'),
   crawlRunningIds: () => ipcRenderer.invoke('crawl-running-ids'),
+  resumeTake: () => ipcRenderer.invoke('resume-take'),
   onCrawlData: (cb) => ipcRenderer.on('crawl-data', (_e, d) => cb(d)),
   onCrawlStatus: (cb) => ipcRenderer.on('crawl-status', (_e, d) => cb(d)),
 

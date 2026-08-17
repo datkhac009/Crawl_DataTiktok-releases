@@ -2519,3 +2519,134 @@ gom lại chứ không mất số, khoá đánh dấu sống sót qua vòng ghi 
 | Đổi khoá định danh của cấu trúc **đã ghi xuống đĩa** mà không di trú | Dữ liệu cũ không khớp → cộng trùng toàn bộ. Phải mô phỏng code mới trên **đúng file thật** trước khi phát hành |
 | Kiểm ràng buộc "không được require X" trên **nguyên văn** mã nguồn | Chính phần ghi chú giải thích ràng buộc có nhắc tên X → khẳng định trượt oan. Phải **bỏ comment** trước khi đo (đã bị lừa một lần) |
 | Cho `history.cjs` tự đọc electron-store | Phá QĐ-23 (file đó chỉ được require `fs`/`path`/`paths.cjs`). Nhận **object thuần**, để `main.js` đọc store |
+
+---
+
+## QĐ-39 — Treo máy qua đêm: chặn TRƯỚC trần bộ nhớ, và gỡ chốt lưu session đang chặn nhầm 100% (2026-08-17)
+
+**Người dùng chốt phạm vi:** *"miễn là tôi ổn định để cào link"* — mọi thứ dưới đây phục vụ đúng
+một mục tiêu: treo máy qua đêm mà không có gì xảy ra, **kể cả bị hạ xuống chế độ khách**.
+
+Hai lỗi khác nhau, cùng lộ ra từ một lần truy. Cả hai đều thuộc loại **hỏng trong im lặng**.
+
+### Lỗi 1 — chốt lưu session chặn nhầm 100% lượt lưu, phiên đứng im 7 NGÀY
+
+**Đo trên máy thật:** MỘT phiên chạy ghi **10.111** dòng `BỎ QUA lưu session`, trong đó
+**10.098** dòng cùng **một** lý do duy nhất: thiếu `s_v_web_id`. Hậu quả ở ngày sửa file:
+
+| Profile | `session.state.json` ghi lần cuối | Đứng im |
+|---|---|---|
+| `profile-A` | 10/08 09:06 | **7 ngày** |
+| `profile-B` | 10/08 18:20 | **7 ngày** |
+| `profile-C` | 12/08 19:10 | **5 ngày** |
+
+**Gốc rễ:** `_sessionRegression()` chặn lưu nếu **bất kỳ** cookie nào trong danh sách 19 cái bị
+thiếu. Mà `s_v_web_id` **không phải** cookie xác thực, **cũng không phải** cookie định tuyến —
+nó là ID xác minh thiết bị do script verify của TikTok đặt, và Chromium ở đây không sinh lại nó.
+Chỉ một cái thiếu là **chặn toàn bộ**, vĩnh viễn.
+
+**Nghịch lý cần thấy rõ:** QĐ-04 sinh ra để *"không đánh mất cookie"* — nhưng chặn cả lượt lưu thì
+**chính những cookie MỚI cũng không bao giờ được ghi**. Đó cũng là mất, mà mất im lặng hơn.
+
+**Sửa — tách 2 nhóm, và MANG THEO thay vì chặn:**
+
+| Nhóm | Thiếu thì sao |
+|---|---|
+| `_CRITICAL_COOKIES` (xác thực + định tuyến) | **Chặn lưu** — nguyên văn QĐ-04, không đổi một chữ |
+| `_CARRY_COOKIES` (`s_v_web_id`, `passport_fe_beating_status`) | **Không chặn**; được **mang theo** từ file cũ trong `_mergeCarryCookies()` nên vẫn không mất gì |
+
+Mang theo có giới hạn: chỉ đúng 2 cookie đó, chỉ domain tiktok, **bỏ cookie đã hết hạn**, và
+**không bao giờ** đè lên cookie mới.
+
+**Bằng chứng `s_v_web_id` không cần thiết:** 3 profile trên vẫn cào tốt suốt 7 ngày mà không có nó.
+
+### Lỗi 2 — app tự tắt khi treo máy lâu: rò rỉ ~500 MB/giờ đụng trần 4 GB
+
+**4 lần trong 9 ngày** (08/08, 12/08, 14/08, 17/08), Event Log đều ghi **cùng một dấu vân tay**:
+module `CoreMessaging.dll`, mã `c0000602` = `STATUS_FAIL_FAST_EXCEPTION`, offset `0x72e16`.
+`fail-fast` nghĩa là tiến trình **TỰ kết liễu**, không phải bị Windows giết.
+
+Đường cong từ chính hộp đen của app, phiên kết thúc đúng lúc sập:
+
+```
+00:53  heap  235/ 256 MB   RSS  377 MB     (vừa khởi động, sạch)
+04:23  heap 2245/3235 MB   RSS 3907 MB
+07:03  heap 3216/4072 MB   RSS 5070 MB     <- sát trần
+07:04:31  dòng log cuối cùng
+07:04:43  Event Log ghi sập                 <- 12 giây sau
+```
+
+Mỗi lần file log kết thúc **đúng phút** Event Log ghi sập. `chrome-headless-shell.exe — Unknown
+Hard Error` mà người dùng thấy là **hệ quả**: tiến trình chính chiếm 5 GB, tiến trình Chromium con
+xin bộ nhớ không được và chết, Windows không đủ tài nguyên dựng nổi hộp báo lỗi tử tế.
+
+**⛔ ĐÃ ĐO — KHÔNG nâng được trần, đừng thử lại.** Cả 4 cách đều trả về **4096 MB**:
+
+| Cách | Kết quả |
+|---|---|
+| `app.commandLine.appendSwitch('js-flags', '--max-old-space-size=8192')` | 4096 |
+| `v8.setFlagsFromString('--max-old-space-size=8192')` | 4096 |
+| `electron.exe --js-flags=...` (cờ **có** tới nơi, thấy trong `argv`) | 4096 |
+| `NODE_OPTIONS=--max-old-space-size=8192` | 4096 |
+
+Tiến trình main của Electron bị khoá cứng ở 4 GB. Tôi đã **hứa nhầm** với người dùng rằng đây là
+"1 dòng code" trước khi đo — phải đính chính. Bài học: cờ cấu hình là thứ **dễ sửa mà im lặng vô
+tác dụng** nhất; phải đo `heap_size_limit` thật chứ đừng tin cờ đã được chấp nhận.
+
+**Sửa — chặn TRƯỚC khi tới đó** (`_checkHeapCeiling` móc vào nhịp hộp đen 5 phút sẵn có):
+
+vượt **72%** trần → ghi danh sách profile đang chạy → **dừng MỀM** (check nốt hàng đợi, QĐ-11) →
+chờ xả tối đa **5 phút** → xả Sheet + lịch sử → `relaunch()` → renderer đọc dấu và **tự cào lại
+lần lượt** (QĐ-21). Ngưỡng 72% ≈ 2950 MB, còn ~2 giờ dư ở tốc độ rò rỉ hiện tại.
+
+| Chốt | Vì sao |
+|---|---|
+| Ghi danh sách profile **TRƯỚC** khi dừng | Dừng xong thì `runningIds()` đã rỗng → mất sạch, không cào lại được gì |
+| Dừng **MỀM** chứ không cứng | Không vứt sound đã quét mà chưa đếm (QĐ-11) |
+| Chờ xả **có trần** 5 phút | Một profile kẹt không được phép giữ app tới lúc OOM thật — đúng cái đang tránh |
+| Xả Sheet + lịch sử **trước** `relaunch()` | Ngược lại là mất lô đang chờ |
+| `relaunch()` **trước** `exit(0)` | Ngược lại thì app tắt hẳn, treo máy thành mất trọn đêm |
+| Cờ `_restartingForHeap` | Nhịp 5 phút gọi lại → khởi động lại chồng nhau |
+| `resume-take` **xoá dấu ngay** trong cùng lời gọi | Nạp lại giao diện (F5) sẽ đọc lần nữa → bật profile **2 lần** |
+| Dấu quá **15 phút** thì bỏ | Mất điện qua đêm rồi mở lại không được tự cào |
+| Trần đọc **động** (`heap_size_limit`) | Cắm cứng 4096 là sai trên máy/bản Electron khác |
+
+⚠️ **Đây là LƯỚI AN TOÀN, không phải bản sửa gốc.** Rò rỉ ~500 MB/giờ vẫn còn nguyên.
+
+**Và phải đính chính QĐ-36:** nó kết luận nghi phạm số một là *"18 lần đọc trọn Sheet 201k dòng"*,
+kèm phép thử *"nếu rò rỉ tụt theo thì đó là bằng chứng; nếu không tụt thì phải truy tiếp."*
+Bản v0.1.72 **đã sửa** việc đọc Sheet mà rò rỉ **không hề tụt** — còn tăng từ 344 lên ~500 MB/giờ.
+**Chẩn đoán đó SAI, đã bỏ.** Nghi phạm mới: `target.route('**/*')` trong `resource-blocker.cjs`
+đẩy **mọi** request của TikTok qua Node, trên trang feed sống suốt phiên. **Chưa chứng minh** —
+cần heap snapshot, và tôi vừa đính chính một chẩn đoán "nghe rất hợp lý" nên không lặp lại lỗi đó.
+
+### Kiểm chứng
+
+`test/session-save-guard.test.js` (**29 khẳng định**) + `test/heap-guard.test.js` (**29 khẳng
+định**). Cả hai **trích mã nguồn thật** từ `browser.cjs`/`main.js` rồi chạy với đồ giả — không chép
+logic sang test (QĐ-10). `heap-guard` dùng **đồng hồ ảo** (`setTimeout` giả đẩy `Date.now`) nên
+kiểm được trần chờ 5 phút mà test chạy tức thì.
+
+Đã kiểm test có "cắn" (đột biến rồi hoàn nguyên):
+
+| Đột biến | Kết quả |
+|---|---|
+| Quay về luật cũ (`_AUTH_COOKIES` chặn lưu) | **2 trượt** — hiện đúng câu `thiếu 1 cookie ... (s_v_web_id)` |
+| Bỏ hàng mang theo (ghi bộ thô) | 1 trượt |
+| Mang theo bừa bãi (bỏ lọc `_CARRY_COOKIES`) | 1 trượt |
+| Bỏ lời gọi `_checkHeapCeiling` khỏi nhịp hộp đen | 1 trượt |
+| Ghi danh sách **sau** khi dừng | 1 trượt |
+| Dừng cứng thay vì dừng mềm | **4 trượt** |
+| Bỏ cờ chống khởi động lại 2 lần | 1 trượt |
+
+Toàn bộ **26 file test đạt**.
+
+| KHÔNG nên làm lại | Vì sao |
+|---|---|
+| Cho MỘT phần tử trong danh sách kiểm phủ quyết cả thao tác | 1 cookie phụ thiếu → chặn **10.098** lượt lưu, phiên đứng im **7 ngày**, hỏng hoàn toàn trong im lặng. Tách "cốt lõi" khỏi "có thì tốt" |
+| Bảo vệ dữ liệu bằng cách **từ chối ghi** | Từ chối ghi cũng là mất — mất dữ liệu MỚI. Trộn (giữ cả cũ lẫn mới) đạt đúng mục đích mà không phải trả giá đó |
+| Tin một cờ cấu hình đã được chấp nhận là đã có tác dụng | `--js-flags` **có** vào `argv` mà `heap_size_limit` vẫn 4096. Phải đo **kết quả**, không đo việc "cờ đã được truyền". Tôi đã hứa "1 dòng là xong" trước khi đo và phải rút lại |
+| Cố nâng trần heap tiến trình main của Electron | Khoá cứng 4 GB, 4 cách đều không ăn. Đường đúng là **chặn trước khi tới đó** |
+| Ghi lại trạng thái cần khôi phục **sau** khi đã dọn dẹp | `runningIds()` đã rỗng → khôi phục ra danh sách trống, treo máy thành mất trọn đêm |
+| Để dấu "tự khôi phục" nằm lại sau khi đọc | Nạp lại giao diện đọc lần nữa → bật profile 2 lần. Đọc và **xoá trong cùng một lời gọi** |
+| Dùng tên biến renderer theo trí nhớ | `profiles`/`setStatusMsg` **không tồn tại** (thật ra là `profilesCache` và `$('crawlStatusMsg')`). `node --check` **không** bắt được — renderer lỗi là chết cả giao diện. Phải kiểm từng định danh |

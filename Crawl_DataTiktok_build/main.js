@@ -117,8 +117,85 @@ setInterval(() => {
     } catch (_) {}
     console.log(`[blackbox] Heap main ${mb(m.heapUsed)}/${mb(m.heapTotal)}MB, RSS ${mb(m.rss)}MB`
       + (procs ? ` | ${procs}` : ''));
+    _checkHeapCeiling(mb(m.heapTotal));
   } catch (_) {}
 }, 5 * 60 * 1000);
+
+// ════════ CHỐT AN TOÀN: TỰ KHỞI ĐỘNG LẠI TRƯỚC KHI ĐỤNG TRẦN BỘ NHỚ (2026-08-17) ════════
+// SỰ CỐ THẬT — app tự tắt lúc treo máy qua đêm, 4 lần trong 9 ngày (08/08, 12/08, 14/08,
+// 17/08). Event Log ghi mã `c0000602` = STATUS_FAIL_FAST_EXCEPTION: tiến trình TỰ KẾT LIỄU,
+// không phải bị Windows giết. Đường cong trong chính log này cho thấy vì sao:
+//
+//     00:53  heap  235/ 256 MB      (vừa khởi động, sạch)
+//     04:23  heap 2245/3235 MB
+//     07:03  heap 3216/4072 MB      ← sát trần
+//     07:04:43                       ← CHẾT
+//
+// Rò rỉ ~500 MB/giờ ở tiến trình main. Khi V8 hết bộ nhớ thì KHÔNG có đường xử lý êm: ngay
+// cả việc dựng câu báo lỗi cũng cần cấp phát, nên nó chết tức thì, không kịp lưu gì.
+//
+// ⚠ ĐÃ THỬ VÀ KHÔNG ĂN — đừng thử lại (đo trực tiếp, cả 4 cách đều giữ nguyên 4096 MB):
+//     app.commandLine.appendSwitch('js-flags', '--max-old-space-size=8192')   → 4096
+//     v8.setFlagsFromString('--max-old-space-size=8192')                      → 4096
+//     electron.exe --js-flags=--max-old-space-size=8192   (cờ CÓ tới nơi)     → 4096
+//     NODE_OPTIONS=--max-old-space-size=8192                                  → 4096
+// Tiến trình main của Electron bị khoá cứng ở 4 GB. Nâng trần KHÔNG phải là đường thoát.
+//
+// Nên: chặn TRƯỚC khi tới đó. Dừng MỀM (check nốt hàng đợi → không mất sound đã quét, QĐ-11)
+// → xả Sheet + lịch sử → khởi động lại → tự cào tiếp đúng nhóm profile vừa dừng.
+// Đây là LƯỚI AN TOÀN, không phải bản sửa gốc — rò rỉ vẫn còn đó, vẫn phải truy tiếp.
+const HEAP_RESTART_RATIO = 0.72;        // ~2950MB trên trần 4096MB → còn ~2 giờ dư
+const RESUME_KEY = 'resume_profiles';
+const RESUME_MAX_AGE_MS = 15 * 60 * 1000;
+const DRAIN_MAX_MS = 5 * 60 * 1000;
+let _restartingForHeap = false;
+
+function _heapLimitMB() {
+  try { return Math.round(require('v8').getHeapStatistics().heap_size_limit / 1048576); }
+  catch (_) { return 4096; }
+}
+
+function _checkHeapCeiling(heapTotalMB) {
+  if (_restartingForHeap) return;
+  const limit = _heapLimitMB();
+  if (!limit || heapTotalMB < limit * HEAP_RESTART_RATIO) return;
+  _restartingForHeap = true;
+  _gracefulRestart(heapTotalMB, limit).catch((e) => {
+    console.error('[heap-guard] Khởi động lại thất bại:', e && e.message);
+    _restartingForHeap = false;   // thất bại thì cho lần sau thử lại, đừng kẹt cờ vĩnh viễn
+  });
+}
+
+async function _gracefulRestart(heapTotalMB, limitMB) {
+  // Ghi danh sách profile đang chạy TRƯỚC khi dừng — dừng xong thì runningIds() rỗng.
+  let ids = [];
+  try { ids = crawler.runningIds() || []; } catch (_) {}
+  console.warn(`[heap-guard] Heap main ${heapTotalMB}/${limitMB}MB (${Math.round(heapTotalMB / limitMB * 100)}%) `
+    + `— sắp đụng trần. DỪNG MỀM ${ids.length} profile rồi KHỞI ĐỘNG LẠI để không bị chết đột ngột.`);
+  send('crawl-status', { profileId: null, status: 'info',
+    msg: `⚠ Bộ nhớ sắp đầy (${heapTotalMB}/${limitMB}MB) — app tự khởi động lại và cào tiếp. Không mất dữ liệu.` });
+
+  try { store.set(RESUME_KEY, { ids, at: Date.now() }); } catch (_) {}
+
+  // Dừng MỀM: quét ngừng ngay nhưng hàng đợi được check nốt (QĐ-11) — không mất sound đã quét.
+  for (const id of ids) { try { crawler.softStopProfile(id); } catch (_) {} }
+
+  // Chờ xả, nhưng CÓ TRẦN: một profile kẹt không được phép giữ app tới lúc OOM thật.
+  const until = Date.now() + DRAIN_MAX_MS;
+  while (Date.now() < until) {
+    let running = false;
+    try { running = crawler.isAnyRunning(); } catch (_) {}
+    if (!running) break;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  try { if (crawler.isAnyRunning()) { console.warn('[heap-guard] Hết 5 phút chờ xả — dừng cứng phần còn lại.'); await crawler.stopAll(); } } catch (_) {}
+
+  try { await sheets.flushAll(); } catch (_) {}
+  try { history.flush(); } catch (_) {}
+  console.warn('[heap-guard] Đã lưu xong. Khởi động lại ngay.');
+  app.relaunch();
+  app.exit(0);
+}
 
 let mainWindow = null;
 
@@ -488,6 +565,20 @@ ipcMain.handle('profiles-stop-all', async () => {
   return r;
 });
 ipcMain.handle('crawl-running-ids', () => crawler.runningIds());
+
+// Lấy + XOÁ NGAY dấu "vừa tự khởi động lại vì bộ nhớ" (xem `_gracefulRestart`). Xoá trong
+// CÙNG lời gọi, không đợi renderer báo đã chạy xong: nạp lại giao diện (F5 ở bản dev) hoặc
+// renderer chết rồi dựng lại sẽ đọc lần nữa → tự bật profile HAI lần.
+// Dấu quá 15 phút thì bỏ — máy tắt điện qua đêm rồi mở lại không được tự cào.
+ipcMain.handle('resume-take', () => {
+  try {
+    const v = store.get(RESUME_KEY);
+    store.delete(RESUME_KEY);
+    if (!v || !Array.isArray(v.ids) || !v.ids.length) return [];
+    if (!v.at || Date.now() - v.at > RESUME_MAX_AGE_MS) return [];
+    return v.ids;
+  } catch (_) { return []; }
+});
 
 // ── Đẩy bù thủ công: chỉ đẩy dòng CHƯA có trên Sheet (lọc trùng theo cột Link) ──
 ipcMain.handle('sheets-push-manual', async (_e, rows) => {

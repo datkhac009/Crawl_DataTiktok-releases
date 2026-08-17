@@ -2030,6 +2030,27 @@ async function init() {
     }
   } catch {}
 
+  // TỰ CÀO TIẾP SAU KHI APP TỰ KHỞI ĐỘNG LẠI VÌ BỘ NHỚ (2026-08-17).
+  // `_gracefulRestart` bên main dừng mềm cả nhóm rồi khởi động lại trước khi heap đụng trần
+  // 4GB. Không có đoạn này thì app mở lên rồi ĐỨNG IM — mà người dùng đang treo máy nên
+  // không ai bấm Chạy: mất trọn đêm sản lượng, đúng cái nó sinh ra để tránh.
+  // Bật LẦN LƯỢT qua `startProfilesStaggered` (QĐ-21), không bật ồ ạt.
+  try {
+    const resume = (await api.resumeTake()) || [];
+    if (resume.length) {
+      // Bỏ profile đã bị xoá trong lúc đó. Chỉ lọc khi đã nạp được danh sách — `profilesCache`
+      // rỗng nghĩa là chưa nạp xong, lọc lúc đó sẽ vứt sạch và không cào lại gì cả.
+      const alive = profilesCache.length
+        ? resume.filter((id) => profilesCache.some((p) => p.id === id))
+        : resume;
+      if (alive.length) {
+        $('crawlStatusMsg').textContent =
+          `♻ App vừa tự khởi động lại (bộ nhớ sắp đầy) — đang cào tiếp ${alive.length} profile...`;
+        await startProfilesStaggered(alive);
+      }
+    }
+  } catch {}
+
   // ── Bảng profile: event delegation ──
   $('profileTableBody').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-act]');
