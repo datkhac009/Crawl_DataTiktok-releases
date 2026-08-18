@@ -2650,3 +2650,116 @@ Toàn bộ **26 file test đạt**.
 | Ghi lại trạng thái cần khôi phục **sau** khi đã dọn dẹp | `runningIds()` đã rỗng → khôi phục ra danh sách trống, treo máy thành mất trọn đêm |
 | Để dấu "tự khôi phục" nằm lại sau khi đọc | Nạp lại giao diện đọc lần nữa → bật profile 2 lần. Đọc và **xoá trong cùng một lời gọi** |
 | Dùng tên biến renderer theo trí nhớ | `profiles`/`setStatusMsg` **không tồn tại** (thật ra là `profilesCache` và `$('crawlStatusMsg')`). `node --check` **không** bắt được — renderer lỗi là chết cả giao diện. Phải kiểm từng định danh |
+
+---
+
+## QĐ-40 — Trùng link liên máy: KHÔNG thể phòng ngừa dứt điểm, phải ĐO rồi tự dọn (2026-08-18)
+
+### Yêu cầu và vì sao không làm đúng nguyên văn được
+
+Người dùng: *"tôi đang dùng 2 app — của tôi và của Hung — nhiều khi tôi call về nhưng lúc đó data
+app của Hung lại đẩy lên thì bị trùng. Mong muốn: update liên tục để lọc trùng dứt điểm."*
+
+Ảnh Sheet họ gửi có 2 cặp trùng rõ ràng, cùng ID sound, khác profile:
+
+```
+dòng 88802  original-sound-7657500232700496848  13.800  …(KR1)
+dòng 88824  original-sound-7657500232700496848  13.800  …(MayKR2)
+```
+
+**Làm đúng nguyên văn ("đọc liên tục hơn") sẽ khiến tình hình TỆ HƠN.** Hai lý do đo được:
+
+1. **Không có phép giành quyền nguyên tử** (QĐ-09 đã ghi): 2 máy đọc-rồi-ghi lồng vào nhau trong
+   cùng dưới một giây thì cả hai đều thấy "chưa có" rồi cùng ghi. Đọc dày hơn co cửa hở lại nhưng
+   không bao giờ về 0.
+2. **Máy người dùng ĐÃ VƯỢT quota ghi.** Đo trên log: **437 + 607** lần
+   `Quota exceeded for quota metric 'Write requests'`. Google cho **60 request/phút mỗi Service
+   Account**, mà **5 máy dùng chung một cái** (QĐ-24 đã khuyến nghị tách, chưa làm). Thêm request
+   = vỡ quota nặng hơn = cầu dao ngắt 60s = dữ liệu ùn lại.
+
+### Đã XÁC MINH nguồn trùng bằng cách đọc code của app kia
+
+Tải `.exe` bản phát hành của Hung (v0.1.56, 71.657.479 byte — kiểm đủ kích thước), rút `app.asar`
+rồi đọc `src/sheets.cjs`:
+
+| | Bản này | Bản Hung v0.1.56 |
+|---|---|---|
+| Đọc định kỳ theo mốc dòng | ✅ (`startRow`) | ✅ (`fromRow`) |
+| **Đọc lại NGAY TRƯỚC khi ghi** | ✅ `await refreshKnownLinks()` trong `flush` | ❌ **không có** |
+| Cửa hở sinh trùng | **~1 request** | **cả một chu kỳ đọc lại** |
+
+`_flushState()` của Hung lọc bằng `_knownLinks` **trong bộ nhớ** rồi `appendRows` ngay.
+
+⚠️ **Phép thử ĐẦU của tôi SAI phương pháp:** tôi grep tên hàm **của mình** (`refreshKnownLinks`,
+`startRow`) trong code người khác → ra 0 → gần như kết luận "Hung không có đồng bộ định kỳ nào".
+Sai: Hung đặt tên khác (`fromRow`). **Phải đọc thân hàm, không so tên.**
+
+### Quyết định — phát hiện RỘNG, hành động HẸP, mặc định KHÔNG XOÁ
+
+Người dùng chốt: chỉ xoá dòng **của chính app này**, và chạy **chế độ thử** trước.
+
+- **Phát hiện rộng:** ghi log **mọi** dòng trùng thấy được — cả của mình lẫn nguồn khác → có
+  **số thật** để quyết, thay vì tôi đoán tỉ lệ.
+- **Hành động hẹp:** chỉ định xoá dòng của chính app này, và chỉ khi dòng mình là dòng **SAU**.
+- **Mặc định `_dupMode = 'log'`** — không xoá gì. Vì sao: Sheet này **nhiều người cùng sửa** (đã
+  có người đặt **bảo vệ ô** làm app không ghi được từ 14/08, và đổi cột "Tình trạng"), mà xoá dòng
+  là **không hoàn tác**. Bật bằng `setDupMode('on')` sau khi xem log vài ngày.
+
+⚠️ **Hệ quả đã biết và phải nói thẳng:** vì cửa hở của bản này nhỏ hơn nhiều, **dòng trùng phần
+lớn do app Hung ghi sau** — nên phần "xoá dòng của mình" sẽ **rất ít khi có gì để xoá**. Đó chính
+là lý do phải đo trước: log sẽ cho biết tỉ lệ `mine` / `others` thật, rồi mới quyết có cần quét
+toàn bảng (đắt, và **chỉ được bật trên đúng 1 máy**) hay không.
+
+### Sửa kèm — một bug LATENT về mốc dòng, nghiêm trọng hơn tính năng chính
+
+Code cũ sau khi ghi: `_nextRow += pending.length` — đó là **SUY ĐOÁN** "dòng mình ghi nằm ngay tại
+mốc". Suy đoán đó **lệch ngay khi máy khác chèn dòng vào giữa 2 lần đọc**, và khi lệch thì lần đọc
+sau **NHẢY QUA** dòng của máy khác → không bao giờ thấy → **không lọc trùng được nữa**.
+
+Nay dùng `updates.updatedRange` mà Google trả về (vị trí **THẬT**), và đặt
+
+```js
+_nextRow = Math.min(_nextRow, wrote.firstRow);
+```
+
+**Phải lấy cái NHỎ HƠN.** Kéo thẳng về `firstRow` là sai: máy khác có thể đã chèn dòng trùng vào
+**ngay trước** khối của ta (mốc đang ở 3, ta ghi dòng 4 → đặt mốc 4 là nhảy qua dòng 3 của họ).
+Test mục 5 dựng đúng cảnh đó và **đã bắt được đúng lỗi này** khi tôi làm sai lần đầu.
+
+### Đã thử và LOẠI — đọc chờm bằng HẰNG SỐ
+
+Bản đầu tôi cho lượt đọc tăng dần **chờm lên trước mốc 60 dòng**. Bộ test sẵn có bắt ngay 2 khẳng
+định: với Sheet nhỏ (`_nextRow = 5`), `max(1, 5-60) = 1` → **mọi lượt "đọc tăng dần" thành đọc
+toàn bộ**, phá đúng cơ chế QĐ-09 sinh ra để tránh. Cách dùng `updatedRange` tốt hơn: không có hằng
+số tuỳ ý, chỉ đọc lại đúng mấy dòng liên quan, và **sửa luôn** bug mốc lệch ở trên.
+
+### Kiểm chứng
+
+`test/dup-detect.test.js` — **22 khẳng định**, mock `google-api.cjs` (không gọi mạng), nạp
+`sheets.cjs` **thật**. Mock trả `updates.updatedRange` như Google thật, và có `injectBeforeAppend`
+để dựng đúng cảnh **máy khác chèn dòng trùng ngay trước lúc ta ghi**.
+
+Phủ: số dòng đúng khi có **ô rỗng** xen giữa; **cùng ID khác slug** vẫn nhận ra trùng (QĐ-10);
+`range = null` thì **không đoán bừa**; không ghi nhớ dòng **vượt `lastRow`**; mốc không kẹt cũng
+không chạy lùi; chế độ thử **không gửi lệnh xoá nào**; giá trị rác **không bao giờ tự bật** xoá.
+
+Đã kiểm test có "cắn":
+
+| Đột biến | Kết quả |
+|---|---|
+| Kéo mốc thẳng về `firstRow` (bỏ `Math.min`) | **1 trượt** — đúng khẳng định phát hiện trùng |
+| Quay về suy đoán `+= pending.length` | **3 trượt** |
+| `_noteMyWrites` đoán bừa khi thiếu range | 1 trượt |
+| `setDupMode` nhận giá trị rác thành `'on'` | 1 trượt |
+
+Toàn bộ **27 file test đạt**.
+
+| KHÔNG nên làm lại | Vì sao |
+|---|---|
+| Grep **tên hàm của mình** để kết luận code người khác thiếu tính năng | Hung dùng `fromRow` thay `startRow` → ra 0 và tôi gần như báo sai. Phải **đọc thân hàm** |
+| Đáp ứng "đọc liên tục hơn" khi hệ **đã vượt quota** | Thêm request = cầu dao ngắt 60s = dữ liệu ùn. Phải đo quota **trước** khi hứa |
+| Suy đoán vị trí dòng vừa ghi bằng `+= n` | Lệch ngay khi máy khác chèn dòng → lần đọc sau nhảy qua dòng của họ → mất hẳn khả năng lọc trùng. Dùng `updates.updatedRange` (số thật) |
+| Kéo mốc đọc về **đúng** dòng đầu khối mình ghi | Bỏ sót dòng máy khác chèn **ngay trước** khối đó. Phải `Math.min(mốc_cũ, firstRow)` |
+| Cho lượt đọc tăng dần chờm bằng **hằng số** dòng | Sheet nhỏ → `max(1, moc-60) = 1` → mọi lượt thành đọc toàn bộ, phá QĐ-09 |
+| Mặc định BẬT việc tự xoá dòng trên Sheet sản xuất | Xoá không hoàn tác, mà Sheet này nhiều người cùng sửa. Chạy chế độ **thử** trước, xem log rồi mới mở khoá |
+| Bật quét-toàn-bảng tự động trên NHIỀU máy | `deleteDimension` làm dịch số dòng; 5 máy cùng xoá là xoá sai hàng loạt. Chỉ đúng **1 máy** |

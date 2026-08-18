@@ -60,6 +60,17 @@ async function appendRows(spreadsheetId, tab, rows, sa) {
     }
     throw new Error(`append HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
   }
+  // Google tra ve `updates.updatedRange` dang `Data!A88824:D88826` — VI TRI THAT cua cac dong
+  // vua ghi. Doc lai tu day la cach DUY NHAT biet chac minh vua ghi vao dong nao: `_nextRow`
+  // cua app chi la SUY DOAN (no lech ngay khi may khac chen dong giua 2 lan doc).
+  // Dung de do trung lien may (xem `_scanDupes`). Loi phan tich thi tra null — khong duoc nem
+  // ra ngoai, vi luc nay dong DA GHI THANH CONG roi.
+  try {
+    const j = JSON.parse(resp.body || "{}");
+    const m = /![A-Z]+(\d+):[A-Z]+(\d+)/.exec((j.updates && j.updates.updatedRange) || "");
+    if (m) return { firstRow: parseInt(m[1], 10), lastRow: parseInt(m[2], 10) };
+  } catch (_) {}
+  return null;
 }
 
 // ── Đọc cột Link (cột B) đã có sẵn trên tab → mảng link, để lọc trùng ──
@@ -133,11 +144,16 @@ async function readLinkColumn(spreadsheetId, tab, sa, { startRow = 1 } = {}) {
         data = {};
       }
       const rows = data.values || [];
+      // `cells` = mang THO theo dung thu tu dong Google tra ve (ke ca dong rong): dong that cua
+      // phan tu thu i la `from + i`. Can cho viec do trung lien may (xem `_scanDupes`) — `links`
+      // da loc bo dong rong nen KHONG suy ra duoc so dong tu no.
       return {
         links: rows
           .map((r) => (r && r[0] ? String(r[0]).trim() : ""))
           .filter(Boolean),
         rawRows: rows.length,
+        cells: rows.map((r) => (r && r[0] ? String(r[0]).trim() : "")),
+        from,
       };
     } catch (e) {
       lastErr = e;
@@ -556,6 +572,100 @@ function configure(cfg, onError) {
 // Trả `{ links, rawRows, from, full }` — `links` là phần MỚI đọc được (để nơi gọi nạp thêm
 // vào bộ lọc quét của crawler).
 let _nextRow = 0; // 0 = chưa biết mốc → phải đọc toàn bộ
+// ════════ DO TRUNG LIEN MAY (2026-08-18) ════════
+// Nguoi dung chay HAI app tren cung mot Sheet: ban nay va ban cua Hung13010. Doc thang
+// `_flushState` trong app.asar cua Hung v0.1.56: no loc trung bang `_knownLinks` TRONG BO NHO
+// roi `appendRows` ngay — KHONG co luot doc lai Sheet truoc khi ghi. Ban nay thi co
+// (`await refreshKnownLinks()` trong flush, QD-09). Nen cua ho sinh trung rong bang ca mot chu
+// ky doc lai, cua ta chi bang mot request.
+//
+// ⛔ KHONG the phong ngua "dut diem" bang cach doc day hon:
+//   1. Google Sheets khong co phep GIANH QUYEN nguyen tu (QD-09) — 2 may doc-roi-ghi long vao
+//      nhau trong cung duoi mot giay thi ca hai deu thay "chua co" roi cung ghi.
+//   2. May nguoi dung DA VUOT quota ghi (do that: 437 + 607 lan "Quota exceeded"). 60 request/
+//      phut cho MOI Service Account, ma 5 may dung CHUNG mot cai. Doc day hon = vo quota nang
+//      hon = cau dao ngat 60s = du lieu un lai. Lam dung yeu cau se khien tinh hinh TE HON.
+// Nen huong di la DO roi TU DON, khong phai phong ngua day hon.
+//
+// Cach do: doi chieu dong CHINH MINH vua ghi (lay tu `updates.updatedRange` cua Google — so
+// that, khong phai suy doan) voi cac dong doc duoc quanh do.
+let _reReadRows = 0;   // so dong lan doc toi se doc LAI (do keo moc ve sau khi ghi)
+const MY_WRITES_MAX = 4000;
+const _myWrites = new Map();   // key -> so dong THAT ma CHINH APP NAY da ghi
+let _dupStats = { mine: 0, others: 0 };
+
+// Ghi nho dong minh vua ghi. `range` la {firstRow,lastRow} tu appendRows; null thi bo qua
+// (khong doan bua — doan sai la xoa oan dong nguoi khac).
+function _noteMyWrites(rows, range) {
+  if (!range || !range.firstRow) return;
+  rows.forEach((r, i) => {
+    const k = normalizeKey(r && r[1]);
+    if (!k) return;
+    const row = range.firstRow + i;
+    if (row > range.lastRow) return;
+    _myWrites.set(k, row);
+  });
+  // Chan phinh bo nho vo han (bai hoc QD-36): bo bot nhung ban ghi CU NHAT.
+  while (_myWrites.size > MY_WRITES_MAX) {
+    _myWrites.delete(_myWrites.keys().next().value);
+  }
+}
+
+// Do trung trong cua so vua doc. `cells` la mang THO, dong that cua phan tu i la `from + i`.
+// Tra danh sach { key, rows, myRow } cho MOI key xuat hien >= 2 dong trong cua so.
+function _scanDupes(cells, from) {
+  if (!cells || cells.length < 2) return [];
+  const byKey = new Map();
+  for (let i = 0; i < cells.length; i++) {
+    const k = normalizeKey(cells[i]);
+    if (!k) continue;
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push(from + i);
+  }
+  const out = [];
+  for (const [k, rows] of byKey) {
+    if (rows.length < 2) continue;
+    out.push({ key: k, rows, myRow: _myWrites.has(k) ? _myWrites.get(k) : null });
+  }
+  return out;
+}
+
+// Bao cao trung tim thay trong cua so vua doc.
+//
+// PHAT HIEN RONG, HANH DONG HEP (nguoi dung chot 2026-08-18):
+//   • ghi log MOI dong trung — ca cua minh lan cua may khac → co SO THAT de quyet, khong doan
+//   • chi dinh xoa dong CUA CHINH APP NAY, va chi khi dong minh la dong SAU
+//
+// Mac dinh `_dupMode = 'log'` = CHE DO THU, khong xoa gi. Vi sao mac dinh khong xoa: Sheet nay
+// co NHIEU NGUOI cung sua (da co nguoi dat bao ve o va doi cot "Tinh trang"), xoa dong la
+// KHONG HOAN TAC duoc. Phai xem log vai ngay thay dung roi moi mo khoa.
+// Bat bang `setDupMode('on')`.
+let _dupMode = 'log';
+function setDupMode(m) { _dupMode = m === 'on' ? 'on' : 'log'; }
+function getDupStats() { return { ..._dupStats, mode: _dupMode }; }
+
+function _reportDupes(cells, from) {
+  let found;
+  try { found = _scanDupes(cells, from); } catch (_) { return; }
+  if (!found.length) return;
+  for (const d of found) {
+    const rows = d.rows.join(', ');
+    // Dong cua minh co phai dong SAU khong? Chi dong SAU moi la dong "thua".
+    const iAmLater = d.myRow != null && d.myRow === Math.max(...d.rows);
+    if (iAmLater) {
+      _dupStats.mine++;
+      console.warn(`[dup] TRUNG (dong CUA APP NAY la dong sau): dong ${rows} — key ${d.key}.`
+        + (_dupMode === 'on' ? ` Se xoa dong ${d.myRow}.` : ` CHE DO THU: khong xoa gi.`));
+    } else {
+      _dupStats.others++;
+      console.warn(`[dup] TRUNG (KHONG phai dong cua app nay): dong ${rows} — key ${d.key}.`
+        + ' App nay khong xoa dong cua may khac.');
+    }
+  }
+  console.log(`[dup] Tong phien: ${_dupStats.mine} dong trung do APP NAY, `
+    + `${_dupStats.others} dong trung do NGUON KHAC (ke ca ban cua Hung). Che do: ${_dupMode}.`);
+}
+
 let _refreshInFlight = null; // gộp các lời gọi trùng nhau, tránh 2 nơi cùng đọc rồi cùng
 // đẩy mốc lên → nhảy qua mất dòng chưa đọc
 async function refreshKnownLinks({ full = false } = {}) {
@@ -575,17 +685,26 @@ async function refreshKnownLinks({ full = false } = {}) {
   const cfg = _cfg;
   const doFull = full || _nextRow <= 0;
   const from = doFull ? 1 : _nextRow;
+  // Phan CHONG LAN: so dong chinh app nay vua ghi ma lan doc nay se doc lai (xem `_noteMyWrites`
+  // — moc duoc keo VE dong dau khoi minh vua ghi). Can tru khoi `_sheetRows`, khong tru thi
+  // badge "Sheet: N dong data" dem trung chinh may dong minh vua ghi.
+  const overlap = doFull ? 0 : _reReadRows;
+  _reReadRows = 0;
   _refreshInFlight = (async () => {
     const r = await readLinkColumn(cfg.spreadsheetId, cfg.tab, cfg.sa, {
       startRow: from,
     });
     updateKnownLinks(r.links);
+    _reportDupes(r.cells, from);
     // Mốc kế tiếp: đọc toàn bộ thì bắt đầu từ dòng 1 nên mốc = rawRows + 1; đọc tăng dần thì
     // cộng dồn từ chỗ bắt đầu. Dùng rawRows (số dòng THÔ) chứ KHÔNG dùng links.length —
     // links đã lọc bỏ dòng rỗng nên mốc sẽ lệch dần (có test riêng cho bẫy này).
     _nextRow = doFull ? r.rawRows + 1 : from + r.rawRows;
-    _sheetRows = doFull ? r.rawRows : _sheetRows + r.rawRows;
-    return { links: r.links, rawRows: r.rawRows, from, full: doFull };
+    // `rawRows` GOM ca phan chom, nen so dong MOI THAT SU = rawRows - overlap. Khong tru thi
+    // badge "Sheet: N dong data" phinh len 60 dong moi phut du chang ai day gi len.
+    const newRows = Math.max(0, r.rawRows - overlap);
+    _sheetRows = doFull ? r.rawRows : _sheetRows + newRows;
+    return { links: r.links, rawRows: newRows, from: from + overlap, full: doFull };
   })();
   try {
     return await _refreshInFlight;
@@ -719,7 +838,8 @@ function flush() {
         );
       }
       if (!pending.length) return;
-      await appendRows(cfg.spreadsheetId, cfg.tab, pending, cfg.sa);
+      const wrote = await appendRows(cfg.spreadsheetId, cfg.tab, pending, cfg.sa);
+      _noteMyWrites(pending, wrote);
       // Ghi thành công → các link này giờ ĐÃ có trên Sheet, ghi nhớ để mọi đường đẩy
       // sau (kể cả buffer retry) không bao giờ đẩy lại.
       for (const r of pending) {
@@ -731,7 +851,22 @@ function flush() {
       // nếu không cộng thì badge trên UI bị tụt lại tới lần đọc sau, và lần đọc tăng dần kế
       // tiếp sẽ đọc lại chính mấy dòng mình vừa ghi (vô ích).
       if (_sheetRows > 0) _sheetRows += pending.length;
-      if (_nextRow > 0) _nextRow += pending.length;
+      // ⚠ MOC DOC: truoc day cong bu `+= pending.length` — do la SUY DOAN "dong minh ghi nam
+      // ngay tai moc". Suy doan do LECH ngay khi may khac chen dong vao giua 2 lan doc, va khi
+      // lech thi lan doc sau NHAY QUA dong cua may khac → khong bao gio thay → khong loc trung
+      // duoc. Gio dung `updatedRange` cua Google (vi tri THAT) va keo moc VE dong DAU khoi minh
+      // vua ghi: lan doc sau se doc lai chinh may dong nay + BAT KY dong nao may khac cheo vao
+      // sat truoc/giua chung → do trung duoc (xem `_reportDupes`). Chi ton dung may dong do.
+      if (wrote && wrote.firstRow > 0) {
+        // ⚠ Phai lay CAI NHO HON giua "moc chua doc toi" va "dong dau khoi minh ghi". Keo thang
+        // ve `firstRow` la SAI: may khac co the da cheo dong TRUNG vao NGAY TRUOC khoi cua ta
+        // (moc dang o 3, ta ghi dong 4 → dat moc = 4 la nhay qua dong 3 cua ho, vinh vien khong
+        // thay). Test muc 5 dung canh do va da bat duoc dung loi nay.
+        _nextRow = _nextRow > 0 ? Math.min(_nextRow, wrote.firstRow) : wrote.firstRow;
+        _reReadRows = Math.max(0, wrote.lastRow - wrote.firstRow + 1);
+      } else if (_nextRow > 0) {
+        _nextRow += pending.length;   // du phong: Google khong tra updatedRange
+      }
     })
     .catch((e) => {
       console.error("[sheets] flush lỗi:", e.message);
@@ -1002,6 +1137,10 @@ module.exports = {
   readLinks,
   readLinkColumn,
   refreshKnownLinks,
+  setDupMode,
+  getDupStats,
+  _scanDupes,
+  _noteMyWrites,
   extractSpreadsheetId,
   configure,
   isEnabled,
