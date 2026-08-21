@@ -37,6 +37,8 @@ const path = require('path');
 const browser = require('./browser.cjs');
 const fingerprint = require('./fingerprint.cjs');
 const ipGuard = require('./ip-guard.cjs');
+const scriptFilter = require('./script-filter.cjs');
+const { markNotInterested } = require('./crawler/not-interested.cjs');
 const { getProfilePath, loadProfiles } = require('./profiles.cjs');
 const { canonicalSoundUrl, normalizeKey } = require('./linkkey.cjs');
 const { attachResourceBlocker } = require('./resource-blocker.cjs');
@@ -60,6 +62,8 @@ let _scannedThisRun = 0;      // số sound MỚI quét được trong phiên (k
 let _skippedDup = 0;          // số link bị bỏ vì trùng (cùng phiên HOẶC đã có trên Sheet)
 let _seedCount = 0;           // số link nạp sẵn từ Sheet
 let _loggedFirstKey = false;  // log 1 lần key đầu tiên để đối chiếu định dạng
+let _skippedForeign = 0;   // so sound bi bo vi ten khong phai chu Latin
+let lastRejected = null;   // sound vua bi bo vi ngon ngu -> de bam "Not interested"
 const _collected = new Set(); // dedup theo key sound (gồm cả link nạp sẵn từ Sheet)
 
 function isProfileRunning(id) { return _active.has(id); }
@@ -167,7 +171,7 @@ function getCountMode() { return _countMode; }
 // `onPending` (QĐ-33): link TikTok trả "Something went wrong" — không đọc được số video nhưng
 // sound VẪN CÒN. Trả về true nếu đã xếp vào tab chờ (để log nói đúng việc đã làm).
 async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending) {
-  const { minDelay, maxDelay, headless, minVideos, maxVideos, mode, keyword, originalOnly, blockImages, chromiumProfile } = opts;
+  const { minDelay, maxDelay, headless, minVideos, maxVideos, mode, keyword, originalOnly, latinTitleOnly, notInterested, blockImages, chromiumProfile } = opts;
   // 0 = tắt hẳn tự tải lại feed (người dùng chấp nhận rủi ro RAM để đổi lấy không gián đoạn).
   const recycleEvery = opts.recycleEvery === 0 ? 0 : (opts.recycleEvery || RECYCLE_EVERY_DEFAULT);
   const profilePath = getProfilePath(profile.id);
@@ -480,6 +484,30 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
     // quyền) nên nếu xét link đã rút gọn thì isOriginalSound() luôn thấy "original-sound-"
     // → bộ lọc này MẤT TÁC DỤNG HOÀN TOÀN, mọi nhạc bản quyền đều lọt.
     if (originalOnly && !isOriginalSound(rawUrl, name)) return false;
+    // ── Chi lay TEN sound viet bang chu Latin (2026-08-21) ──
+    // ⚠ Xet `name` (TEN sound doc tu aria-label), KHONG xet url: tu 2026-07-30
+    // canonicalSoundUrl() BO HAN phan chu, ghep moi link ve `/music/original-sound-<id>` nen
+    // url khong con mang thong tin ngon ngu nao. Dung cai bay QD-10 da ghi cho isOriginalSound.
+    if (latinTitleOnly) {
+      // Hai dau hieu DOC LAP, moi cai bat mot loai khac nhau (xem script-filter.cjs):
+      //   1. TIEN TO ten sound = ngon ngu NGUOI DANG (TikTok tu dat theo locale nguoi dang,
+      //      QD-10). "sonido original" = Tay Ban Nha, "som original" = Bo, "son original" = Phap.
+      //      Day la thu duy nhat bat duoc nguoi dang Latino/Nam My.
+      //   2. HE CHU cua ten — bat ca ten KHONG co tien to (vd ten bai hat `أدعية إسلامية`).
+      // `wantCountry` = nhan quoc gia trong ten thu muc profile (cung nguon ip-guard dung).
+      // Luat: DUOC PHEP = tieng Anh + ngon ngu CUA CHINH quoc gia do. Nen profile (US) loai
+      // tieu de tieng Han, con (KR) thi lay — khong the dung mot danh sach co dinh cho ca dan.
+      const upLang = scriptFilter.uploaderLangLabel(name, wantCountry);
+      const foreign = upLang ? [] : scriptFilter.foreignScripts(name, wantCountry);
+      if (upLang || foreign.length) {
+        _skippedForeign++;
+        const why = upLang ? `nguoi dang dung "${upLang}"` : `chu ${foreign.join(', ')}`;
+        log(`Bo "${String(name).slice(0, 36)}" - ${why}.`);
+        // Bao ra ngoai de vong quet co the bam "Not interested" cho dung video nay.
+        lastRejected = { name: String(name || ''), why };
+        return false;
+      }
+    }
     const key = normalizeKey(url);
     if (!key) return false;
     if (!_loggedFirstKey) {
@@ -582,7 +610,21 @@ async function crawlOneProfile(profile, opts, onData, onStatus, stop, onPending)
 
       let data = null;
       try { data = await readActiveSound(page); } catch (_) {}
+      lastRejected = null;
       const isNew = !!(data && data.href && addSound(data.href, data.name));
+      // ── Bam "Not interested" cho video vua bi loai vi ngon ngu (2026-08-21) ──
+      // Vua loc bo sound, vua day thuat toan di huong khac. CHI bam khi cong tac bat, va CHI
+      // cho dung video vua bi loai (`lastRejected`) — khong bam bua.
+      // ⚠ markNotInterested KHONG BAO GIO nem (moi loi tra { ok:false }) — QD-13 do duoc rang
+      // click vao trang co the lam hong trang thai trang, nen that bai phai di tiep chu khong
+      // duoc lan ra lam chet vong quet.
+      if (notInterested && lastRejected) {
+        const r = await markNotInterested(page);
+        log(r.ok
+          ? `Not interested: ${lastRejected.why} - ${r.why}.`
+          : `Khong bam duoc Not interested (${r.why}) - bo qua, van quet tiep.`);
+        lastRejected = null;
+      }
       if (isNew) {
         stuckStreak = 0;   // feed cho ra sound mới = còn sống, không phải cạn
         onStatus(profile.id, 'running', prefix
@@ -1499,6 +1541,8 @@ function startProfile(params, onData, onStatus, onPending) {
     mode,
     keyword,
     originalOnly: !!params.originalOnly,
+    latinTitleOnly: !!params.latinTitleOnly,
+    notInterested: !!params.notInterested,
     blockImages: !!params.blockImages,
     // Chế độ profile Chromium riêng — RIÊNG TỪNG PROFILE (QĐ-28), không phải cài đặt chung.
     chromiumProfile: !!params.chromiumProfile,

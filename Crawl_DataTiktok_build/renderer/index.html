@@ -366,6 +366,14 @@
             <input type="checkbox" id="cfgOriginalOnly" />
             <span>Chỉ lấy Original Sound</span>
           </label>
+          <label class="toggle-row" title="Chỉ lấy sound có TÊN viết bằng chữ Latin. Bỏ qua tên viết bằng chữ Ả Rập, Urdu, Hindi, Bengal, Thái, Hán, Hàn, Nhật, Kirin, và các hệ chữ châu Phi phi-Latin (Ethiopia, Berber, N'Ko, Adlam). LƯU Ý: nhiều thứ tiếng châu Phi dùng chữ Latin (Swahili, Hausa, Yoruba, Zulu, Somali) nên bộ lọc này KHÔNG chặn được chúng.">
+            <input type="checkbox" id="cfgLatinTitleOnly" />
+            <span>Chỉ lấy sound của người đăng nói tiếng Anh (bỏ Tây Ban Nha, Bồ, Pháp, Ả Rập…)</span>
+          </label>
+          <label class="toggle-row" title="Khi một sound bị loại vì ngôn ngữ, app sẽ bấm ⋯ → Not interested trên chính video đó để đẩy thuật toán đi hướng khác. MẶC ĐỊNH TẮT — hãy thử trên MỘT profile trước: việc click vào trang có thể làm hỏng trạng thái trang (đã đo được, xem QĐ-13).">
+            <input type="checkbox" id="cfgNotInterested" />
+            <span>Bấm "Not interested" cho video bị loại (thử nghiệm)</span>
+          </label>
         </div>
 
         <div class="section" id="cfgPerfSection">

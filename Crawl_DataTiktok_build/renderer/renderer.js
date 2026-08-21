@@ -39,7 +39,7 @@ let _vpnRunLock = false;
 let _vpnLockReason = 'cycling';
 
 const DEFAULT_SETTINGS = {
-  mode: 'foryou', keyword: '', headless: false, originalOnly: false,
+  mode: 'foryou', keyword: '', headless: false, originalOnly: false, latinTitleOnly: false, notInterested: false,
   minVideos: 1000, maxVideos: 0, delayMin: 2, delayMax: 4, blockImages: true, recycleEvery: 80,
   viewLinks: '', viewPctMin: 40, viewPctMax: 70, viewLikePct: 15,
   viewScrollMin: 20, viewScrollMax: 30,
@@ -440,6 +440,8 @@ async function startProfileById(id) {
     keyword: String(s.keyword || '').trim(),
     headless: !!s.headless,
     originalOnly: !!s.originalOnly,
+    latinTitleOnly: !!s.latinTitleOnly,
+    notInterested: !!s.notInterested,
     minVideos: Math.max(0, parseInt(s.minVideos, 10) || 0),
     maxVideos: Math.max(0, parseInt(s.maxVideos, 10) || 0),
     minDelay: Math.round(dMin * 1000),
@@ -1240,6 +1242,8 @@ function openSettingsModal(ids) {
   $('cfgCycleBreakMax').value = s.cycleBreakMax;
   $('cfgHeadless').checked = !s.headless;  // tick = hiện trình duyệt = NGƯỢC dấu với `headless`
   $('cfgOriginalOnly').checked = !!s.originalOnly;
+  $('cfgLatinTitleOnly').checked = !!s.latinTitleOnly;
+  $('cfgNotInterested').checked = !!s.notInterested;
   $('cfgBlockImages').checked = !!s.blockImages;
   $('cfgRecycleEvery').value = s.recycleEvery;
   $('cfgMinVideos').value = s.minVideos;
@@ -1282,6 +1286,8 @@ async function saveCrawlSettings() {
     viewScrollMax: scrMax,
     headless: !$('cfgHeadless').checked,  // tick = hiện trình duyệt = NGƯỢC dấu với `headless`
     originalOnly: $('cfgOriginalOnly').checked,
+    latinTitleOnly: $('cfgLatinTitleOnly').checked,
+    notInterested: $('cfgNotInterested').checked,
     blockImages: $('cfgBlockImages').checked,
     recycleEvery: Math.max(0, parseInt($('cfgRecycleEvery').value, 10) || 0),
     minVideos: Math.max(0, parseInt($('cfgMinVideos').value, 10) || 0),

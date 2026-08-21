@@ -35,6 +35,8 @@ Chọn ở cột **Chế độ** hoặc trong ⚙️ Cài đặt.
 | Mục | Ý nghĩa |
 |---|---|
 | Chỉ lấy Original Sound | Bỏ qua nhạc bản quyền, chỉ lấy "original sound" / "nhạc nền" |
+| **Chỉ lấy sound của người đăng nói tiếng Anh** | **Riêng từng profile.** Mặc định **tắt**. Cho phép **tiếng Anh + ngôn ngữ của chính quốc gia profile** — xem mục dưới |
+| **Bấm "Not interested" cho video bị loại** | **Riêng từng profile.** Mặc định **tắt**, đang thử nghiệm. Sound bị loại vì ngôn ngữ thì app bấm ⋯ → Not interested trên video đó |
 | Lọc theo số video | Chỉ giữ sound có số video trong khoảng đã đặt |
 | Delay | Nghỉ giữa 2 lần cuộn — càng lớn càng giống người thật, càng chậm |
 | Không tải ảnh/video | Giảm RAM/CPU đáng kể. Nên bật khi chạy dài |
@@ -142,6 +144,50 @@ Lưu ý:
   tới khi dừng.
 - Muốn quay lại: tắt công tắc là xong. Thư mục `ChromiumProfile` trong profile có thể **xóa
   tay** để lấy lại đĩa, không mất đăng nhập.
+
+### Lọc theo ngôn ngữ tiêu đề — "tiếng Anh + tiếng của chính nước đó"
+
+Feed ra toàn sound Ả Rập / châu Phi / Nam Mỹ dù profile là UK/US? Bật công tắc
+**"Chỉ lấy sound của người đăng nói tiếng Anh"** trong ⚙.
+
+Luật: **cho phép tiếng Anh (luôn luôn) + ngôn ngữ của chính quốc gia profile.**
+
+| Profile | Lấy | Loại |
+|---|---|---|
+| `(US)` `(UK)` `(AU)` `(CA)` `(SG)` | chỉ tiếng Anh | Hàn, Nhật, Tây Ban Nha, Bồ, Ả Rập, Ấn Độ, Việt… |
+| `(KR)` | Anh **+ Hàn** | Nhật, Tây Ban Nha, Ả Rập… |
+| `(JP)` | Anh **+ Nhật** | Hàn, Tây Ban Nha, Ả Rập… |
+| Tên profile không có nhãn quốc gia | **chỉ tiếng Anh** | tất cả còn lại |
+
+App nhận biết bằng **hai** dấu hiệu, vì một cái không đủ:
+
+1. **Tiền tố tên sound** — TikTok đặt nhãn "original sound" theo ngôn ngữ **người đăng**:
+   `original sound` (Anh) · `sonido original` (Tây Ban Nha) · `som original` (Bồ) ·
+   `son original` (Pháp) · `suara asli` (Indonesia) · `nhạc nền` (Việt).
+   Đây là thứ **duy nhất** bắt được người đăng dùng chữ Latin mà không phải tiếng Anh.
+2. **Hệ chữ** của tên — cho những tên **không có tiền tố** (vd tên bài hát `أدعية إسلامية`).
+
+Log ghi rõ lý do: `Bo "..." - nguoi dang dung "sonido original"` hoặc `- chu A Rap (Trung Dong)`.
+
+⚠️ **Giới hạn thật:** nhiều thứ tiếng châu Phi dùng **chữ Latin** (Swahili, Hausa, Yoruba, Zulu,
+Somali). Nếu người đăng đặt máy ở tiếng Anh thì tên sound là `original sound - …` và **bộ lọc cho
+qua**. Nội dung châu Phi tiếng Anh **vẫn vào** — đây là giới hạn thật, không phải app thiếu tính năng.
+
+### Bấm "Not interested" cho video bị loại (thử nghiệm)
+
+Bật thêm công tắc **"Bấm Not interested cho video bị loại"** thì mỗi khi một sound bị loại vì
+ngôn ngữ, app sẽ bấm **⋯ → Not interested** trên chính video đó — vừa lọc, vừa **dạy lại thuật
+toán** để lần sau ít gặp loại nội dung đó hơn.
+
+⚠️ **Mặc định TẮT, hãy bật trên MỘT profile trước.** Hai lý do:
+
+- Việc click vào trang **có thể làm hỏng trạng thái trang** — đã đo được và ghi trong QĐ-13.
+  App tự phục hồi (thất bại thì bấm Escape rồi quét tiếp) nhưng vẫn nên thử một profile trước.
+- Trong menu, nút **"Report" nằm ngay dưới "Not interested"**. App **tuyệt đối không bấm theo
+  toạ độ** và loại thẳng mọi mục có chữ *report* / *báo cáo*; không tìm thấy đúng mục thì
+  **không bấm gì cả**. Nhưng bạn nên tự xem log vài lần đầu cho chắc.
+
+Log sẽ ghi: `Not interested: nguoi dang dung "sonido original" - da bam "not interested".`
 
 ## Chạy và dừng
 

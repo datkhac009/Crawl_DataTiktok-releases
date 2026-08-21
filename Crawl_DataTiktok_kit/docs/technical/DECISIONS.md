@@ -2763,3 +2763,127 @@ Toàn bộ **27 file test đạt**.
 | Cho lượt đọc tăng dần chờm bằng **hằng số** dòng | Sheet nhỏ → `max(1, moc-60) = 1` → mọi lượt thành đọc toàn bộ, phá QĐ-09 |
 | Mặc định BẬT việc tự xoá dòng trên Sheet sản xuất | Xoá không hoàn tác, mà Sheet này nhiều người cùng sửa. Chạy chế độ **thử** trước, xem log rồi mới mở khoá |
 | Bật quét-toàn-bảng tự động trên NHIỀU máy | `deleteDimension` làm dịch số dòng; 5 máy cùng xoá là xoá sai hàng loạt. Chỉ đúng **1 máy** |
+
+---
+
+## QĐ-41 — Lọc tiêu đề theo ngôn ngữ: "tiếng Anh + ngôn ngữ CỦA CHÍNH quốc gia profile", và bấm "Not interested" (2026-08-21)
+
+### Yêu cầu và hai lần tôi hiểu SAI trước khi hiểu đúng
+
+Người dùng chạy profile UK/US/AU/KR nhưng feed ra toàn sound Ả Rập / châu Phi / Nam Mỹ. Ảnh họ
+gửi: tên sound `أدعية إسلامية`, caption `دعاء ليلة الجمعة`.
+
+**Lần hiểu sai 1 — "Latin" = hệ chữ Latin.** Tôi làm bộ lọc "chỉ giữ chữ Latin". Nhưng hai câu
+của họ mâu thuẫn dưới cách hiểu đó: *"Hàn Nhật vẫn được"* (Hàn/Nhật là **phi**-Latin) + *"không
+lấy sound có chữ Latin"*. Ghép lại là "giữ phi-Latin, loại Latin" — ngược hẳn cái tôi làm.
+
+**Lần hiểu sai 2 — "Latin" = Latino, và Hàn/Nhật/Trung được phép với MỌI profile.** Vẫn sai:
+profile `(US)` đáng lẽ phải **loại** tiêu đề tiếng Hàn.
+
+**Luật đúng, người dùng nói rõ ở lần thứ ba:** *"nếu IP là KR thì lấy title tiếng Anh hoặc tiếng
+Hàn. Nếu IP của tôi là AU thì lấy AU hoặc UK US vì nó đều là tiếng Anh."*
+
+> **ĐƯỢC PHÉP = TIẾNG ANH (luôn luôn) + ngôn ngữ CỦA CHÍNH quốc gia profile.**
+
+| Profile | Lấy | Loại |
+|---|---|---|
+| `(US)` `(UK)` `(AU)` `(CA)` `(SG)` | chỉ tiếng Anh | Hàn, Nhật, Tây Ban Nha, Bồ, Ả Rập, Devanagari, Việt… |
+| `(KR)` | Anh **+ Hàn** | Nhật, Tây Ban Nha, Ả Rập… |
+| `(JP)` | Anh **+ Nhật** (kèm Kanji) | Hàn, Tây Ban Nha, Ả Rập… |
+| không có nhãn quốc gia | **chỉ tiếng Anh** | tất cả còn lại |
+
+Quốc gia lấy từ `fingerprint.countryOf(tên thư mục profile)` — **đúng nguồn `ip-guard` đã dùng**,
+không tự khai bảng thứ hai (QĐ-10).
+
+⚠️ **Bài học:** một từ người dùng dùng theo nghĩa thông thường ("Latin" = người Latino) có thể
+trùng tên với một khái niệm kỹ thuật ("hệ chữ Latin") và **nghĩa ngược nhau**. Dấu hiệu để phát
+hiện: hai câu của họ **mâu thuẫn logic** dưới cách hiểu của mình. Lúc đó phải hỏi lại, đừng xây.
+
+### Hai dấu hiệu ĐỘC LẬP — một cái không đủ
+
+| Hàm | Bắt được gì | Ví dụ |
+|---|---|---|
+| `uploaderLangLabel(name, cc)` | **Tiền tố** tên sound = ngôn ngữ NGƯỜI ĐĂNG. TikTok tự đặt theo locale người đăng (QĐ-10) | `sonido original` (TBN), `som original` (Bồ), `son original` (Pháp), `suara asli`, `nhạc nền` |
+| `foreignScripts(name, cc)` | **Hệ chữ Unicode** — cho tên KHÔNG có tiền tố | `أدعية إسلامية`, `नमस्ते`, `ኢትዮጵያ` |
+
+Tiền tố là thứ **DUY NHẤT** bắt được người đăng dùng **chữ Latin mà không phải tiếng Anh** (Tây
+Ban Nha, Bồ, Pháp, Indonesia, Việt). Hệ chữ là thứ duy nhất bắt được tên bài hát Ả Rập/Hindi.
+
+**Không dùng danh sách TỪ** — dùng `\p{Script=...}` của Unicode. Đó là cách thoát khỏi bẫy QĐ-10:
+`ORIGINAL_SOUND_LABELS` đã phải thêm 22 ngôn ngữ mà vẫn "best-effort, không đầy đủ".
+
+⚠️ **Phải bỏ emoji/số/dấu câu trước khi xét** (`\p{L}` chỉ khớp ký tự CHỮ). Tên sound đầy emoji
+(`original sound - S🦋`) — tính emoji là "chữ lạ" thì **loại oan gần hết**. Đột biến bỏ chốt này
+làm **14 khẳng định trượt**.
+
+### "Not interested" — chốt an toàn quan trọng hơn tính năng
+
+Người dùng: *"nếu lướt vào video đó thì click vào Not interested trong video đó luôn"* — vừa lọc,
+vừa đẩy thuật toán đi hướng khác.
+
+**Hai rủi ro thật, cả hai đều có tiền lệ trong dự án:**
+
+1. **QĐ-13 đã đo:** *"Click vào trang để 'lấy con trỏ' rồi gửi phím → LÀM HỎNG TRẠNG THÁI TRANG,
+   sau đó không đọc được sound nào."* Bấm menu là click vào trang. Nên `markNotInterested`
+   **không bao giờ ném** — mọi lỗi trả `{ ok:false }`, thất bại thì Escape rồi đi tiếp.
+2. **Nút "Report" nằm NGAY DƯỚI "Not interested"** (ảnh người dùng gửi). Bấm lệch một dòng là
+   **báo cáo video** → tài khoản có thể bị đánh dấu. Nên: **tuyệt đối không bấm theo toạ độ**,
+   loại thẳng mọi phần tử có chữ `report`/`báo cáo`, và không tìm thấy đúng mục thì **không bấm gì**.
+
+Cả hai công tắc **mặc định TẮT** — người dùng bật trên **một** profile trước.
+
+### ⛔ Giới hạn thành thật
+
+**Nội dung châu Phi viết bằng tiếng Anh VẪN VÀO.** Swahili, Hausa, Yoruba, Zulu, Somali, Nigerian
+Pidgin dùng **chữ Latin**; nếu người đăng đặt máy ở tiếng Anh thì tên sound là `original sound -
+…` và **cả hai bộ lọc đều cho qua**. Đây là giới hạn thật của việc nhận diện **chữ viết** thay vì
+**ngôn ngữ** — và nhận diện ngôn ngữ thì phải dùng danh sách từ, đúng cái QĐ-10 chứng minh không
+bao giờ đủ. Đã nói trước với người dùng để không kỳ vọng sai.
+
+### Kiểm chứng
+
+`test/lang-filter.test.js` — **52 khẳng định**. Phần bộ lọc là hàm thuần (chạy tức thì); phần bấm
+menu chạy **thật trong Chromium** với DOM dựng lại đúng menu TikTok.
+
+Đã kiểm test có "cắn" (đột biến rồi hoàn nguyên):
+
+| Đột biến | Kết quả |
+|---|---|
+| Bỏ qua quốc gia (dùng một danh sách cố định) | **10 trượt** |
+| Không rõ quốc gia thì cho qua tất cả | **6 trượt** |
+| Tính cả emoji là chữ lạ | **14 trượt** |
+| Bỏ danh sách chữ TRÁNH (cho phép bấm Report) | 1 trượt — *chỉ sau khi thêm mục 7b, xem dưới* |
+| `setDupMode`/`KEEP_LABELS` sai | 1–4 trượt |
+
+Toàn bộ **28 file test đạt**.
+
+### Ba cái bẫy trong chính lần sửa này
+
+**1. Chốt an toàn quan trọng nhất ban đầu KHÔNG được kiểm.** Bỏ hẳn danh sách chữ tránh mà test
+vẫn **38/38 pass** — vì trong menu bình thường "Not interested" đứng **trước** "Report" nên vòng
+lặp gặp nó trước, chốt không bao giờ chạy tới. Phải thêm **mục 7b**: menu có **khối bọc chứa cả
+hai mục** (`textContent` = `"Not interestedReport"`, khớp chữ "not interested"). Đó là cảnh **duy
+nhất** làm chốt có tác dụng. Bài học: *một chốt an toàn chưa có test làm nó TRƯỢT thì coi như
+chưa có chốt.*
+
+**2. Rò trạng thái giữa các mục test.** `page.setContent()` thay DOM nhưng **không xoá biến trên
+`window`** — `window.__clicked` của mục 6 sống sang mục 7 và làm mục 7 báo FAIL oan. Phải reset
+tường minh sau mỗi `setContent`.
+
+**3. Heredoc của shell thu gọn dấu `\`.** Viết `new RegExp("\\p{Script=" + name + "}")` qua heredoc
+thì file nhận `"\p{Script="` → JS đọc thành `"p{Script="` → regex sai → **cả 29 lần `new RegExp`
+đều NÉM và bị `try/catch` NUỐT IM**: bộ lọc vẫn chặn đúng nhưng log mất hết tên ngôn ngữ, hiện
+`"chữ khác (chưa rõ hệ)"`. Phải dùng **regex literal** (lỗi cú pháp lộ ra ngay lúc nạp file), và
+sinh file bằng script Python ghi ra đĩa thay vì heredoc.
+
+| KHÔNG nên làm lại | Vì sao |
+|---|---|
+| Xây tính năng khi hai câu của người dùng **mâu thuẫn logic** dưới cách hiểu của mình | "Latin" họ nói là **Latino** (người Nam Mỹ), tôi hiểu là **hệ chữ Latin** — nghĩa ngược nhau. Tôi làm sai **hai lần** rồi mới hỏi lại |
+| Dùng **một danh sách ngôn ngữ cố định** cho cả dàn profile | Profile `(US)` phải loại tiếng Hàn, `(KR)` phải lấy. Danh sách cố định không thể đúng cho cả hai — phải suy từ **nhãn quốc gia của profile** |
+| Nhận diện ngôn ngữ bằng **danh sách từ** | Đúng bẫy QĐ-10: đã thêm 22 ngôn ngữ mà vẫn không đủ. Dùng `\p{Script=...}` của Unicode — tất định, không cần bảo trì |
+| Dựng regex từ **chuỗi** khi file đi qua heredoc | Mất một dấu `\` → regex sai → `new RegExp` ném → `try/catch` nuốt im → mất tính năng trong **im lặng**. Dùng regex **literal** |
+| Tính emoji/số/dấu câu là "chữ lạ" | Tên sound đầy emoji → loại oan gần hết. Chỉ xét `\p{L}` |
+| Bấm mục trong menu theo **toạ độ**, hoặc bấm vào **khối bọc** | "Report" nằm ngay dưới "Not interested"; bấm lệch là **báo cáo video**. Chỉ bấm phần tử **lá** khớp TÊN, và loại thẳng mọi phần tử có chữ report |
+| Để một hàm click vào trang **ném lỗi** ra vòng quét | QĐ-13: click có thể làm hỏng trạng thái trang. Thất bại phải Escape rồi đi tiếp, không được làm chết vòng quét |
+| Tin chốt an toàn là "đã có" khi chưa có test làm nó TRƯỢT | Bỏ hẳn chốt tránh-Report mà test vẫn 38/38 — vì kịch bản không bao giờ chạm tới nó. Phải dựng đúng cảnh chốt mới có tác dụng |
+| Quên reset biến `window` giữa các mục test dùng chung một `page` | `setContent` thay DOM nhưng không xoá `window.__clicked` → mục sau đọc kết quả mục trước → FAIL oan |
